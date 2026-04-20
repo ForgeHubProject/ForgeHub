@@ -1,6 +1,14 @@
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment } from '@react-three/drei'
-import { useAssemblyStore, getDiffColor, getDiffLabel, useWorkingDiff, useWorkingDiffBase } from '../store/useAssemblyStore'
+import {
+  useAssemblyStore,
+  getDiffColor,
+  getDiffLabel,
+  useWorkingDiff,
+  useWorkingDiffBase,
+  useWorkingConnectionDiff,
+  getConnectionDiffStatus,
+} from '../store/useAssemblyStore'
 import { useRef, useCallback, useMemo } from 'react'
 import HardwareComponent from './HardwareComponent'
 import ConnectionLine from './ConnectionLine'
@@ -14,11 +22,25 @@ function Scene() {
 
   const workingDiff = useWorkingDiff()
   const diffBase = useWorkingDiffBase()
+  const connectionDiff = useWorkingConnectionDiff()
 
   const removedComponents = useMemo(() => {
     if (!workingDiff || !diffBase) return []
     return diffBase.components.filter((c) => workingDiff.removed.includes(c.id))
   }, [workingDiff, diffBase])
+
+  const removedConnections = useMemo(() => {
+    if (!connectionDiff?.removed?.length || !diffBase) return []
+    const baseMap = new Map((diffBase.components || []).map((c) => [c.id, c]))
+    return connectionDiff.removed
+      .map((conn) => {
+        const fromComp = baseMap.get(conn.from)
+        const toComp = baseMap.get(conn.to)
+        if (!fromComp || !toComp) return null
+        return { conn, fromComp, toComp }
+      })
+      .filter(Boolean)
+  }, [connectionDiff, diffBase])
 
   const handleMissedClick = useCallback(() => {
     selectComponent(null)
@@ -81,8 +103,27 @@ function Scene() {
         const fromComp = components.find((c) => c.id === conn.from)
         const toComp = components.find((c) => c.id === conn.to)
         if (!fromComp || !toComp) return null
-        return <ConnectionLine key={i} from={fromComp.position} to={toComp.position} type={conn.type} />
+        return (
+          <ConnectionLine
+            key={i}
+            from={fromComp.position}
+            to={toComp.position}
+            type={conn.type}
+            diffStatus={getConnectionDiffStatus(connectionDiff, conn)}
+          />
+        )
       })}
+
+      {/* Removed connection ghost lines */}
+      {removedConnections.map(({ conn, fromComp, toComp }, i) => (
+        <ConnectionLine
+          key={`removed_${i}`}
+          from={fromComp.position}
+          to={toComp.position}
+          type={conn.type}
+          diffStatus="removed"
+        />
+      ))}
 
       <OrbitControls
         makeDefault

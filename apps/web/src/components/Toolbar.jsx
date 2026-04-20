@@ -41,6 +41,13 @@ export default function Toolbar() {
       {/* Component count */}
       <span className="text-xs text-gray-500">{componentCount} component{componentCount !== 1 ? 's' : ''}</span>
 
+      {/* Quick usage hints */}
+      <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-gray-500">
+        <span className="px-1.5 py-0.5 rounded bg-gray-700/30">Drag to add</span>
+        <span className="px-1.5 py-0.5 rounded bg-gray-700/30">Shift + drag = vertical</span>
+        <span className="px-1.5 py-0.5 rounded bg-gray-700/30">Drop on slot to connect</span>
+      </div>
+
       <div className="flex-1" />
 
       {/* Diff mode indicator */}

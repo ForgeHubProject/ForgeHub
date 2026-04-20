@@ -111,14 +111,35 @@ export const useAssemblyStore = create((set, get) => ({
   clearDraggingInfo: () => set({ draggingInfo: null, highlightedMountPoint: null }),
   setHighlightedMountPoint: (mp) => set({ highlightedMountPoint: mp }),
 
-  addConnection: (fromId, toId, type = 'data_bus') =>
+  addConnection: (fromId, toId, type = 'data_bus', toMountPointId = null) =>
+    set((state) => {
+      const alreadyExists = state.assembly.connections.some(
+        (conn) =>
+          ((conn.from === fromId && conn.to === toId) || (conn.from === toId && conn.to === fromId)) &&
+          conn.type === type &&
+          (toMountPointId ? conn.toMountPointId === toMountPointId : true),
+      )
+
+      if (alreadyExists) return state
+
+      return {
+        assembly: {
+          ...state.assembly,
+          connections: [
+            ...state.assembly.connections,
+            { from: fromId, to: toId, type, toMountPointId },
+          ],
+        },
+      }
+    }),
+
+  removeConnectionsForComponent: (componentId) =>
     set((state) => ({
       assembly: {
         ...state.assembly,
-        connections: [
-          ...state.assembly.connections,
-          { from: fromId, to: toId, type },
-        ],
+        connections: state.assembly.connections.filter(
+          (conn) => conn.from !== componentId && conn.to !== componentId,
+        ),
       },
     })),
 
@@ -280,4 +301,56 @@ export function useWorkingDiffBase() {
     const last = snapshots[snapshots.length - 1]
     return last ? last.assembly : null
   }, [snapshots, viewMode, diffSnapshots])
+}
+
+function connectionKey(conn) {
+  const a = conn.from < conn.to ? conn.from : conn.to
+  const b = conn.from < conn.to ? conn.to : conn.from
+  return `${a}::${b}::${conn.type || 'data_bus'}::${conn.toMountPointId || ''}`
+}
+
+export function diffConnections(before, after) {
+  const beforeConnections = before.connections || []
+  const afterConnections = after.connections || []
+  const beforeMap = new Map(beforeConnections.map((conn) => [connectionKey(conn), conn]))
+  const afterMap = new Map(afterConnections.map((conn) => [connectionKey(conn), conn]))
+
+  const added = [...afterMap.entries()]
+    .filter(([key]) => !beforeMap.has(key))
+    .map(([, conn]) => conn)
+  const removed = [...beforeMap.entries()]
+    .filter(([key]) => !afterMap.has(key))
+    .map(([, conn]) => conn)
+
+  return { added, removed }
+}
+
+export function useWorkingConnectionDiff() {
+  const assembly = useAssemblyStore((s) => s.assembly)
+  const snapshots = useAssemblyStore((s) => s.snapshots)
+  const viewMode = useAssemblyStore((s) => s.viewMode)
+  const diffSnapshots = useAssemblyStore((s) => s.diffSnapshots)
+
+  return useMemo(() => {
+    if (viewMode === 'diff' && diffSnapshots.before && diffSnapshots.after) {
+      return diffConnections(diffSnapshots.before, diffSnapshots.after)
+    }
+
+    const last = snapshots[snapshots.length - 1]
+    if (!last) {
+      return {
+        added: assembly.connections || [],
+        removed: [],
+      }
+    }
+    return diffConnections(last.assembly, assembly)
+  }, [assembly, snapshots, viewMode, diffSnapshots])
+}
+
+export function getConnectionDiffStatus(connectionDiff, conn) {
+  if (!connectionDiff) return null
+  const key = connectionKey(conn)
+  if (connectionDiff.added.some((item) => connectionKey(item) === key)) return 'added'
+  if (connectionDiff.removed.some((item) => connectionKey(item) === key)) return 'removed'
+  return null
 }

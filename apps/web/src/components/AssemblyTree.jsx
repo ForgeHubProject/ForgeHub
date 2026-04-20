@@ -1,4 +1,4 @@
-import { useAssemblyStore, getDiffColor, getDiffLabel } from '../store/useAssemblyStore'
+import { useAssemblyStore, getDiffColor, getDiffLabel, useWorkingDiff, useWorkingDiffBase } from '../store/useAssemblyStore'
 
 const MODEL_ICONS = {
   cpu: '[ ]',
@@ -18,13 +18,13 @@ export default function AssemblyTree() {
   const selectComponent = useAssemblyStore((s) => s.selectComponent)
   const setHoveredComponent = useAssemblyStore((s) => s.setHoveredComponent)
   const removeComponent = useAssemblyStore((s) => s.removeComponent)
-  const diffResult = useAssemblyStore((s) => s.diffResult)
   const viewMode = useAssemblyStore((s) => s.viewMode)
-  const diffSnapshots = useAssemblyStore((s) => s.diffSnapshots)
+  const workingDiff = useWorkingDiff()
+  const diffBase = useWorkingDiffBase()
 
-  // In diff mode, include removed components
-  const removedComponents = viewMode === 'diff' && diffResult && diffSnapshots.before
-    ? diffSnapshots.before.components.filter((c) => diffResult.removed.includes(c.id))
+  // Show removed components as "ghost entries" in tree for both explicit diff and live diff.
+  const removedComponents = workingDiff && diffBase
+    ? diffBase.components.filter((c) => workingDiff.removed.includes(c.id))
     : []
 
   const allComponents = [...assembly.components, ...removedComponents]
@@ -54,11 +54,11 @@ export default function AssemblyTree() {
 
           {/* Component nodes */}
           {allComponents.map((comp) => {
-            const diffColor = getDiffColor(diffResult, comp.id)
-            const diffLabel = getDiffLabel(diffResult, comp.id)
+            const diffColor = getDiffColor(workingDiff, comp.id)
+            const diffLabel = getDiffLabel(workingDiff, comp.id)
             const isSelected = selectedComponentId === comp.id
             const isHovered = hoveredComponentId === comp.id
-            const isRemoved = diffResult?.removed.includes(comp.id)
+            const isRemoved = workingDiff?.removed.includes(comp.id)
 
             return (
               <div
@@ -80,7 +80,7 @@ export default function AssemblyTree() {
                   {comp.name}
                 </span>
 
-                {diffLabel && viewMode === 'diff' && (
+                {diffLabel && (
                   <span
                     className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded"
                     style={{ color: diffColor, backgroundColor: `${diffColor}20` }}
