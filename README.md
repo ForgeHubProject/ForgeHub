@@ -71,7 +71,9 @@ Current workspace layout:
 
 Useful API endpoints after starting `apps/api`:
 - `GET /health`
-- `GET /projects/sample/snapshots`
+- `POST /projects`
+- `POST /projects/:id/snapshots`
+- `GET /projects/:id/snapshots`
 - `POST /diffs/compare`
 
 Example compare payload:
@@ -87,6 +89,10 @@ Example compare payload:
   }
 }
 ```
+
+The API starts with a seeded sample project:
+- `projectId`: `proj_sample_computer`
+- snapshots: `snap_001`, `snap_002`
 
 ## License
 
