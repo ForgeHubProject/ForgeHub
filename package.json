@@ -12,6 +12,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev:api": "npm run dev -w @forgehub/api",
+    "dev:web": "npm run dev -w @forgehub/web",
     "dev:worker": "npm run dev -w @forgehub/diff-worker",
     "typecheck": "npm run typecheck --workspaces --if-present"
   }
