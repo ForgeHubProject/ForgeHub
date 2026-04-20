@@ -1,0 +1,18 @@
+{
+  "name": "forgehub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ForgeHub monorepo",
+  "packageManager": "npm@11.5.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:api": "npm run dev -w @forgehub/api",
+    "dev:worker": "npm run dev -w @forgehub/diff-worker",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

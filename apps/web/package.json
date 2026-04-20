@@ -1,0 +1,10 @@
+{
+  "name": "@forgehub/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"Web app scaffold pending\"",
+    "build": "echo \"Web app scaffold pending\"",
+    "typecheck": "echo \"Web app scaffold pending\""
+  }
+}

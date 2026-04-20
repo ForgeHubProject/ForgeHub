@@ -57,7 +57,35 @@ This repository is currently spec-first. Core concepts, scope boundaries, and de
 
 ```bash
 npm install
-npm run dev
+npm run dev:api
+```
+
+## Monorepo scaffold
+
+Current workspace layout:
+- `apps/api`: Fastify API scaffold with sample compare endpoint
+- `apps/web`: frontend placeholder package
+- `packages/contracts`: shared TypeScript contracts
+- `packages/diff-core`: semantic diff core scaffold
+- `workers/diff-worker`: BullMQ worker scaffold
+
+Useful API endpoints after starting `apps/api`:
+- `GET /health`
+- `GET /projects/sample/snapshots`
+- `POST /diffs/compare`
+
+Example compare payload:
+
+```json
+{
+  "projectId": "proj_sample_computer",
+  "baseSnapshotId": "snap_001",
+  "targetSnapshotId": "snap_002",
+  "options": {
+    "includeRawJsonDiff": false,
+    "includeIgnoredStats": true
+  }
+}
 ```
 
 ## License

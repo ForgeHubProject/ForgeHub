@@ -43,7 +43,7 @@
 
 ### DevOps and local environment
 - Docker Compose for Postgres, Redis, MinIO
-- pnpm (workspace-aware package manager)
+- npm workspaces (workspace-aware package manager)
 - GitHub Actions for CI (lint, test, build)
 
 ## Why this stack fits ForgeHub
