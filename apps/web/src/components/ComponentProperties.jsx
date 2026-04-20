@@ -194,11 +194,16 @@ function InstanceProperties({ componentId }) {
               const otherId = conn.from === componentId ? conn.to : conn.from
               const other = allComponents.find((c) => c.id === otherId)
               const direction = conn.from === componentId ? '→' : '←'
+              const targetMount = conn.toMountPointId
+                ? getDescriptor(conn.to === componentId ? component.model : other?.model)
+                    ?.mountPoints?.find((mp) => mp.id === conn.toMountPointId)
+                : null
               return (
                 <div key={i} className="text-[11px] flex items-center gap-1.5 text-gray-400">
                   <span className="text-gray-600">{direction}</span>
                   <span className="text-gray-300">{other?.name || otherId}</span>
                   <Badge>{conn.type}</Badge>
+                  {targetMount && <Badge color="blue">{targetMount.label}</Badge>}
                 </div>
               )
             })}

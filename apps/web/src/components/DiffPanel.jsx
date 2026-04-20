@@ -1,4 +1,4 @@
-import { useAssemblyStore } from '../store/useAssemblyStore'
+import { useAssemblyStore, useWorkingConnectionDiff } from '../store/useAssemblyStore'
 
 const DIFF_COLORS = {
   added: { bg: 'bg-green-500/10', border: 'border-green-500/30', text: 'text-green-400', label: 'Added' },
@@ -11,6 +11,7 @@ export default function DiffPanel() {
   const diffResult = useAssemblyStore((s) => s.diffResult)
   const diffSnapshots = useAssemblyStore((s) => s.diffSnapshots)
   const clearDiff = useAssemblyStore((s) => s.clearDiff)
+  const connectionDiff = useWorkingConnectionDiff()
 
   if (!diffResult) return null
 
@@ -19,6 +20,7 @@ export default function DiffPanel() {
 
   const totalChanges = diffResult.added.length + diffResult.modified.length +
     diffResult.removed.length + diffResult.moved.length
+  const connectionChanges = (connectionDiff?.added?.length || 0) + (connectionDiff?.removed?.length || 0)
 
   return (
     <div className="absolute top-4 left-4 w-72 bg-[#12121f]/95 backdrop-blur-md border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden z-10">
@@ -26,7 +28,10 @@ export default function DiffPanel() {
       <div className="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-gray-200">Diff View</h3>
-          <p className="text-[10px] text-gray-500 mt-0.5">{totalChanges} change{totalChanges !== 1 ? 's' : ''} detected</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">
+            {totalChanges} component change{totalChanges !== 1 ? 's' : ''} detected
+            {connectionChanges > 0 ? ` · ${connectionChanges} connector change${connectionChanges !== 1 ? 's' : ''}` : ''}
+          </p>
         </div>
         <button
           onClick={clearDiff}
@@ -54,6 +59,27 @@ export default function DiffPanel() {
 
       {/* Change details */}
       <div className="max-h-64 overflow-y-auto">
+        {connectionChanges > 0 && (
+          <div className="border-b border-gray-700/20">
+            {connectionDiff.added.map((conn, i) => (
+              <div key={`conn_add_${i}`} className="px-4 py-2 bg-green-500/10 border-l-2 border-green-500/30">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-200">Connector {conn.type}</span>
+                  <span className="text-[9px] font-bold text-green-400">ADDED</span>
+                </div>
+              </div>
+            ))}
+            {connectionDiff.removed.map((conn, i) => (
+              <div key={`conn_rm_${i}`} className="px-4 py-2 bg-red-500/10 border-l-2 border-red-500/30">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-200">Connector {conn.type}</span>
+                  <span className="text-[9px] font-bold text-red-400">REMOVED</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {Object.entries(DIFF_COLORS).map(([key, style]) => {
           const ids = diffResult[key] || []
           if (ids.length === 0) return null

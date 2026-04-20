@@ -2,9 +2,17 @@ import { useMemo } from 'react'
 import * as THREE from 'three'
 import { getConnector } from '../domain/connectorRegistry'
 
-export default function ConnectionLine({ from, to, type }) {
+const DIFF_STYLES = {
+  added: { color: '#22c55e', opacity: 0.95 },
+  removed: { color: '#ef4444', opacity: 0.55 },
+}
+
+export default function ConnectionLine({ from, to, type, diffStatus = null }) {
   const connector = type ? getConnector(type) : null
-  const color = connector?.color || '#6366f1'
+  const baseColor = connector?.color || '#6366f1'
+  const style = diffStatus ? DIFF_STYLES[diffStatus] : null
+  const color = style?.color || baseColor
+  const opacity = style?.opacity ?? 0.7
 
   const points = useMemo(() => {
     const start = new THREE.Vector3(from.x, from.y + 0.5, from.z)
@@ -24,7 +32,7 @@ export default function ConnectionLine({ from, to, type }) {
 
   return (
     <line geometry={geometry}>
-      <lineBasicMaterial color={color} linewidth={2} transparent opacity={0.7} />
+      <lineBasicMaterial color={color} linewidth={2} transparent opacity={opacity} />
     </line>
   )
 }

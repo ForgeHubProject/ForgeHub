@@ -37,7 +37,7 @@ const LABEL_COLORS = {
   Removed:  { bg: '#ef4444', text: '#fff' },
 }
 
-function findSnapTarget(draggedType, draggedPos, allComponents, draggedId) {
+function findSnapTarget(draggedType, draggedPos, allComponents, allConnections, draggedId) {
   const desc = getDescriptor(draggedType)
   if (!desc || desc.fitsInSlots.length === 0) return null
 
@@ -51,6 +51,10 @@ function findSnapTarget(draggedType, draggedPos, allComponents, draggedId) {
 
     for (const mp of parentDesc.mountPoints) {
       if (!desc.fitsInSlots.includes(mp.slotType)) continue
+      const mountPointTaken = allConnections.some(
+        (conn) => conn.to === comp.id && conn.toMountPointId === mp.id && conn.from !== draggedId,
+      )
+      if (mountPointTaken) continue
 
       const wx = comp.position.x + mp.localPosition.x
       const wy = comp.position.y + mp.localPosition.y
@@ -153,6 +157,7 @@ export default function HardwareComponent({ component, isSelected, diffColor, di
   const setDraggingInfo = useAssemblyStore((s) => s.setDraggingInfo)
   const clearDraggingInfo = useAssemblyStore((s) => s.clearDraggingInfo)
   const setHighlightedMountPoint = useAssemblyStore((s) => s.setHighlightedMountPoint)
+  const removeConnectionsForComponent = useAssemblyStore((s) => s.removeConnectionsForComponent)
   const hoveredComponentId = useAssemblyStore((s) => s.hoveredComponentId)
   const allComponents = useAssemblyStore((s) => s.assembly.components)
   const allConnections = useAssemblyStore((s) => s.assembly.connections)
@@ -184,6 +189,9 @@ export default function HardwareComponent({ component, isSelected, diffColor, di
     selectComponent(component.id)
     setIsDragging(true)
     setDraggingInfo({ componentId: component.id, componentType: component.model })
+    // Dragging a component breaks existing links; dropping onto a compatible mount
+    // point creates a new connection.
+    removeConnectionsForComponent(component.id)
 
     if (controls) controls.enabled = false
 
@@ -233,7 +241,7 @@ export default function HardwareComponent({ component, isSelected, diffColor, di
       finalPos = { x: snap(intersect.x), y: component.position.y, z: snap(intersect.z) }
     }
 
-    const target = findSnapTarget(component.model, finalPos, allComponents, component.id)
+    const target = findSnapTarget(component.model, finalPos, allComponents, allConnections, component.id)
 
     if (target) {
       currentSnap.current = target
@@ -258,7 +266,7 @@ export default function HardwareComponent({ component, isSelected, diffColor, di
       )
       if (!alreadyConnected) {
         const connType = inferConnectorType(component.model, currentSnap.current.componentType)
-        addConnection(childId, parentId, connType)
+        addConnection(childId, parentId, connType, currentSnap.current.mountPointId)
       }
       currentSnap.current = null
     }
