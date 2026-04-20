@@ -33,6 +33,7 @@ The initial MVP focuses on proving three core outcomes:
 3. Teams can make remote decisions with clear review records.
 
 Detailed requirements and rollout phases are in `docs/mvp-spec.md`.
+Recommended implementation stack is in `docs/tech-stack.md`.
 
 ## Data and diff philosophy
 
