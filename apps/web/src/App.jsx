@@ -6,6 +6,7 @@ import Toolbar from './components/Toolbar'
 import DiffPanel from './components/DiffPanel'
 import SnapshotPanel from './components/SnapshotPanel'
 import ComponentProperties from './components/ComponentProperties'
+import BackendApiPanel from './components/BackendApiPanel'
 
 export default function App() {
   const viewMode = useAssemblyStore((s) => s.viewMode)
@@ -19,9 +20,10 @@ export default function App() {
           <Canvas3D />
           {viewMode === 'diff' && <DiffPanel />}
         </div>
-        <div className="w-80 flex flex-col border-l border-gray-700/50">
+        <div className="w-80 flex flex-col border-l border-gray-700/50 min-h-0 overflow-y-auto">
           <AssemblyTree />
           <ComponentProperties />
+          <BackendApiPanel />
           <SnapshotPanel />
         </div>
       </div>

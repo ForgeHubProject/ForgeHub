@@ -12,6 +12,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@forgehub/contracts": "file:../../packages/contracts",
     "@forgehub/diff-core": "file:../../packages/diff-core",
     "fastify": "^5.6.1"
