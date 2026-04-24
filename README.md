@@ -85,6 +85,20 @@ The API listens on `PORT` (default **3001**).
 - `DELETE /repos/:name` — owner only: deletes repo metadata and bare Git storage
 - `GET /repos/:handle/:name/storage` — owner-only debug endpoint with `storageKey`, absolute path, and bare-repo status
 
+### Minimal Git over HTTPS endpoints (implemented)
+
+- `GET /git/:handle/:repo/info/refs?service=git-upload-pack` — read capability advertisement
+- `POST /git/:handle/:repo/git-upload-pack` — fetch/clone pack transfer
+- `GET /git/:handle/:repo/info/refs?service=git-receive-pack` — write capability advertisement
+- `POST /git/:handle/:repo/git-receive-pack` — push pack transfer
+
+Auth behavior:
+- Read (`upload-pack`): public repos are readable anonymously; private repos require owner auth.
+- Write (`receive-pack`): owner-only for now.
+- Auth header accepts:
+  - `Authorization: Bearer <jwt>`
+  - `Authorization: Basic base64(<any-username>:<jwt>)`
+
 Example register:
 
 ```json
