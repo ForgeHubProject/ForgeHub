@@ -207,6 +207,31 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
+  app.delete(
+    "/repos/:name",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { name: nameParam } = request.params as { name: string };
+      const name = nameParam.toLowerCase();
+      const ownerId = request.user.sub;
+
+      const existing = await prisma.repo.findFirst({
+        where: { ownerId, name },
+      });
+      if (!existing) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      await prisma.repo.delete({ where: { id: existing.id } });
+
+      if (existing.storageKey) {
+        await removeBareRepo(existing.storageKey);
+      }
+
+      return reply.status(204).send();
+    },
+  );
+
   app.get(
     "/repos/:handle/:name/storage",
     { preHandler: [app.authenticate] },
