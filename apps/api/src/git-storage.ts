@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
 const execFile = promisify(execFileCb);
@@ -33,4 +33,44 @@ export async function createBareRepo(storageKey: string): Promise<string> {
 export async function removeBareRepo(storageKey: string): Promise<void> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await rm(fullPath, { recursive: true, force: true });
+}
+
+export type BareRepoInspection = {
+  storageKey: string;
+  absolutePath: string;
+  exists: boolean;
+  isBare: boolean;
+};
+
+export async function inspectBareRepo(storageKey: string): Promise<BareRepoInspection> {
+  const absolutePath = bareRepoPathFromKey(storageKey);
+
+  try {
+    await access(absolutePath);
+  } catch {
+    return {
+      storageKey,
+      absolutePath,
+      exists: false,
+      isBare: false,
+    };
+  }
+
+  try {
+    const { stdout } = await execFile("git", ["--git-dir", absolutePath, "rev-parse", "--is-bare-repository"]);
+    const isBare = stdout.trim() === "true";
+    return {
+      storageKey,
+      absolutePath,
+      exists: true,
+      isBare,
+    };
+  } catch {
+    return {
+      storageKey,
+      absolutePath,
+      exists: true,
+      isBare: false,
+    };
+  }
 }

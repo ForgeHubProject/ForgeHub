@@ -1,6 +1,6 @@
 import type { RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { buildStorageKey, createBareRepo, removeBareRepo } from "../git-storage.js";
+import { buildStorageKey, createBareRepo, inspectBareRepo, removeBareRepo } from "../git-storage.js";
 import { prisma } from "../prisma.js";
 import { createRepoBodySchema, updateRepoBodySchema } from "../validation.js";
 
@@ -204,6 +204,31 @@ export async function repoRoutes(app: FastifyInstance) {
         include: { owner: { select: { handle: true } } },
       });
       return repoResponse(repo);
+    },
+  );
+
+  app.get(
+    "/repos/:handle/:name/storage",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
+      const handle = handleParam.toLowerCase();
+      const name = nameParam.toLowerCase();
+
+      const repo = await prisma.repo.findFirst({
+        where: { name, owner: { handle } },
+      });
+
+      if (!repo || repo.ownerId !== request.user.sub) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      if (!repo.storageKey) {
+        return reply.status(404).send({ error: "Storage key not set for this repository" });
+      }
+
+      const inspection = await inspectBareRepo(repo.storageKey);
+      return inspection;
     },
   );
 }
