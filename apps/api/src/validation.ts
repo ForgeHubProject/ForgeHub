@@ -26,11 +26,16 @@ export const loginBodySchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const repoVisibilitySchema = z.enum(["public", "private"]);
+
 export const createRepoBodySchema = z.object({
   name: repoNameSchema,
   description: z.string().max(2000).optional(),
+  /** Defaults to `private` if omitted. */
+  visibility: repoVisibilitySchema.optional().default("private"),
 });
 
 export const updateRepoBodySchema = z.object({
   description: z.string().max(2000).nullable().optional(),
+  visibility: repoVisibilitySchema.optional(),
 });
