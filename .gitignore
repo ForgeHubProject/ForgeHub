@@ -1,5 +1,7 @@
 node_modules/
 dist/
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal
 .env
 .env.*
 !.env.example

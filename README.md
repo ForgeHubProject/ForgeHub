@@ -51,48 +51,45 @@ Diff noise from exporter jitter or irrelevant metadata is controlled by:
 
 ## Current implementation status
 
-This repository is currently spec-first. Core concepts, scope boundaries, and delivery milestones are documented, and implementation will start from the contracts defined in `docs/mvp-spec.md`.
+Product specs and contracts live under `docs/`. The first running code path is **`apps/api`**: accounts (register, login, JWT session) and **repositories** owned by a user (`handle/repo-name`, GitHub-style naming). Hardware snapshot and diff APIs from the spec are not wired yet; they can build on this foundation.
 
 ## Local development
 
 ```bash
 npm install
+cd apps/api && cp .env.example .env   # set JWT_SECRET to a long random string
+npm run db:push --workspace @forgehub/api
 npm run dev:api
 ```
 
-## Monorepo scaffold
+The API listens on `PORT` (default **3001**).
 
-Current workspace layout:
-- `apps/api`: Fastify API scaffold with sample compare endpoint
-- `apps/web`: frontend placeholder package
-- `packages/contracts`: shared TypeScript contracts
-- `packages/diff-core`: semantic diff core scaffold
-- `workers/diff-worker`: BullMQ worker scaffold
+## Monorepo layout
 
-Useful API endpoints after starting `apps/api`:
+- `apps/api` — Fastify + Prisma (SQLite in dev) — auth and repos today
+- `apps/web`, `packages/*`, `workers/*` — not scaffolded yet (see `docs/tech-stack.md`)
+
+### Accounts and repos (implemented)
+
 - `GET /health`
-- `POST /projects`
-- `POST /projects/:id/snapshots`
-- `GET /projects/:id/snapshots`
-- `POST /diffs/compare`
+- `POST /auth/register` — body: `email`, `password`, `handle`, optional `displayName`
+- `POST /auth/login` — body: `email`, `password` → returns `token` (Bearer JWT)
+- `GET /auth/me` — header: `Authorization: Bearer <token>`
+- `POST /repos` — create repo for the current user — body: `name`, optional `description`
+- `GET /repos/mine` — list repos for the authenticated user
+- `GET /users/:handle/repos` — public list of a user’s repos
+- `GET /repos/:handle/:name` — public repo metadata
+- `PATCH /repos/:name` — authenticated owner updates `description`
 
-Example compare payload:
+Example register:
 
 ```json
 {
-  "projectId": "proj_sample_computer",
-  "baseSnapshotId": "snap_001",
-  "targetSnapshotId": "snap_002",
-  "options": {
-    "includeRawJsonDiff": false,
-    "includeIgnoredStats": true
-  }
+  "email": "you@example.com",
+  "password": "your-secure-password",
+  "handle": "your-handle"
 }
 ```
-
-The API starts with a seeded sample project:
-- `projectId`: `proj_sample_computer`
-- snapshots: `snap_001`, `snap_002`
 
 ## License
 

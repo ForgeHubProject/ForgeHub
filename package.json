@@ -1,0 +1,15 @@
+{
+  "name": "forgehub",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @forgehub/api",
+    "db:push": "npm run db:push -w @forgehub/api",
+    "db:generate": "npm run db:generate -w @forgehub/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
