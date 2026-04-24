@@ -52,9 +52,11 @@ const page = `<!doctype html>
     <div class="row">
       <input id="lookupHandle" placeholder="lookup handle" />
       <input id="lookupRepo" placeholder="lookup repo" />
+      <input id="newRepoName" placeholder="new repo name" />
       <button id="getRepoBtn">Get Repo</button>
       <button id="userReposBtn">Get User Repos</button>
       <button id="storageBtn">Storage Debug</button>
+      <button id="renameRepoBtn">Rename Repo</button>
       <button id="deleteRepoBtn">Delete Repo</button>
     </div>
 
@@ -151,6 +153,17 @@ const page = `<!doctype html>
     document.getElementById("deleteRepoBtn").onclick = async () => {
       const repo = document.getElementById("lookupRepo").value.trim();
       await call("DELETE", "/repos/" + encodeURIComponent(repo), undefined, true);
+    };
+
+    document.getElementById("renameRepoBtn").onclick = async () => {
+      const repo = document.getElementById("lookupRepo").value.trim();
+      const newName = document.getElementById("newRepoName").value.trim();
+      await call(
+        "PATCH",
+        "/repos/" + encodeURIComponent(repo) + "/rename",
+        { name: newName },
+        true
+      );
     };
 
     document.getElementById("addCollabBtn").onclick = async () => {
