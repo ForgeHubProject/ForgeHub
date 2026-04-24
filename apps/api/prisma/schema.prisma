@@ -28,6 +28,7 @@ model Repo {
   name        String
   description String?
   visibility  RepoVisibility  @default(PUBLIC)
+  storageKey  String?         @unique
   ownerId     String
   owner       User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt   DateTime        @default(now())

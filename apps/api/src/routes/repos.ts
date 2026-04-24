@@ -1,5 +1,6 @@
 import type { RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { buildStorageKey, createBareRepo, removeBareRepo } from "../git-storage.js";
 import { prisma } from "../prisma.js";
 import { createRepoBodySchema, updateRepoBodySchema } from "../validation.js";
 
@@ -31,6 +32,7 @@ function repoResponse(r: {
   name: string;
   description: string | null;
   visibility: RepoVisibility;
+  storageKey: string | null;
   ownerId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -41,6 +43,7 @@ function repoResponse(r: {
     name: r.name,
     description: r.description,
     visibility: toApiVisibility(r.visibility),
+    storageKey: r.storageKey,
     ownerId: r.ownerId,
     ownerHandle: r.owner?.handle,
     fullName: r.owner ? `${r.owner.handle}/${r.name}` : undefined,
@@ -61,19 +64,34 @@ export async function repoRoutes(app: FastifyInstance) {
 
       const name = parsed.data.name.toLowerCase();
       const ownerId = request.user.sub;
+      const owner = await prisma.user.findUnique({
+        where: { id: ownerId },
+        select: { handle: true },
+      });
+      if (!owner) {
+        return reply.status(404).send({ error: "Owner account not found" });
+      }
+      const storageKey = buildStorageKey(owner.handle, name);
+      let bareRepoCreated = false;
 
       try {
+        await createBareRepo(storageKey);
+        bareRepoCreated = true;
         const repo = await prisma.repo.create({
           data: {
             name,
             description: parsed.data.description?.trim() || null,
             visibility: fromApiVisibility(parsed.data.visibility),
+            storageKey,
             ownerId,
           },
           include: { owner: { select: { handle: true } } },
         });
         return reply.status(201).send(repoResponse(repo));
       } catch (e: unknown) {
+        if (bareRepoCreated) {
+          await removeBareRepo(storageKey);
+        }
         if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
           return reply.status(409).send({ error: "You already have a repository with this name" });
         }

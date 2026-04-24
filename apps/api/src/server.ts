@@ -5,21 +5,6 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
 import { repoRoutes } from "./routes/repos.js";
 
-declare module "@fastify/jwt" {
-  interface FastifyJWT {
-    payload: { sub: string };
-    user: { sub: string };
-  }
-}
-
-declare module "fastify" {
-  interface FastifyInstance {
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-    /** Sets `request.user` when a valid Bearer token is present; otherwise leaves it unset. */
-    optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-  }
-}
-
 async function buildServer() {
   const secret = process.env["JWT_SECRET"];
   if (!secret || secret.length < 16) {
