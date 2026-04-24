@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
+import { devUiRoutes } from "./routes/dev-ui.js";
 import { gitHttpRoutes } from "./routes/git-http.js";
 import { repoRoutes } from "./routes/repos.js";
 
@@ -41,6 +42,7 @@ async function buildServer() {
 
   app.get("/health", async () => ({ ok: true }));
 
+  await app.register(devUiRoutes);
   await app.register(authRoutes);
   await app.register(repoRoutes);
   await app.register(gitHttpRoutes);

@@ -99,6 +99,47 @@ Auth behavior:
   - `Authorization: Bearer <jwt>`
   - `Authorization: Basic base64(<any-username>:<jwt>)`
 
+### HTTPS clone/push walkthrough (current behavior)
+
+```bash
+# 0) Start API (from repo root)
+npm run dev:api
+
+# 1) Register and login to get JWT
+curl -sS -X POST http://localhost:3001/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"your-secure-password","handle":"your-handle"}'
+
+# or login:
+# curl -sS -X POST http://localhost:3001/auth/login ...
+#
+# Save returned token as TOKEN:
+TOKEN="<jwt-from-register-or-login>"
+
+# 2) Create a repository (public or private)
+curl -sS -X POST http://localhost:3001/repos \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"demo","visibility":"private"}'
+
+# 3) Clone over HTTP using Basic auth (password = JWT)
+git -c http.extraHeader="Authorization: Basic $(printf 'x:%s' "$TOKEN" | base64 -w 0)" \
+  clone http://localhost:3001/git/your-handle/demo.git
+
+# 4) Push over HTTP using the same auth header
+cd demo
+echo "hello" > README.md
+git add README.md
+git commit -m "init"
+git -c http.extraHeader="Authorization: Basic $(printf 'x:%s' "$TOKEN" | base64 -w 0)" \
+  push origin HEAD
+```
+
+Notes:
+- Public repos can be cloned without auth.
+- Private repos require auth for clone/fetch.
+- Push is owner-only.
+
 Example register:
 
 ```json
