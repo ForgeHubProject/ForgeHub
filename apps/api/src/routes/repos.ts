@@ -1,8 +1,13 @@
 import type { CollaboratorRole, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { buildStorageKey, createBareRepo, inspectBareRepo, removeBareRepo } from "../git-storage.js";
+import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { prisma } from "../prisma.js";
-import { addCollaboratorBodySchema, createRepoBodySchema, updateRepoBodySchema } from "../validation.js";
+import {
+  addCollaboratorBodySchema,
+  createRepoBodySchema,
+  renameRepoBodySchema,
+  updateRepoBodySchema,
+} from "../validation.js";
 
 function toApiVisibility(v: RepoVisibility) {
   return v === "PUBLIC" ? "public" : "private";
@@ -223,6 +228,67 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
+  app.patch(
+    "/repos/:name/rename",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const parsed = renameRepoBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+
+      const { name: currentNameParam } = request.params as { name: string };
+      const currentName = currentNameParam.toLowerCase();
+      const newName = parsed.data.name.toLowerCase();
+      const ownerId = request.user.sub;
+
+      const existing = await prisma.repo.findFirst({
+        where: { ownerId, name: currentName },
+        include: { owner: { select: { handle: true } } },
+      });
+      if (!existing) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      if (currentName === newName) {
+        return repoResponse(existing);
+      }
+
+      const ownerHandle = existing.owner?.handle;
+      if (!ownerHandle) {
+        return reply.status(500).send({ error: "Owner handle missing" });
+      }
+
+      const newStorageKey = existing.storageKey ? buildStorageKey(ownerHandle, newName) : null;
+      let moved = false;
+
+      try {
+        if (existing.storageKey && newStorageKey) {
+          await moveBareRepo(existing.storageKey, newStorageKey);
+          moved = true;
+        }
+
+        const updated = await prisma.repo.update({
+          where: { id: existing.id },
+          data: {
+            name: newName,
+            storageKey: newStorageKey,
+          },
+          include: { owner: { select: { handle: true } } },
+        });
+        return repoResponse(updated);
+      } catch (e: unknown) {
+        if (moved && existing.storageKey && newStorageKey) {
+          await moveBareRepo(newStorageKey, existing.storageKey).catch(() => undefined);
+        }
+        if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
+          return reply.status(409).send({ error: "You already have a repository with this name" });
+        }
+        throw e;
+      }
+    },
+  );
+
   app.get(
     "/repos/:name/collaborators",
     { preHandler: [app.authenticate] },
@@ -246,7 +312,7 @@ export async function repoRoutes(app: FastifyInstance) {
       }
 
       return {
-        collaborators: repo.collaborators.map((c) => ({
+        collaborators: repo.collaborators.map((c: (typeof repo.collaborators)[number]) => ({
           id: c.id,
           role: fromDbCollaboratorRole(c.role),
           createdAt: c.createdAt.toISOString(),

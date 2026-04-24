@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, rm } from "node:fs/promises";
+import { access, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 const execFile = promisify(execFileCb);
@@ -33,6 +33,13 @@ export async function createBareRepo(storageKey: string): Promise<string> {
 export async function removeBareRepo(storageKey: string): Promise<void> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await rm(fullPath, { recursive: true, force: true });
+}
+
+export async function moveBareRepo(oldStorageKey: string, newStorageKey: string): Promise<void> {
+  const oldPath = bareRepoPathFromKey(oldStorageKey);
+  const newPath = bareRepoPathFromKey(newStorageKey);
+  await mkdir(path.dirname(newPath), { recursive: true });
+  await rename(oldPath, newPath);
 }
 
 export type BareRepoInspection = {

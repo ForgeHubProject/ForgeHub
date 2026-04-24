@@ -82,6 +82,7 @@ The API listens on `PORT` (default **3001**).
 - `GET /users/:handle/repos` — lists **public** repos; if you call it with `Authorization: Bearer` **and** the token is that user, you get **all** repos (for “my profile” style clients)
 - `GET /repos/:handle/:name` — repo metadata; **private** repos return 404 unless the Bearer token is the **owner** (no leak that a private name exists)
 - `PATCH /repos/:name` — owner only: optional `description`, optional `visibility`
+- `PATCH /repos/:name/rename` — owner only: rename repository and move bare storage path
 - `DELETE /repos/:name` — owner only: deletes repo metadata and bare Git storage
 - `GET /repos/:name/collaborators` — owner only: list collaborators
 - `POST /repos/:name/collaborators` — owner only: add/update collaborator role (`reader` or `writer`)

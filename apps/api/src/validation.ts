@@ -41,6 +41,10 @@ export const updateRepoBodySchema = z.object({
   visibility: repoVisibilitySchema.optional(),
 });
 
+export const renameRepoBodySchema = z.object({
+  name: repoNameSchema,
+});
+
 export const addCollaboratorBodySchema = z.object({
   handle: handleSchema,
   role: collaboratorRoleSchema.optional().default("reader"),
