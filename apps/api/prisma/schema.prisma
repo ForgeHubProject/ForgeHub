@@ -12,27 +12,47 @@ enum RepoVisibility {
   PRIVATE
 }
 
+enum CollaboratorRole {
+  READER
+  WRITER
+}
+
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  handle       String   @unique
-  displayName  String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  repos        Repo[]
+  id            String             @id @default(cuid())
+  email         String             @unique
+  passwordHash  String
+  handle        String             @unique
+  displayName   String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  repos         Repo[]
+  collaborations RepoCollaborator[]
 }
 
 model Repo {
-  id          String          @id @default(cuid())
-  name        String
-  description String?
-  visibility  RepoVisibility  @default(PUBLIC)
-  storageKey  String?         @unique
-  ownerId     String
-  owner       User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id            String             @id @default(cuid())
+  name          String
+  description   String?
+  visibility    RepoVisibility     @default(PUBLIC)
+  storageKey    String?            @unique
+  ownerId       String
+  owner         User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  collaborators RepoCollaborator[]
 
   @@unique([ownerId, name])
+}
+
+model RepoCollaborator {
+  id        String           @id @default(cuid())
+  repoId    String
+  userId    String
+  role      CollaboratorRole @default(READER)
+  createdAt DateTime         @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, userId])
 }

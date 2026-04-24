@@ -57,6 +57,17 @@ const page = `<!doctype html>
       <button id="storageBtn">Storage Debug</button>
       <button id="deleteRepoBtn">Delete Repo</button>
     </div>
+
+    <div class="row">
+      <input id="collabHandle" placeholder="collaborator handle" />
+      <select id="collabRole">
+        <option value="reader">reader</option>
+        <option value="writer">writer</option>
+      </select>
+      <button id="addCollabBtn">Add/Update Collaborator</button>
+      <button id="listCollabBtn">List Collaborators</button>
+      <button id="removeCollabBtn">Remove Collaborator</button>
+    </div>
   </section>
 
   <section>
@@ -140,6 +151,34 @@ const page = `<!doctype html>
     document.getElementById("deleteRepoBtn").onclick = async () => {
       const repo = document.getElementById("lookupRepo").value.trim();
       await call("DELETE", "/repos/" + encodeURIComponent(repo), undefined, true);
+    };
+
+    document.getElementById("addCollabBtn").onclick = async () => {
+      const repo = document.getElementById("lookupRepo").value.trim();
+      const handle = document.getElementById("collabHandle").value.trim();
+      const role = document.getElementById("collabRole").value;
+      await call(
+        "POST",
+        "/repos/" + encodeURIComponent(repo) + "/collaborators",
+        { handle, role },
+        true
+      );
+    };
+
+    document.getElementById("listCollabBtn").onclick = async () => {
+      const repo = document.getElementById("lookupRepo").value.trim();
+      await call("GET", "/repos/" + encodeURIComponent(repo) + "/collaborators", undefined, true);
+    };
+
+    document.getElementById("removeCollabBtn").onclick = async () => {
+      const repo = document.getElementById("lookupRepo").value.trim();
+      const handle = document.getElementById("collabHandle").value.trim();
+      await call(
+        "DELETE",
+        "/repos/" + encodeURIComponent(repo) + "/collaborators/" + encodeURIComponent(handle),
+        undefined,
+        true
+      );
     };
   </script>
 </body>

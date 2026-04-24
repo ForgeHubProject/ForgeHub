@@ -57,6 +57,27 @@ async function resolveActorIdFromAuthHeader(
   return undefined;
 }
 
+type AccessRepo = {
+  id: string;
+  ownerId: string;
+  visibility: "PUBLIC" | "PRIVATE";
+  storageKey: string | null;
+  collaborators: Array<{ userId: string; role: "READER" | "WRITER" }>;
+};
+
+function canRead(repo: AccessRepo, actorId: string | undefined): boolean {
+  if (repo.visibility === "PUBLIC") return true;
+  if (!actorId) return false;
+  if (actorId === repo.ownerId) return true;
+  return repo.collaborators.some((c) => c.userId === actorId);
+}
+
+function canWrite(repo: AccessRepo, actorId: string | undefined): boolean {
+  if (!actorId) return false;
+  if (actorId === repo.ownerId) return true;
+  return repo.collaborators.some((c) => c.userId === actorId && c.role === "WRITER");
+}
+
 function pipeGitService(
   reply: FastifyReply,
   request: FastifyRequest,
@@ -136,19 +157,24 @@ export async function gitHttpRoutes(app: FastifyInstance) {
         name: repoName,
         owner: { handle: handleRaw.toLowerCase() },
       },
+      include: {
+        collaborators: {
+          select: { userId: true, role: true },
+        },
+      },
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
     const actorId = await resolveActorIdFromAuthHeader(app, request);
-    const canRead = repo.visibility === "PUBLIC" || actorId === repo.ownerId;
-    const canWrite = actorId === repo.ownerId;
+    const read = canRead(repo, actorId);
+    const write = canWrite(repo, actorId);
 
-    if (service === "git-receive-pack" && !canWrite) {
+    if (service === "git-receive-pack" && !write) {
       return reply.status(403).send({ error: "Write access denied" });
     }
-    if (service === "git-upload-pack" && !canRead) {
+    if (service === "git-upload-pack" && !read) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
@@ -169,14 +195,18 @@ export async function gitHttpRoutes(app: FastifyInstance) {
         name: repoName,
         owner: { handle: handleRaw.toLowerCase() },
       },
+      include: {
+        collaborators: {
+          select: { userId: true, role: true },
+        },
+      },
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
     const actorId = await resolveActorIdFromAuthHeader(app, request);
-    const canRead = repo.visibility === "PUBLIC" || actorId === repo.ownerId;
-    if (!canRead) {
+    if (!canRead(repo, actorId)) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
@@ -197,13 +227,18 @@ export async function gitHttpRoutes(app: FastifyInstance) {
         name: repoName,
         owner: { handle: handleRaw.toLowerCase() },
       },
+      include: {
+        collaborators: {
+          select: { userId: true, role: true },
+        },
+      },
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
     const actorId = await resolveActorIdFromAuthHeader(app, request);
-    if (actorId !== repo.ownerId) {
+    if (!canWrite(repo, actorId)) {
       return reply.status(403).send({ error: "Write access denied" });
     }
 

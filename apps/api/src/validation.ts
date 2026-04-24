@@ -27,6 +27,7 @@ export const loginBodySchema = z.object({
 });
 
 export const repoVisibilitySchema = z.enum(["public", "private"]);
+export const collaboratorRoleSchema = z.enum(["reader", "writer"]);
 
 export const createRepoBodySchema = z.object({
   name: repoNameSchema,
@@ -38,4 +39,9 @@ export const createRepoBodySchema = z.object({
 export const updateRepoBodySchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   visibility: repoVisibilitySchema.optional(),
+});
+
+export const addCollaboratorBodySchema = z.object({
+  handle: handleSchema,
+  role: collaboratorRoleSchema.optional().default("reader"),
 });

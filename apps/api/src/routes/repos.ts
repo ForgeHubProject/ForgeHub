@@ -1,8 +1,8 @@
-import type { RepoVisibility } from "@prisma/client";
+import type { CollaboratorRole, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildStorageKey, createBareRepo, inspectBareRepo, removeBareRepo } from "../git-storage.js";
 import { prisma } from "../prisma.js";
-import { createRepoBodySchema, updateRepoBodySchema } from "../validation.js";
+import { addCollaboratorBodySchema, createRepoBodySchema, updateRepoBodySchema } from "../validation.js";
 
 function toApiVisibility(v: RepoVisibility) {
   return v === "PUBLIC" ? "public" : "private";
@@ -19,12 +19,23 @@ function viewerId(request: FastifyRequest): string | undefined {
 
 function canViewRepo(
   id: string | undefined,
-  repo: { ownerId: string; visibility: RepoVisibility },
+  repo: { ownerId: string; visibility: RepoVisibility; collaborators?: Array<{ userId: string }> },
 ): boolean {
   if (repo.visibility === "PUBLIC") {
     return true;
   }
-  return id === repo.ownerId;
+  if (id === repo.ownerId) {
+    return true;
+  }
+  return repo.collaborators?.some((c) => c.userId === id) ?? false;
+}
+
+function toDbCollaboratorRole(role: "reader" | "writer"): CollaboratorRole {
+  return role === "writer" ? "WRITER" : "READER";
+}
+
+function fromDbCollaboratorRole(role: CollaboratorRole): "reader" | "writer" {
+  return role === "WRITER" ? "writer" : "reader";
 }
 
 function repoResponse(r: {
@@ -123,7 +134,10 @@ export async function repoRoutes(app: FastifyInstance) {
 
       const repo = await prisma.repo.findFirst({
         where: { name, owner: { handle: handle.toLowerCase() } },
-        include: { owner: { select: { handle: true } } },
+        include: {
+          owner: { select: { handle: true } },
+          collaborators: { select: { userId: true } },
+        },
       });
       if (!repo || !canViewRepo(viewerId(request), repo)) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -147,10 +161,12 @@ export async function repoRoutes(app: FastifyInstance) {
       const isOwner = v === owner.id;
 
       const repos = await prisma.repo.findMany({
-        where: {
-          ownerId: owner.id,
-          ...(!isOwner ? { visibility: "PUBLIC" as const } : {}),
-        },
+        where: isOwner
+          ? { ownerId: owner.id }
+          : {
+              ownerId: owner.id,
+              OR: [{ visibility: "PUBLIC" }, { collaborators: { some: { userId: v } } }],
+            },
         orderBy: { updatedAt: "desc" },
         include: { owner: { select: { handle: true } } },
       });
@@ -204,6 +220,130 @@ export async function repoRoutes(app: FastifyInstance) {
         include: { owner: { select: { handle: true } } },
       });
       return repoResponse(repo);
+    },
+  );
+
+  app.get(
+    "/repos/:name/collaborators",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { name: nameParam } = request.params as { name: string };
+      const name = nameParam.toLowerCase();
+
+      const repo = await prisma.repo.findFirst({
+        where: { ownerId: request.user.sub, name },
+        include: {
+          collaborators: {
+            include: {
+              user: { select: { id: true, handle: true, email: true, displayName: true } },
+            },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+      if (!repo) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      return {
+        collaborators: repo.collaborators.map((c) => ({
+          id: c.id,
+          role: fromDbCollaboratorRole(c.role),
+          createdAt: c.createdAt.toISOString(),
+          user: c.user,
+        })),
+      };
+    },
+  );
+
+  app.post(
+    "/repos/:name/collaborators",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const parsed = addCollaboratorBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+
+      const { name: nameParam } = request.params as { name: string };
+      const name = nameParam.toLowerCase();
+
+      const repo = await prisma.repo.findFirst({
+        where: { ownerId: request.user.sub, name },
+      });
+      if (!repo) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      const collaboratorUser = await prisma.user.findUnique({
+        where: { handle: parsed.data.handle.toLowerCase() },
+      });
+      if (!collaboratorUser) {
+        return reply.status(404).send({ error: "User not found" });
+      }
+      if (collaboratorUser.id === repo.ownerId) {
+        return reply.status(400).send({ error: "Owner is already implicitly a collaborator" });
+      }
+
+      const role = toDbCollaboratorRole(parsed.data.role);
+      const collaborator = await prisma.repoCollaborator.upsert({
+        where: {
+          repoId_userId: {
+            repoId: repo.id,
+            userId: collaboratorUser.id,
+          },
+        },
+        create: {
+          repoId: repo.id,
+          userId: collaboratorUser.id,
+          role,
+        },
+        update: { role },
+        include: {
+          user: { select: { id: true, handle: true, email: true, displayName: true } },
+        },
+      });
+
+      return reply.status(201).send({
+        id: collaborator.id,
+        role: fromDbCollaboratorRole(collaborator.role),
+        createdAt: collaborator.createdAt.toISOString(),
+        user: collaborator.user,
+      });
+    },
+  );
+
+  app.delete(
+    "/repos/:name/collaborators/:handle",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { name: nameParam, handle: handleParam } = request.params as { name: string; handle: string };
+      const name = nameParam.toLowerCase();
+      const handle = handleParam.toLowerCase();
+
+      const repo = await prisma.repo.findFirst({
+        where: { ownerId: request.user.sub, name },
+      });
+      if (!repo) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      const user = await prisma.user.findUnique({ where: { handle } });
+      if (!user) {
+        return reply.status(404).send({ error: "User not found" });
+      }
+
+      const existing = await prisma.repoCollaborator.findUnique({
+        where: { repoId_userId: { repoId: repo.id, userId: user.id } },
+      });
+      if (!existing) {
+        return reply.status(404).send({ error: "Collaborator not found" });
+      }
+
+      await prisma.repoCollaborator.delete({
+        where: { repoId_userId: { repoId: repo.id, userId: user.id } },
+      });
+      return reply.status(204).send();
     },
   );
 

@@ -83,6 +83,9 @@ The API listens on `PORT` (default **3001**).
 - `GET /repos/:handle/:name` — repo metadata; **private** repos return 404 unless the Bearer token is the **owner** (no leak that a private name exists)
 - `PATCH /repos/:name` — owner only: optional `description`, optional `visibility`
 - `DELETE /repos/:name` — owner only: deletes repo metadata and bare Git storage
+- `GET /repos/:name/collaborators` — owner only: list collaborators
+- `POST /repos/:name/collaborators` — owner only: add/update collaborator role (`reader` or `writer`)
+- `DELETE /repos/:name/collaborators/:handle` — owner only: remove collaborator
 - `GET /repos/:handle/:name/storage` — owner-only debug endpoint with `storageKey`, absolute path, and bare-repo status
 
 ### Minimal Git over HTTPS endpoints (implemented)
@@ -94,7 +97,7 @@ The API listens on `PORT` (default **3001**).
 
 Auth behavior:
 - Read (`upload-pack`): public repos are readable anonymously; private repos require owner auth.
-- Write (`receive-pack`): owner-only for now.
+- Write (`receive-pack`): owner or collaborator with `writer` role.
 - Auth header accepts:
   - `Authorization: Bearer <jwt>`
   - `Authorization: Basic base64(<any-username>:<jwt>)`
