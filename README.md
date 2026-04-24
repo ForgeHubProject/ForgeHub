@@ -51,7 +51,9 @@ Diff noise from exporter jitter or irrelevant metadata is controlled by:
 
 ## Current implementation status
 
-Product specs and contracts live under `docs/`. The first running code path is **`apps/api`**: accounts (register, login, JWT session) and **repositories** owned by a user (`handle/repo-name`, GitHub-style naming). Hardware snapshot and diff APIs from the spec are not wired yet; they can build on this foundation.
+Product specs and contracts live under `docs/`. The first running code path is **`apps/api`**: accounts (register, login, JWT session) and **repositories** owned by a user (`handle/repo-name`, GitHub-style naming) with **public or private** visibility. Hardware snapshot and diff APIs from the spec are not wired yet; they can build on this foundation.
+
+**Storage (same mental model as Git):** *Metadata* (users, repo rows, visibility, collaborators later) lives in the **database** (SQLite in dev; PostgreSQL in production). *Large blobs* (future bare Git objects, packfiles, ForgeHub snapshot payloads) will live **beside** the DB on disk or in object storage—like `origin` holding the server-side objects while your **laptop** keeps a local clone. This repo’s API is the **hosted** side; a second “server” in daily use is your **local machine** + Git client, not a second ForgeHub process.
 
 ## Local development
 
@@ -75,11 +77,11 @@ The API listens on `PORT` (default **3001**).
 - `POST /auth/register` — body: `email`, `password`, `handle`, optional `displayName`
 - `POST /auth/login` — body: `email`, `password` → returns `token` (Bearer JWT)
 - `GET /auth/me` — header: `Authorization: Bearer <token>`
-- `POST /repos` — create repo for the current user — body: `name`, optional `description`
-- `GET /repos/mine` — list repos for the authenticated user
-- `GET /users/:handle/repos` — public list of a user’s repos
-- `GET /repos/:handle/:name` — public repo metadata
-- `PATCH /repos/:name` — authenticated owner updates `description`
+- `POST /repos` — create repo — body: `name`, optional `description`, optional `visibility` (`"public"` \| `"private"`); defaults to **`private`**
+- `GET /repos/mine` — list your repos (all visibilities)
+- `GET /users/:handle/repos` — lists **public** repos; if you call it with `Authorization: Bearer` **and** the token is that user, you get **all** repos (for “my profile” style clients)
+- `GET /repos/:handle/:name` — repo metadata; **private** repos return 404 unless the Bearer token is the **owner** (no leak that a private name exists)
+- `PATCH /repos/:name` — owner only: optional `description`, optional `visibility`
 
 Example register:
 

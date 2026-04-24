@@ -7,6 +7,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum RepoVisibility {
+  PUBLIC
+  PRIVATE
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -19,13 +24,14 @@ model User {
 }
 
 model Repo {
-  id          String   @id @default(cuid())
+  id          String          @id @default(cuid())
   name        String
   description String?
+  visibility  RepoVisibility  @default(PUBLIC)
   ownerId     String
-  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  owner       User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@unique([ownerId, name])
 }

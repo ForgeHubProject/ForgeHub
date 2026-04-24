@@ -15,6 +15,8 @@ declare module "@fastify/jwt" {
 declare module "fastify" {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Sets `request.user` when a valid Bearer token is present; otherwise leaves it unset. */
+    optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
 
@@ -36,6 +38,17 @@ async function buildServer() {
         await request.jwtVerify();
       } catch {
         return reply.status(401).send({ error: "Unauthorized" });
+      }
+    },
+  );
+
+  app.decorate(
+    "optionalAuthenticate",
+    async function optionalAuthenticate(request: FastifyRequest) {
+      try {
+        await request.jwtVerify();
+      } catch {
+        // guest — private routes must use `authenticate` instead
       }
     },
   );
