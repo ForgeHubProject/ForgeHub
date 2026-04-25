@@ -115,6 +115,44 @@ const KIND_SIZE: Record<string, number> = {
   part:     3.5,
 };
 
+// ─── local axes gizmo ────────────────────────────────────────────────────────
+
+function LocalAxes({ size }: { size: number }) {
+  const len = size * 1.3;
+  const shaftR = Math.max(size * 0.035, 0.05);
+  const coneH = size * 0.28;
+  const coneR = size * 0.08;
+  const shaftLen = len - coneH;
+
+  const axes: Array<{ color: string; rot: [number, number, number]; label: string }> = [
+    { color: "#ef4444", rot: [0, 0, -Math.PI / 2], label: "X" },
+    { color: "#22c55e", rot: [0, 0, 0],            label: "Y" },
+    { color: "#3b82f6", rot: [Math.PI / 2, 0, 0],  label: "Z" },
+  ];
+
+  return (
+    <group>
+      {axes.map(({ color, rot, label }) => (
+        <group key={label} rotation={rot}>
+          <mesh position={[0, shaftLen / 2, 0]}>
+            <cylinderGeometry args={[shaftR, shaftR, shaftLen, 8]} />
+            <meshBasicMaterial color={color} depthTest={false} />
+          </mesh>
+          <mesh position={[0, shaftLen + coneH / 2, 0]}>
+            <coneGeometry args={[coneR, coneH, 8]} />
+            <meshBasicMaterial color={color} depthTest={false} />
+          </mesh>
+          <Html position={[0, len + 1, 0]} center style={{ pointerEvents: "none" }}>
+            <span style={{ color, fontSize: 10, fontWeight: 700, textShadow: "0 0 3px #000" }}>
+              {label}
+            </span>
+          </Html>
+        </group>
+      ))}
+    </group>
+  );
+}
+
 // ─── single entity ───────────────────────────────────────────────────────────
 
 function EntityMesh({
@@ -124,7 +162,7 @@ function EntityMesh({
 }: {
   node: VNode;
   isSelected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, multi: boolean) => void;
 }) {
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected ? "#f59e0b" : baseColor;
@@ -136,7 +174,7 @@ function EntityMesh({
     : PartModel;
 
   return (
-    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}>
+    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id, e.nativeEvent.shiftKey); }}>
       <Model color={color} size={size} />
 
       {/* selection ring */}
@@ -146,6 +184,9 @@ function EntityMesh({
           <meshBasicMaterial color="#f59e0b" transparent opacity={0.7} side={THREE.DoubleSide} />
         </mesh>
       )}
+
+      {/* local axes gizmo — shown on selection */}
+      {isSelected && <LocalAxes size={size} />}
 
       {/* floating label */}
       <Html
@@ -184,7 +225,7 @@ function SceneNode({
 }: {
   node: VNode;
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string, multi: boolean) => void;
 }) {
   const p = (node.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (node.transform ? node.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
@@ -208,7 +249,7 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string, multi: boolean) => void;
 };
 
 export function Viewport({ entities, selectedIds, onSelect }: Props) {
