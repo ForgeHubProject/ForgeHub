@@ -1,0 +1,35 @@
+{
+  "asset": { "version": "2.0", "generator": "ForgeHub test data" },
+  "scene": 0,
+  "scenes": [{ "name": "Circuit Board", "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "CircuitBoard",
+      "children": [1, 2, 3],
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "MCU",
+      "mesh": 0,
+      "translation": [-12.0, 0, 5.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "OpticalSensor",
+      "mesh": 1,
+      "translation": [0, 0, -15.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "USBConnector",
+      "mesh": 2,
+      "translation": [0, 0, 35.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
+  ]
+}

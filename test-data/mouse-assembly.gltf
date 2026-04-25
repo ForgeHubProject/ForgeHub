@@ -1,0 +1,42 @@
+{
+  "asset": { "version": "2.0", "generator": "ForgeHub test data" },
+  "scene": 0,
+  "scenes": [{ "name": "Mouse Assembly", "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "Mouse",
+      "children": [1, 2, 3, 4],
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "LeftButton",
+      "mesh": 0,
+      "translation": [-22.0, 8.0, 30.0],
+      "rotation": [0, 0, 0.052, 0.999],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "RightButton",
+      "mesh": 1,
+      "translation": [22.0, 8.0, 30.0],
+      "rotation": [0, 0, -0.052, 0.999],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "ScrollWheel",
+      "mesh": 2,
+      "translation": [0, 12.0, 20.0],
+      "rotation": [0.707, 0, 0, 0.707],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "CircuitBoard",
+      "mesh": 3,
+      "translation": [0, -8.0, -10.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
+  ]
+}
