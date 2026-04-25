@@ -109,6 +109,28 @@ export async function createConstraint(
   });
 }
 
+export async function deleteSnapshot(
+  token: string,
+  handle: string,
+  repoName: string,
+  snapshotId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/snapshots/${snapshotId}`, { method: "DELETE", token });
+}
+
+export async function deleteEntity(
+  token: string,
+  handle: string,
+  repoName: string,
+  snapshotId: string,
+  entityId: string,
+): Promise<{ snapshotDeleted: boolean; snapshotId?: string; deletedEntities?: number; deletedConstraints?: number }> {
+  return req(`/repos/${handle}/${repoName}/snapshots/${snapshotId}/entities/${entityId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export async function deleteConstraint(
   token: string,
   handle: string,

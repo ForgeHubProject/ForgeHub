@@ -10,14 +10,9 @@ function buildTree(entities: Entity[]): TreeNodeType[] {
     if (!e.parentEntityId) {
       roots.push(map.get(e.id)!);
     } else {
-      // parentEntityId in the entity is the stable entityId, but we need the DB id
-      // The API stores parentEntityId as the entityId string (stable path), so look up by entityId
       const parent = [...map.values()].find((n) => n.entityId === e.parentEntityId);
-      if (parent) {
-        parent.children.push(map.get(e.id)!);
-      } else {
-        roots.push(map.get(e.id)!);
-      }
+      if (parent) parent.children.push(map.get(e.id)!);
+      else roots.push(map.get(e.id)!);
     }
   }
   return roots;
@@ -28,17 +23,14 @@ type Props = {
   constraints: Constraint[];
   selectedIds: string[];
   onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
 };
 
-export function ModuleTree({ entities, constraints, selectedIds, onSelect }: Props) {
+export function ModuleTree({ entities, constraints, selectedIds, onSelect, onDelete }: Props) {
   const roots = buildTree(entities);
 
   if (roots.length === 0) {
-    return (
-      <div style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>
-        No entities found in this snapshot.
-      </div>
-    );
+    return <div style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>No entities found.</div>;
   }
 
   return (
@@ -50,6 +42,7 @@ export function ModuleTree({ entities, constraints, selectedIds, onSelect }: Pro
           constraints={constraints}
           selectedIds={selectedIds}
           onSelect={onSelect}
+          onDelete={onDelete}
         />
       ))}
     </div>
