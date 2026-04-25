@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   createConstraint,
   deleteConstraint,
+  deleteEntity,
+  deleteSnapshot,
   getSnapshot,
   getSnapshots,
   ingestSnapshot,
 } from "../api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { Constraint, Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
@@ -27,6 +30,13 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    warning?: string;
+    confirmLabel?: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   const handle = repo.ownerHandle ?? user.handle;
   const repoName = repo.name;
@@ -111,6 +121,108 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const entityById = (id: string): Entity | undefined =>
     activeSnapshot?.entities.find((e) => e.id === id);
 
+  function collectSubtreeIds(rootDbId: string, entities: Entity[]): string[] {
+    const root = entities.find((e) => e.id === rootDbId);
+    if (!root) return [rootDbId];
+    const ids = new Set<string>([rootDbId]);
+    const queue = [root.entityId];
+    while (queue.length) {
+      const parentEntityId = queue.shift()!;
+      for (const e of entities) {
+        if (e.parentEntityId === parentEntityId && !ids.has(e.id)) {
+          ids.add(e.id);
+          queue.push(e.entityId);
+        }
+      }
+    }
+    return [...ids];
+  }
+
+  function requestDeleteEntity(dbId: string) {
+    if (!activeSnapshot) return;
+    const entity = entityById(dbId);
+    if (!entity) return;
+    const isRoot = !entity.parentEntityId;
+
+    if (isRoot) {
+      setConfirmDialog({
+        title: "Delete snapshot",
+        message: `"${entity.name}" is the root of this snapshot. Deleting it will remove the entire snapshot from the repository.`,
+        warning: activeSnapshot.constraints.length > 0
+          ? `This snapshot has ${activeSnapshot.constraints.length} constraint(s) that will also be deleted.`
+          : undefined,
+        confirmLabel: "Delete snapshot",
+        onConfirm: async () => {
+          setConfirmDialog(null);
+          try {
+            await deleteSnapshot(token, handle, repoName, activeSnapshot.id);
+            setSnapshots((prev) => prev.filter((s) => s.id !== activeSnapshot.id));
+            setActiveSnapshot(null);
+            setSelectedIds([]);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to delete snapshot");
+          }
+        },
+      });
+    } else {
+      const subtreeIds = new Set(collectSubtreeIds(dbId, activeSnapshot.entities));
+      const affectedConstraints = activeSnapshot.constraints.filter(
+        (c) => subtreeIds.has(c.entityAId) || subtreeIds.has(c.entityBId),
+      );
+      const subtreeSize = subtreeIds.size;
+
+      setConfirmDialog({
+        title: `Delete "${entity.name}"`,
+        message: subtreeSize > 1
+          ? `This will delete "${entity.name}" and its ${subtreeSize - 1} descendant(s).`
+          : `This will delete "${entity.name}".`,
+        warning: affectedConstraints.length > 0
+          ? `${affectedConstraints.length} constraint(s) referencing this subtree will also be removed.`
+          : undefined,
+        confirmLabel: "Delete",
+        onConfirm: async () => {
+          setConfirmDialog(null);
+          try {
+            const result = await deleteEntity(token, handle, repoName, activeSnapshot.id, dbId);
+            if (result.snapshotDeleted) {
+              setSnapshots((prev) => prev.filter((s) => s.id !== activeSnapshot.id));
+              setActiveSnapshot(null);
+              setSelectedIds([]);
+            } else {
+              const snap = await getSnapshot(token, handle, repoName, activeSnapshot.id);
+              setActiveSnapshot(snap);
+              setSelectedIds((prev) => prev.filter((id) => !subtreeIds.has(id)));
+            }
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to delete entity");
+          }
+        },
+      });
+    }
+  }
+
+  function requestDeleteSnapshot(snapshotId: string) {
+    const snap = snapshots.find((s) => s.id === snapshotId);
+    setConfirmDialog({
+      title: "Delete snapshot",
+      message: `Delete snapshot "${snap?.label ?? snap?.sourceFile ?? snapshotId}"? This cannot be undone.`,
+      confirmLabel: "Delete snapshot",
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        try {
+          await deleteSnapshot(token, handle, repoName, snapshotId);
+          setSnapshots((prev) => prev.filter((s) => s.id !== snapshotId));
+          if (activeSnapshot?.id === snapshotId) {
+            setActiveSnapshot(null);
+            setSelectedIds([]);
+          }
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Failed to delete snapshot");
+        }
+      },
+    });
+  }
+
   return (
     <div style={styles.shell}>
       {/* top bar */}
@@ -151,19 +263,30 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
               <p style={styles.muted}>No snapshots yet. Upload a .gltf file.</p>
             )}
             {snapshots.map((s) => (
-              <button
+              <div
                 key={s.id}
                 style={{
-                  ...styles.snapBtn,
-                  ...(activeSnapshot?.id === s.id ? styles.snapBtnActive : {}),
+                  ...styles.snapItem,
+                  ...(activeSnapshot?.id === s.id ? styles.snapItemActive : {}),
                 }}
-                onClick={() => loadSnapshot(s.id)}
               >
-                <span style={styles.snapFile}>{s.label ?? s.sourceFile}</span>
-                <span style={styles.snapDate}>
-                  {new Date(s.createdAt).toLocaleDateString()}
-                </span>
-              </button>
+                <button
+                  style={styles.snapBtn}
+                  onClick={() => loadSnapshot(s.id)}
+                >
+                  <span style={styles.snapFile}>{s.label ?? s.sourceFile}</span>
+                  <span style={styles.snapDate}>
+                    {new Date(s.createdAt).toLocaleDateString()}
+                  </span>
+                </button>
+                <button
+                  title="Delete snapshot"
+                  onClick={() => requestDeleteSnapshot(s.id)}
+                  style={styles.snapDeleteBtn}
+                >
+                  ✕
+                </button>
+              </div>
             ))}
           </div>
 
@@ -183,6 +306,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                     constraints={activeSnapshot.constraints}
                     selectedIds={selectedIds}
                     onSelect={toggleSelect}
+                    onDelete={requestDeleteEntity}
                   />
                 </div>
               )}
@@ -267,6 +391,17 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
           )}
         </main>
       </div>
+
+      {confirmDialog && (
+        <ConfirmDialog
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          warning={confirmDialog.warning}
+          confirmLabel={confirmDialog.confirmLabel}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   );
 }
@@ -312,12 +447,20 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 8px", cursor: "pointer",
   },
   muted: { fontSize: 12, color: "#9ca3af", padding: "0 12px" },
+  snapItem: {
+    display: "flex", alignItems: "center",
+  },
+  snapItemActive: { backgroundColor: "#f0f9ff" },
   snapBtn: {
     display: "flex", flexDirection: "column", alignItems: "flex-start",
-    width: "100%", padding: "6px 12px", background: "none",
+    flex: 1, padding: "6px 12px", background: "none",
     border: "none", cursor: "pointer", textAlign: "left",
   },
-  snapBtnActive: { backgroundColor: "#f0f9ff" },
+  snapDeleteBtn: {
+    fontSize: 11, color: "#9ca3af", background: "none",
+    border: "none", cursor: "pointer", padding: "4px 8px",
+    flexShrink: 0,
+  },
   snapFile: { fontSize: 13, color: "#111827", fontWeight: 500 },
   snapDate: { fontSize: 11, color: "#9ca3af", marginTop: 1 },
   constraintPanel: {
