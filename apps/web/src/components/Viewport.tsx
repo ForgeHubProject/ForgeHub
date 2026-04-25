@@ -1,7 +1,18 @@
 import { Canvas } from "@react-three/fiber";
-import { Bounds, GizmoHelper, GizmoViewport, Grid, OrbitControls, Text } from "@react-three/drei";
+import {
+  Bounds,
+  Environment,
+  GizmoHelper,
+  GizmoViewport,
+  Grid,
+  Html,
+  OrbitControls,
+} from "@react-three/drei";
 import { Suspense, useMemo } from "react";
+import * as THREE from "three";
 import type { Constraint, Entity } from "../types";
+
+// ─── tree builder ────────────────────────────────────────────────────────────
 
 type VNode = Entity & { children: VNode[] };
 
@@ -23,23 +34,90 @@ function buildTree(entities: Entity[]): VNode[] {
 
 const toRad = (d: number) => d * (Math.PI / 180);
 
+// ─── per-kind 3D geometry ─────────────────────────────────────────────────────
+
+function AssemblyModel({ color, size }: { color: string; size: number }) {
+  const s = size;
+  return (
+    <group>
+      {/* transparent shell */}
+      <mesh>
+        <boxGeometry args={[s, s * 0.7, s]} />
+        <meshStandardMaterial color={color} transparent opacity={0.08} side={THREE.DoubleSide} />
+      </mesh>
+      {/* wireframe outline */}
+      <mesh>
+        <boxGeometry args={[s, s * 0.7, s]} />
+        <meshBasicMaterial color={color} wireframe transparent opacity={0.4} />
+      </mesh>
+    </group>
+  );
+}
+
+function ModuleModel({ color, size }: { color: string; size: number }) {
+  const s = size;
+  return (
+    <group>
+      {/* PCB board */}
+      <mesh position={[0, 0, 0]} castShadow receiveShadow>
+        <boxGeometry args={[s, s * 0.15, s * 0.7]} />
+        <meshStandardMaterial color={color} metalness={0.3} roughness={0.65} />
+      </mesh>
+      {/* chip bumps */}
+      {([-0.28, 0, 0.28] as number[]).map((x) =>
+        ([-0.18, 0.18] as number[]).map((z) => (
+          <mesh key={`${x}-${z}`} position={[x * s, s * 0.11, z * s]} castShadow>
+            <boxGeometry args={[s * 0.2, s * 0.1, s * 0.2]} />
+            <meshStandardMaterial color="#111827" metalness={0.5} roughness={0.4} />
+          </mesh>
+        ))
+      )}
+    </group>
+  );
+}
+
+function PartModel({ color, size }: { color: string; size: number }) {
+  const s = size;
+  return (
+    <group>
+      {/* main body */}
+      <mesh position={[0, 0, 0]} castShadow receiveShadow>
+        <boxGeometry args={[s, s * 0.55, s]} />
+        <meshStandardMaterial color={color} metalness={0.55} roughness={0.3} />
+      </mesh>
+      {/* top cap */}
+      <mesh position={[0, s * 0.32, 0]} castShadow>
+        <boxGeometry args={[s * 0.75, s * 0.1, s * 0.75]} />
+        <meshStandardMaterial color={color} metalness={0.7} roughness={0.2} />
+      </mesh>
+      {/* pin row */}
+      {([-0.3, -0.15, 0, 0.15, 0.3] as number[]).map((x) => (
+        <mesh key={x} position={[x * s, -s * 0.33, 0]}>
+          <cylinderGeometry args={[s * 0.025, s * 0.025, s * 0.12, 6]} />
+          <meshStandardMaterial color="#9ca3af" metalness={0.9} roughness={0.1} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// ─── kind config ─────────────────────────────────────────────────────────────
+
 const KIND_COLOR: Record<string, string> = {
   assembly: "#3b82f6",
-  module: "#f59e0b",
-  part: "#10b981",
-};
-const KIND_OPACITY: Record<string, number> = {
-  assembly: 0.12,
-  module: 0.55,
-  part: 0.82,
-};
-const KIND_SIZE: Record<string, number> = {
-  assembly: 10,
-  module: 7,
-  part: 4,
+  module:   "#f59e0b",
+  part:     "#10b981",
 };
 
-function EntityBox({
+const KIND_SIZE: Record<string, number> = {
+  assembly: 9,
+  module:   6,
+  part:     3.5,
+};
+
+// ─── single entity ───────────────────────────────────────────────────────────
+
+function EntityMesh({
   node,
   isSelected,
   onSelect,
@@ -48,39 +126,56 @@ function EntityBox({
   isSelected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const size = KIND_SIZE[node.kind] ?? 5;
-  const color = isSelected ? "#f59e0b" : (KIND_COLOR[node.kind] ?? "#9ca3af");
-  const opacity = isSelected ? 0.9 : (KIND_OPACITY[node.kind] ?? 0.5);
-  const labelSize = Math.max(1.5, size * 0.38);
+  const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
+  const color = isSelected ? "#f59e0b" : baseColor;
+  const size = KIND_SIZE[node.kind] ?? 4;
+
+  const Model =
+    node.kind === "assembly" ? AssemblyModel
+    : node.kind === "module" ? ModuleModel
+    : PartModel;
 
   return (
     <group onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}>
-      {/* body */}
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={[size, size, size]} />
-        <meshStandardMaterial color={color} transparent opacity={opacity} />
-      </mesh>
-      {/* edge outline — second pass with wireframe */}
-      <mesh>
-        <boxGeometry args={[size, size, size]} />
-        <meshBasicMaterial color={color} wireframe transparent opacity={isSelected ? 0.9 : 0.35} />
-      </mesh>
-      {/* label */}
-      <Text
-        position={[0, size / 2 + 2, 0]}
-        fontSize={labelSize}
-        color={isSelected ? "#d97706" : "#1e293b"}
-        anchorX="center"
-        anchorY="bottom"
-        outlineWidth={0.25}
-        outlineColor="#ffffff"
-        renderOrder={1}
+      <Model color={color} size={size} />
+
+      {/* selection ring */}
+      {isSelected && (
+        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[size * 0.62, size * 0.78, 32]} />
+          <meshBasicMaterial color="#f59e0b" transparent opacity={0.7} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {/* floating label */}
+      <Html
+        position={[0, size * 0.55 + 1.5, 0]}
+        center
+        distanceFactor={60}
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none" }}
       >
-        {node.name}
-      </Text>
+        <div
+          style={{
+            background: isSelected ? "#f59e0b" : "rgba(255,255,255,0.92)",
+            color: isSelected ? "#fff" : "#1e293b",
+            padding: "2px 8px",
+            borderRadius: 4,
+            fontSize: 11,
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+            border: `1px solid ${isSelected ? "#d97706" : "#e2e8f0"}`,
+          }}
+        >
+          {node.name}
+        </div>
+      </Html>
     </group>
   );
 }
+
+// ─── recursive scene node ─────────────────────────────────────────────────────
 
 function SceneNode({
   node,
@@ -98,7 +193,7 @@ function SceneNode({
   return (
     <group position={p} rotation={r} scale={s}>
       {node.transform !== null && (
-        <EntityBox node={node} isSelected={selectedIds.includes(node.id)} onSelect={onSelect} />
+        <EntityMesh node={node} isSelected={selectedIds.includes(node.id)} onSelect={onSelect} />
       )}
       {node.children.map((child) => (
         <SceneNode key={child.id} node={child} selectedIds={selectedIds} onSelect={onSelect} />
@@ -106,6 +201,8 @@ function SceneNode({
     </group>
   );
 }
+
+// ─── public component ─────────────────────────────────────────────────────────
 
 type Props = {
   entities: Entity[];
@@ -119,15 +216,18 @@ export function Viewport({ entities, selectedIds, onSelect }: Props) {
 
   return (
     <Canvas
-      camera={{ position: [80, 80, 120], fov: 45, near: 0.1, far: 50000 }}
-      style={{ background: "#f1f5f9" }}
       shadows
+      camera={{ position: [80, 80, 120], fov: 45, near: 0.1, far: 50000 }}
+      gl={{ antialias: true }}
+      style={{ background: "#0f172a" }}
     >
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[100, 200, 100]} intensity={1.2} castShadow />
-      <directionalLight position={[-100, 50, -100]} intensity={0.3} />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[60, 120, 80]} intensity={1.4} castShadow />
+      <directionalLight position={[-60, 40, -80]} intensity={0.4} />
 
       <Suspense fallback={null}>
+        <Environment preset="city" />
+
         <Bounds fit clip observe damping={6} margin={1.4}>
           <group>
             {roots.map((root) => (
@@ -138,13 +238,13 @@ export function Viewport({ entities, selectedIds, onSelect }: Props) {
 
         <Grid
           args={[500, 500]}
-          position={[0, -2, 0]}
+          position={[0, -6, 0]}
           cellSize={5}
           cellThickness={0.5}
-          cellColor="#cbd5e1"
+          cellColor="#1e293b"
           sectionSize={25}
           sectionThickness={1}
-          sectionColor="#94a3b8"
+          sectionColor="#334155"
           fadeDistance={400}
           fadeStrength={1}
           followCamera={false}
@@ -152,10 +252,17 @@ export function Viewport({ entities, selectedIds, onSelect }: Props) {
         />
       </Suspense>
 
-      <OrbitControls makeDefault enablePan enableZoom enableRotate />
+      <OrbitControls
+        makeDefault
+        enableDamping
+        dampingFactor={0.08}
+        maxPolarAngle={Math.PI / 2.05}
+        minDistance={5}
+        maxDistance={2000}
+      />
 
       <GizmoHelper alignment="bottom-right" margin={[70, 70]}>
-        <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="#111827" />
+        <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="white" />
       </GizmoHelper>
     </Canvas>
   );
