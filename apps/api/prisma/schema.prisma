@@ -18,14 +18,14 @@ enum CollaboratorRole {
 }
 
 model User {
-  id            String             @id @default(cuid())
-  email         String             @unique
-  passwordHash  String
-  handle        String             @unique
-  displayName   String?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-  repos         Repo[]
+  id             String             @id @default(cuid())
+  email          String             @unique
+  passwordHash   String
+  handle         String             @unique
+  displayName    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  repos          Repo[]
   collaborations RepoCollaborator[]
 }
 
@@ -40,6 +40,7 @@ model Repo {
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   collaborators RepoCollaborator[]
+  snapshots     Snapshot[]
 
   @@unique([ownerId, name])
 }
@@ -55,4 +56,60 @@ model RepoCollaborator {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([repoId, userId])
+}
+
+model Snapshot {
+  id            String       @id @default(cuid())
+  repoId        String
+  label         String?
+  sourceFile    String
+  schemaVersion String       @default("0.1.0")
+  createdAt     DateTime     @default(now())
+
+  repo          Repo         @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  entities      Entity[]
+  constraints   Constraint[]
+}
+
+model Entity {
+  id             String       @id @default(cuid())
+  snapshotId     String
+  entityId       String
+  parentEntityId String?
+  kind           String
+  name           String
+  path           String
+  posX           Float?
+  posY           Float?
+  posZ           Float?
+  rotX           Float?
+  rotY           Float?
+  rotZ           Float?
+  scaleX         Float?
+  scaleY         Float?
+  scaleZ         Float?
+  attributes     String       @default("{}")
+  renderRef      String?
+
+  snapshot       Snapshot     @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  constraintsAsA Constraint[] @relation("ConstraintEntityA")
+  constraintsAsB Constraint[] @relation("ConstraintEntityB")
+
+  @@unique([snapshotId, entityId])
+}
+
+model Constraint {
+  id            String   @id @default(cuid())
+  snapshotId    String
+  entityAId     String
+  entityBId     String
+  positionFixed Boolean  @default(true)
+  rotationFixed Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  snapshot Snapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  entityA  Entity   @relation("ConstraintEntityA", fields: [entityAId], references: [id], onDelete: Cascade)
+  entityB  Entity   @relation("ConstraintEntityB", fields: [entityBId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, entityAId, entityBId])
 }
