@@ -47,6 +47,19 @@ export async function getMyRepos(token: string): Promise<{ repos: Repo[] }> {
   return req("/repos/mine", { token });
 }
 
+export async function createRepo(
+  token: string,
+  name: string,
+  description: string | undefined,
+  visibility: "public" | "private",
+): Promise<Repo> {
+  return req("/repos", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ name, description: description || undefined, visibility }),
+  });
+}
+
 export async function getSnapshots(
   token: string | null,
   handle: string,
