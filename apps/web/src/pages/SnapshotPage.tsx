@@ -78,8 +78,14 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  function toggleSelect(id: string) {
+  function toggleSelect(id: string, multi: boolean) {
     setSelectedIds((prev) => {
+      if (!multi) {
+        // Plain click: select only this entity (deselect if it's the sole selection)
+        if (prev.length === 1 && prev[0] === id) return [];
+        return [id];
+      }
+      // Shift-click: add/remove from selection, cap at 2
       if (prev.includes(id)) return prev.filter((x) => x !== id);
       if (prev.length >= 2) return [prev[1]!, id];
       return [...prev, id];

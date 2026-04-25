@@ -22,7 +22,7 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string, multi: boolean) => void;
   onDelete: (id: string) => void;
 };
 
