@@ -1,0 +1,98 @@
+{
+  "asset": { "version": "2.0", "generator": "ForgeHub test data" },
+  "scene": 0,
+  "scenes": [{ "name": "Keyboard Assembly", "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "Keyboard",
+      "children": [1, 2, 3, 4],
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "TopCase",
+      "mesh": 0,
+      "translation": [0, 8.0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "BottomCase",
+      "mesh": 1,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "KeyMatrix",
+      "children": [5, 6, 7, 8, 9],
+      "translation": [0, 6.0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "PCB",
+      "children": [10, 11, 12],
+      "translation": [0, 2.0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "KeyRow1",
+      "mesh": 2,
+      "translation": [0, 0, -60.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "KeyRow2",
+      "mesh": 3,
+      "translation": [0, 0, -40.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "KeyRow3",
+      "mesh": 4,
+      "translation": [0, 0, -20.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "KeyRow4",
+      "mesh": 5,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "SpacebarRow",
+      "mesh": 6,
+      "translation": [0, 0, 20.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "MainChip",
+      "mesh": 7,
+      "translation": [-50.0, 0, 20.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "USBController",
+      "mesh": 8,
+      "translation": [0, 0, -70.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "USBPort",
+      "mesh": 9,
+      "translation": [0, 0, -75.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
+  ]
+}
