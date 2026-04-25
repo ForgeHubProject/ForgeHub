@@ -7,6 +7,7 @@ import {
   ingestSnapshot,
 } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
+import { Viewport } from "../components/Viewport";
 import type { Constraint, Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
 
 type Props = {
@@ -248,17 +249,22 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
           {error && <p style={styles.errorMsg}>{error}</p>}
         </aside>
 
-        {/* MAIN AREA — placeholder for 3D viewer */}
+        {/* MAIN AREA — 3D viewer */}
         <main style={styles.viewport}>
-          <div style={styles.viewportPlaceholder}>
-            <span style={styles.viewportIcon}>⬡</span>
-            <p style={styles.viewportText}>3D Viewport</p>
-            <p style={styles.viewportSub}>
-              {activeSnapshot
-                ? `${activeSnapshot.entities.length} entities loaded — viewer coming soon`
-                : "Select a snapshot to load its module tree"}
-            </p>
-          </div>
+          {activeSnapshot ? (
+            <Viewport
+              entities={activeSnapshot.entities}
+              constraints={activeSnapshot.constraints}
+              selectedIds={selectedIds}
+              onSelect={toggleSelect}
+            />
+          ) : (
+            <div style={styles.viewportPlaceholder}>
+              <span style={styles.viewportIcon}>⬡</span>
+              <p style={styles.viewportText}>3D Viewport</p>
+              <p style={styles.viewportSub}>Select a snapshot to view its assembly</p>
+            </div>
+          )}
         </main>
       </div>
     </div>
@@ -342,8 +348,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0 },
   viewport: {
-    flex: 1, display: "flex", alignItems: "center",
-    justifyContent: "center", backgroundColor: "#f9fafb",
+    flex: 1, overflow: "hidden", position: "relative",
   },
   viewportPlaceholder: { textAlign: "center", color: "#9ca3af" },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },
