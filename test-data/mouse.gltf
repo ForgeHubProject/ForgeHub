@@ -1,0 +1,126 @@
+{
+  "asset": { "version": "2.0", "generator": "ForgeHub test data" },
+  "scene": 0,
+  "scenes": [{ "name": "Mouse Assembly", "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "Mouse",
+      "children": [1, 5, 9, 13],
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "LeftButton",
+      "children": [2, 3, 4],
+      "translation": [-22.0, 8.0, 30.0],
+      "rotation": [0, 0, 0.052, 0.999],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Shell",
+      "mesh": 0,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Spring",
+      "mesh": 1,
+      "translation": [0, -4.0, -5.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "ClickMechanism",
+      "mesh": 2,
+      "translation": [0, -3.0, 2.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "RightButton",
+      "children": [6, 7, 8],
+      "translation": [22.0, 8.0, 30.0],
+      "rotation": [0, 0, -0.052, 0.999],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Shell",
+      "mesh": 3,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Spring",
+      "mesh": 4,
+      "translation": [0, -4.0, -5.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "ClickMechanism",
+      "mesh": 5,
+      "translation": [0, -3.0, 2.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "ScrollWheel",
+      "children": [10, 11, 12],
+      "translation": [0, 12.0, 20.0],
+      "rotation": [0.707, 0, 0, 0.707],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "RubberCoating",
+      "mesh": 6,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Encoder",
+      "mesh": 7,
+      "translation": [0, 0, -6.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Axle",
+      "mesh": 8,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "CircuitBoard",
+      "children": [14, 15, 16],
+      "translation": [0, -8.0, -10.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "MCU",
+      "mesh": 9,
+      "translation": [-12.0, 0, 5.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "OpticalSensor",
+      "mesh": 10,
+      "translation": [0, 0, -15.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "USBConnector",
+      "mesh": 11,
+      "translation": [0, 0, 35.0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
+  ]
+}
