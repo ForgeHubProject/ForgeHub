@@ -10,7 +10,7 @@ async function req<T>(
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
     headers: {
-      "Content-Type": "application/json",
+      ...(rest.body != null ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(rest.headers ?? {}),
     },
