@@ -80,8 +80,11 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  function toggleSelect(id: string) {
+  function toggleSelect(id: string, additive: boolean) {
     setSelectedIds((prev) => {
+      if (!additive) {
+        return [id];
+      }
       if (prev.includes(id)) return prev.filter((x) => x !== id);
       if (prev.length >= 2) return [prev[1]!, id];
       return [...prev, id];
@@ -125,31 +128,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     const entityId = selectedIds[0]!;
     setError(null);
     try {
-      const result = await moveEntityPosition(token, handle, repoName, activeSnapshot.id, entityId, delta);
-      const movedSet = new Set(result.movedEntityIds);
-      setActiveSnapshot((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          entities: prev.entities.map((e) => {
-            if (!movedSet.has(e.id)) return e;
-            const currentPos = e.transform?.position ?? [0, 0, 0];
-            const nextPos: [number, number, number] = [
-              currentPos[0] + delta[0],
-              currentPos[1] + delta[1],
-              currentPos[2] + delta[2],
-            ];
-            return {
-              ...e,
-              transform: {
-                position: nextPos,
-                rotationEulerDeg: e.transform?.rotationEulerDeg ?? [0, 0, 0],
-                scale: e.transform?.scale ?? [1, 1, 1],
-              },
-            };
-          }),
-        };
-      });
+      await moveEntityPosition(token, handle, repoName, activeSnapshot.id, entityId, delta);
+      const refreshed = await getSnapshot(token, handle, repoName, activeSnapshot.id);
+      setActiveSnapshot(refreshed);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to move entity");
     }

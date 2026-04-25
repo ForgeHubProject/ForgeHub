@@ -124,7 +124,7 @@ function EntityMesh({
 }: {
   node: VNode;
   isSelected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, additive: boolean) => void;
 }) {
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected ? "#f59e0b" : baseColor;
@@ -136,7 +136,7 @@ function EntityMesh({
     : PartModel;
 
   return (
-    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}>
+    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id, e.shiftKey); }}>
       <Model color={color} size={size} />
 
       {/* selection ring */}
@@ -184,7 +184,7 @@ function SceneNode({
 }: {
   node: VNode;
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string, additive: boolean) => void;
 }) {
   const p = (node.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (node.transform ? node.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
@@ -208,7 +208,7 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string, additive: boolean) => void;
 };
 
 export function Viewport({ entities, selectedIds, onSelect }: Props) {
