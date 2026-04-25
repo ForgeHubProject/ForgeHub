@@ -7,6 +7,7 @@ import {
   getSnapshot,
   getSnapshots,
   ingestSnapshot,
+  moveEntityPosition,
 } from "../api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModuleTree } from "../components/ModuleTree";
@@ -26,6 +27,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [posFixed, setPosFixed] = useState(true);
   const [rotFixed, setRotFixed] = useState(true);
+  const [moveStep, setMoveStep] = useState(1);
   const [loadingSnap, setLoadingSnap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -115,6 +117,41 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to remove constraint");
+    }
+  }
+
+  async function moveSelected(delta: [number, number, number]) {
+    if (!activeSnapshot || selectedIds.length !== 1) return;
+    const entityId = selectedIds[0]!;
+    setError(null);
+    try {
+      const result = await moveEntityPosition(token, handle, repoName, activeSnapshot.id, entityId, delta);
+      const movedSet = new Set(result.movedEntityIds);
+      setActiveSnapshot((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          entities: prev.entities.map((e) => {
+            if (!movedSet.has(e.id)) return e;
+            const currentPos = e.transform?.position ?? [0, 0, 0];
+            const nextPos: [number, number, number] = [
+              currentPos[0] + delta[0],
+              currentPos[1] + delta[1],
+              currentPos[2] + delta[2],
+            ];
+            return {
+              ...e,
+              transform: {
+                position: nextPos,
+                rotationEulerDeg: e.transform?.rotationEulerDeg ?? [0, 0, 0],
+                scale: e.transform?.scale ?? [1, 1, 1],
+              },
+            };
+          }),
+        };
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to move entity");
     }
   }
 
@@ -390,6 +427,39 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             </div>
           )}
         </main>
+
+        {/* RIGHT PANEL */}
+        <aside style={styles.rightPanel}>
+          {selectedIds.length === 1 && activeSnapshot ? (
+            <div style={styles.constraintPanel}>
+              <div style={styles.sideSectionHeader}>Move selected</div>
+              <p style={styles.constraintPair}>
+                <b>{entityById(selectedIds[0]!)?.name ?? "?"}</b>
+              </p>
+              <label style={styles.checkRow}>
+                Step
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={moveStep}
+                  onChange={(e) => setMoveStep(Math.max(0.1, Number(e.target.value) || 1))}
+                  style={styles.stepInput}
+                />
+              </label>
+              <div style={styles.moveGrid}>
+                <button onClick={() => moveSelected([moveStep, 0, 0])} style={styles.moveBtn}>+X</button>
+                <button onClick={() => moveSelected([-moveStep, 0, 0])} style={styles.moveBtn}>-X</button>
+                <button onClick={() => moveSelected([0, moveStep, 0])} style={styles.moveBtn}>+Y</button>
+                <button onClick={() => moveSelected([0, -moveStep, 0])} style={styles.moveBtn}>-Y</button>
+                <button onClick={() => moveSelected([0, 0, moveStep])} style={styles.moveBtn}>+Z</button>
+                <button onClick={() => moveSelected([0, 0, -moveStep])} style={styles.moveBtn}>-Z</button>
+              </div>
+            </div>
+          ) : (
+            <div style={styles.rightPanelPlaceholder}>Select one entity to move it</div>
+          )}
+        </aside>
       </div>
 
       {confirmDialog && (
@@ -470,6 +540,30 @@ const styles: Record<string, React.CSSProperties> = {
   },
   constraintPair: { fontSize: 12, color: "#374151", margin: "4px 0 8px" },
   checkRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", marginBottom: 4, cursor: "pointer" },
+  stepInput: {
+    width: 70,
+    marginLeft: "auto",
+    padding: "3px 6px",
+    fontSize: 12,
+    border: "1px solid #d1d5db",
+    borderRadius: 4,
+  },
+  moveGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 6,
+    marginTop: 8,
+  },
+  moveBtn: {
+    padding: "6px 0",
+    fontSize: 12,
+    fontWeight: 600,
+    backgroundColor: "#fff",
+    color: "#374151",
+    border: "1px solid #d1d5db",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
   fixBtn: {
     flex: 1, padding: "6px 0", fontSize: 13, fontWeight: 600,
     backgroundColor: "#111827", color: "#fff",
@@ -492,6 +586,18 @@ const styles: Record<string, React.CSSProperties> = {
   errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0 },
   viewport: {
     flex: 1, overflow: "hidden", position: "relative",
+  },
+  rightPanel: {
+    width: 220,
+    borderLeft: "1px solid #e5e7eb",
+    backgroundColor: "#fff",
+    overflowY: "auto",
+    flexShrink: 0,
+  },
+  rightPanelPlaceholder: {
+    fontSize: 12,
+    color: "#9ca3af",
+    padding: "12px",
   },
   viewportPlaceholder: { textAlign: "center", color: "#9ca3af" },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },

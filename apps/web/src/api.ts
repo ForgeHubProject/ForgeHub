@@ -143,3 +143,18 @@ export async function deleteConstraint(
     token,
   });
 }
+
+export async function moveEntityPosition(
+  token: string,
+  handle: string,
+  repoName: string,
+  snapshotId: string,
+  entityId: string,
+  delta: [number, number, number],
+): Promise<{ movedEntityIds: string[]; delta: [number, number, number] }> {
+  return req(`/repos/${handle}/${repoName}/snapshots/${snapshotId}/entities/${entityId}/position`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ delta }),
+  });
+}
