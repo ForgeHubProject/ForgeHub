@@ -1,14 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  createConstraint,
-  deleteEntity,
-  deleteSnapshot,
   getSnapshot,
   getSnapshots,
-  ingestSnapshot,
-  moveEntityPosition,
 } from "../api";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
@@ -24,20 +18,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
   const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [posFixed, setPosFixed] = useState(true);
-  const [rotFixed, setRotFixed] = useState(true);
-  const [moveStep, setMoveStep] = useState(1);
   const [loadingSnap, setLoadingSnap] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{
-    title: string;
-    message: string;
-    warning?: string;
-    confirmLabel?: string;
-    onConfirm: () => void;
-  } | null>(null);
 
   const handle = repo.ownerHandle ?? user.handle;
   const repoName = repo.name;
@@ -59,23 +41,6 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       setError(e instanceof Error ? e.message : "Failed to load snapshot");
     } finally {
       setLoadingSnap(false);
-    }
-  }
-
-  async function uploadGltf(file: File) {
-    setUploading(true);
-    setError(null);
-    try {
-      const text = await file.text();
-      const gltf = JSON.parse(text) as unknown;
-      const snap = await ingestSnapshot(token, handle, repoName, gltf, undefined, file.name);
-      setSnapshots((prev) => [snap, ...prev]);
-      setActiveSnapshot(snap);
-      setSelectedIds([]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setUploading(false);
     }
   }
 
@@ -106,64 +71,6 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     });
   }
 
-  async function fixSelected() {
-    if (!activeSnapshot || selectedIds.length < 2) return;
-    setError(null);
-    try {
-      const pairCalls: Array<Promise<unknown>> = [];
-      for (let i = 0; i < selectedIds.length; i++) {
-        for (let j = i + 1; j < selectedIds.length; j++) {
-          pairCalls.push(
-            createConstraint(
-              token,
-              handle,
-              repoName,
-              activeSnapshot.id,
-              selectedIds[i]!,
-              selectedIds[j]!,
-              posFixed,
-              rotFixed,
-            ),
-          );
-        }
-      }
-
-      const settled = await Promise.allSettled(pairCalls);
-      const failures = settled.filter((s) => s.status === "rejected") as PromiseRejectedResult[];
-      const nonDuplicateFailures = failures.filter((f) => {
-        const msg = f.reason instanceof Error ? f.reason.message : String(f.reason);
-        return !msg.toLowerCase().includes("already exists");
-      });
-      if (nonDuplicateFailures.length > 0) {
-        throw nonDuplicateFailures[0]!.reason;
-      }
-
-      const refreshed = await getSnapshot(
-        token,
-        handle,
-        repoName,
-        activeSnapshot.id,
-      );
-      setActiveSnapshot(refreshed);
-      setSelectedIds([]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create constraint");
-    }
-  }
-
-  async function moveSelected(delta: [number, number, number]) {
-    if (!activeSnapshot || selectedIds.length !== 1) return;
-    const entityId = selectedIds[0]!;
-    setError(null);
-    try {
-      await moveEntityPosition(token, handle, repoName, activeSnapshot.id, entityId, delta);
-      const refreshed = await getSnapshot(token, handle, repoName, activeSnapshot.id);
-      setActiveSnapshot(refreshed);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to move entity");
-    }
-  }
-
   const entityById = (id: string): Entity | undefined =>
     activeSnapshot?.entities.find((e) => e.id === id);
 
@@ -184,91 +91,6 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     return [...ids];
   }
 
-  function requestDeleteEntity(dbId: string) {
-    if (!activeSnapshot) return;
-    const entity = entityById(dbId);
-    if (!entity) return;
-    const isRoot = !entity.parentEntityId;
-
-    if (isRoot) {
-      setConfirmDialog({
-        title: "Delete snapshot",
-        message: `"${entity.name}" is the root of this snapshot. Deleting it will remove the entire snapshot from the repository.`,
-        warning: activeSnapshot.constraints.length > 0
-          ? `This snapshot has ${activeSnapshot.constraints.length} constraint(s) that will also be deleted.`
-          : undefined,
-        confirmLabel: "Delete snapshot",
-        onConfirm: async () => {
-          setConfirmDialog(null);
-          try {
-            await deleteSnapshot(token, handle, repoName, activeSnapshot.id);
-            setSnapshots((prev) => prev.filter((s) => s.id !== activeSnapshot.id));
-            setActiveSnapshot(null);
-            setSelectedIds([]);
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to delete snapshot");
-          }
-        },
-      });
-    } else {
-      const subtreeIds = new Set(collectSubtreeIds(dbId, activeSnapshot.entities));
-      const affectedConstraints = activeSnapshot.constraints.filter(
-        (c) => subtreeIds.has(c.entityAId) || subtreeIds.has(c.entityBId),
-      );
-      const subtreeSize = subtreeIds.size;
-
-      setConfirmDialog({
-        title: `Delete "${entity.name}"`,
-        message: subtreeSize > 1
-          ? `This will delete "${entity.name}" and its ${subtreeSize - 1} descendant(s).`
-          : `This will delete "${entity.name}".`,
-        warning: affectedConstraints.length > 0
-          ? `${affectedConstraints.length} constraint(s) referencing this subtree will also be removed.`
-          : undefined,
-        confirmLabel: "Delete",
-        onConfirm: async () => {
-          setConfirmDialog(null);
-          try {
-            const result = await deleteEntity(token, handle, repoName, activeSnapshot.id, dbId);
-            if (result.snapshotDeleted) {
-              setSnapshots((prev) => prev.filter((s) => s.id !== activeSnapshot.id));
-              setActiveSnapshot(null);
-              setSelectedIds([]);
-            } else {
-              const snap = await getSnapshot(token, handle, repoName, activeSnapshot.id);
-              setActiveSnapshot(snap);
-              setSelectedIds((prev) => prev.filter((id) => !subtreeIds.has(id)));
-            }
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to delete entity");
-          }
-        },
-      });
-    }
-  }
-
-  function requestDeleteSnapshot(snapshotId: string) {
-    const snap = snapshots.find((s) => s.id === snapshotId);
-    setConfirmDialog({
-      title: "Delete snapshot",
-      message: `Delete snapshot "${snap?.label ?? snap?.sourceFile ?? snapshotId}"? This cannot be undone.`,
-      confirmLabel: "Delete snapshot",
-      onConfirm: async () => {
-        setConfirmDialog(null);
-        try {
-          await deleteSnapshot(token, handle, repoName, snapshotId);
-          setSnapshots((prev) => prev.filter((s) => s.id !== snapshotId));
-          if (activeSnapshot?.id === snapshotId) {
-            setActiveSnapshot(null);
-            setSelectedIds([]);
-          }
-        } catch (e) {
-          setError(e instanceof Error ? e.message : "Failed to delete snapshot");
-        }
-      },
-    });
-  }
-
   return (
     <div style={styles.shell}>
       {/* top bar */}
@@ -285,28 +107,10 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
           <div style={styles.sideSection}>
             <div style={styles.sideSectionHeader}>
               <span>Snapshots</span>
-              <button
-                onClick={() => fileRef.current?.click()}
-                style={styles.uploadBtn}
-                disabled={uploading}
-                title="Upload .gltf file"
-              >
-                {uploading ? "..." : "+ Upload"}
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".gltf,application/json"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) uploadGltf(f);
-                  e.target.value = "";
-                }}
-              />
+              <span style={styles.readonlyBadge}>Read-only</span>
             </div>
             {snapshots.length === 0 && (
-              <p style={styles.muted}>No snapshots yet. Upload a .gltf file.</p>
+              <p style={styles.muted}>No snapshots available.</p>
             )}
             {snapshots.map((s) => (
               <div
@@ -324,13 +128,6 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                   <span style={styles.snapDate}>
                     {new Date(s.createdAt).toLocaleDateString()}
                   </span>
-                </button>
-                <button
-                  title="Delete snapshot"
-                  onClick={() => requestDeleteSnapshot(s.id)}
-                  style={styles.snapDeleteBtn}
-                >
-                  ✕
                 </button>
               </div>
             ))}
@@ -352,43 +149,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                     constraints={activeSnapshot.constraints}
                     selectedIds={selectedIds}
                     onSelect={toggleSelect}
-                    onDelete={requestDeleteEntity}
                   />
                 </div>
               )}
-            </div>
-          )}
-
-          {/* constraint panel — shown when 2+ entities selected */}
-          {selectedIds.length >= 2 && activeSnapshot && (
-            <div style={styles.constraintPanel}>
-              <div style={styles.sideSectionHeader}>Fix selected</div>
-              <p style={styles.constraintPair}>
-                <b>{selectedIds.length} modules selected</b>
-              </p>
-              <p style={styles.fixHint}>Creates pairwise fixes across the selected set.</p>
-              <label style={styles.checkRow}>
-                <input
-                  type="checkbox"
-                  checked={posFixed}
-                  onChange={(e) => setPosFixed(e.target.checked)}
-                />
-                Position fixed
-              </label>
-              <label style={styles.checkRow}>
-                <input
-                  type="checkbox"
-                  checked={rotFixed}
-                  onChange={(e) => setRotFixed(e.target.checked)}
-                />
-                Rotation fixed
-              </label>
-              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <button onClick={fixSelected} style={styles.fixBtn}>
-                  Fix {selectedIds.length} modules
-                </button>
-                <button onClick={() => setSelectedIds([])} style={styles.cancelBtn}>Cancel</button>
-              </div>
             </div>
           )}
 
@@ -415,50 +178,29 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
 
         {/* RIGHT PANEL */}
         <aside style={styles.rightPanel}>
-          {selectedIds.length === 1 && activeSnapshot ? (
-            <div style={styles.constraintPanel}>
-              <div style={styles.sideSectionHeader}>Move selected</div>
-              <p style={styles.constraintPair}>
-                <b>{entityById(selectedIds[0]!)?.name ?? "?"}</b>
+          {selectedIds.length > 0 && activeSnapshot ? (
+            <div style={styles.inspectPanel}>
+              <div style={styles.sideSectionHeader}>Inspect</div>
+              <p style={styles.inspectTitle}>
+                <b>{selectedIds.length === 1 ? entityById(selectedIds[0]!)?.name ?? "Unknown" : `${selectedIds.length} selected`}</b>
               </p>
-              <label style={styles.checkRow}>
-                Step
-                <input
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  value={moveStep}
-                  onChange={(e) => setMoveStep(Math.max(0.1, Number(e.target.value) || 1))}
-                  style={styles.stepInput}
-                />
-              </label>
-              <div style={styles.moveGrid}>
-                <button onClick={() => moveSelected([moveStep, 0, 0])} style={styles.moveBtn}>+X</button>
-                <button onClick={() => moveSelected([-moveStep, 0, 0])} style={styles.moveBtn}>-X</button>
-                <button onClick={() => moveSelected([0, moveStep, 0])} style={styles.moveBtn}>+Y</button>
-                <button onClick={() => moveSelected([0, -moveStep, 0])} style={styles.moveBtn}>-Y</button>
-                <button onClick={() => moveSelected([0, 0, moveStep])} style={styles.moveBtn}>+Z</button>
-                <button onClick={() => moveSelected([0, 0, -moveStep])} style={styles.moveBtn}>-Z</button>
-              </div>
+              <p style={styles.inspectText}>
+                This viewer is read-only. Editing tools are disabled.
+              </p>
+              {selectedIds.length === 1 && (
+                <div style={styles.inspectMeta}>
+                  <div><span style={styles.metaLabel}>Kind:</span> {entityById(selectedIds[0]!)?.kind ?? "-"}</div>
+                  <div><span style={styles.metaLabel}>Path:</span> {entityById(selectedIds[0]!)?.path ?? "-"}</div>
+                </div>
+              )}
             </div>
           ) : (
             <div style={styles.rightPanelPlaceholder}>
-              Select one module to move it. Hold Shift for multi-select.
+              Select module(s) to inspect details.
             </div>
           )}
         </aside>
       </div>
-
-      {confirmDialog && (
-        <ConfirmDialog
-          title={confirmDialog.title}
-          message={confirmDialog.message}
-          warning={confirmDialog.warning}
-          confirmLabel={confirmDialog.confirmLabel}
-          onConfirm={confirmDialog.onConfirm}
-          onCancel={() => setConfirmDialog(null)}
-        />
-      )}
     </div>
   );
 }
@@ -491,10 +233,13 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 12px 6px", fontSize: 11, fontWeight: 600,
     color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em",
   },
-  uploadBtn: {
-    fontSize: 11, color: "#3b82f6", background: "none",
-    border: "1px solid #bfdbfe", borderRadius: 4,
-    padding: "2px 8px", cursor: "pointer",
+  readonlyBadge: {
+    fontSize: 10,
+    color: "#64748b",
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "1px 8px",
+    backgroundColor: "#f8fafc",
   },
   muted: { fontSize: 12, color: "#9ca3af", padding: "0 12px" },
   snapItem: {
@@ -505,11 +250,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex", flexDirection: "column", alignItems: "flex-start",
     flex: 1, padding: "6px 12px", background: "none",
     border: "none", cursor: "pointer", textAlign: "left",
-  },
-  snapDeleteBtn: {
-    fontSize: 11, color: "#9ca3af", background: "none",
-    border: "none", cursor: "pointer", padding: "4px 8px",
-    flexShrink: 0,
   },
   snapFile: { fontSize: 13, color: "#111827", fontWeight: 500 },
   snapDate: { fontSize: 11, color: "#9ca3af", marginTop: 1 },
@@ -571,6 +311,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9ca3af",
     padding: "12px",
   },
+  inspectPanel: {
+    borderBottom: "1px solid #f3f4f6",
+    padding: "10px 12px",
+    backgroundColor: "#f8fafc",
+  },
+  inspectTitle: { fontSize: 12, color: "#111827", margin: "4px 0 8px" },
+  inspectText: { fontSize: 12, color: "#475569", margin: "0 0 8px" },
+  inspectMeta: { fontSize: 12, color: "#334155", display: "grid", gap: 4 },
+  metaLabel: { color: "#64748b", fontWeight: 600 },
   viewportPlaceholder: { textAlign: "center", color: "#9ca3af" },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },
   viewportText: { fontSize: 18, fontWeight: 600, color: "#6b7280", margin: 0 },

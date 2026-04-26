@@ -6,7 +6,7 @@ type Props = {
   constraints: Constraint[];
   selectedIds: string[];
   onSelect: (id: string, additive: boolean) => void;
-  onDelete: (id: string) => void;
+  onDelete?: (id: string) => void;
   depth?: number;
 };
 
@@ -72,7 +72,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, onDelete, d
         {rotFixed && <span title="Rotation fixed" style={badgeStyle("#8b5cf6")}>R</span>}
 
         {/* delete button — appears on hover */}
-        {hovered && (
+        {hovered && onDelete && (
           <button
             title={isRoot ? "Delete snapshot" : "Delete entity"}
             onClick={(e) => { e.stopPropagation(); onDelete(node.id); }}

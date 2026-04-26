@@ -23,7 +23,7 @@ type Props = {
   constraints: Constraint[];
   selectedIds: string[];
   onSelect: (id: string, additive: boolean) => void;
-  onDelete: (id: string) => void;
+  onDelete?: (id: string) => void;
 };
 
 export function ModuleTree({ entities, constraints, selectedIds, onSelect, onDelete }: Props) {
