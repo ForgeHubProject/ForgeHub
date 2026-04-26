@@ -25,18 +25,44 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const repoName = repo.name;
 
   useEffect(() => {
+    let cancelled = false;
+    setLoadingSnap(true);
+    setError(null);
+
     getSnapshots(token, handle, repoName)
-      .then((r) => setSnapshots(r.snapshots))
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed"));
+      .then(async (r) => {
+        if (cancelled) return;
+        setSnapshots(r.snapshots);
+        const latest = r.snapshots[0];
+        if (!latest) {
+          setActiveSnapshot(null);
+          return;
+        }
+        const snap = await getSnapshot(token, handle, repoName, latest.id);
+        if (!cancelled) {
+          setActiveSnapshot(snap);
+          setSelectedIds([]);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSnap(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [token, handle, repoName]);
 
   async function loadSnapshot(id: string) {
     setLoadingSnap(true);
-    setSelectedIds([]);
     setError(null);
     try {
       const snap = await getSnapshot(token, handle, repoName, id);
       setActiveSnapshot(snap);
+      setSelectedIds([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load snapshot");
     } finally {
@@ -44,66 +70,26 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  function toggleSelect(id: string, additive: boolean) {
-    if (!activeSnapshot) {
-      setSelectedIds([id]);
-      return;
-    }
-
-    const subtreeIds = collectSubtreeIds(id, activeSnapshot.entities);
-    const subtreeSet = new Set(subtreeIds);
-
-    setSelectedIds((prev) => {
-      if (!additive) {
-        return subtreeIds;
-      }
-
-      const hasAll = subtreeIds.every((sid) => prev.includes(sid));
-      if (hasAll) {
-        return prev.filter((sid) => !subtreeSet.has(sid));
-      }
-
-      const merged = new Set(prev);
-      for (const sid of subtreeIds) {
-        merged.add(sid);
-      }
-      return [...merged];
-    });
+  function toggleSelect(id: string) {
+    setSelectedIds([id]);
   }
 
-  const entityById = (id: string): Entity | undefined =>
-    activeSnapshot?.entities.find((e) => e.id === id);
-
-  function collectSubtreeIds(rootDbId: string, entities: Entity[]): string[] {
-    const root = entities.find((e) => e.id === rootDbId);
-    if (!root) return [rootDbId];
-    const ids = new Set<string>([rootDbId]);
-    const queue = [root.entityId];
-    while (queue.length) {
-      const parentEntityId = queue.shift()!;
-      for (const e of entities) {
-        if (e.parentEntityId === parentEntityId && !ids.has(e.id)) {
-          ids.add(e.id);
-          queue.push(e.entityId);
-        }
-      }
-    }
-    return [...ids];
-  }
+  const selectedEntity =
+    selectedIds.length === 1
+      ? activeSnapshot?.entities.find((e) => e.id === selectedIds[0])
+      : null;
 
   return (
     <div style={styles.shell}>
-      {/* top bar */}
       <header style={styles.topbar}>
         <button onClick={onBack} style={styles.backBtn}>← Repos</button>
         <span style={styles.repoTitle}>{repo.fullName ?? repo.name}</span>
         <span style={styles.visibility}>{repo.visibility}</span>
+        <span style={styles.statePill}>View mode</span>
       </header>
 
       <div style={styles.body}>
-        {/* LEFT PANEL */}
         <aside style={styles.sidebar}>
-          {/* snapshot selector */}
           <div style={styles.sideSection}>
             <div style={styles.sideSectionHeader}>
               <span>Snapshots</span>
@@ -133,76 +119,97 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             ))}
           </div>
 
-          {/* module tree */}
           {activeSnapshot && (
             <div style={{ ...styles.sideSection, flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               <div style={styles.sideSectionHeader}>
                 <span>Modules</span>
                 <span style={styles.muted}>{activeSnapshot.entities.length} entities</span>
               </div>
-              {loadingSnap ? (
-                <p style={styles.muted}>Loading...</p>
-              ) : (
-                <div style={{ overflowY: "auto", flex: 1 }}>
-                  <ModuleTree
-                    entities={activeSnapshot.entities}
-                    constraints={activeSnapshot.constraints}
-                    selectedIds={selectedIds}
-                    onSelect={toggleSelect}
-                  />
-                </div>
-              )}
+              <div style={{ overflowY: "auto", flex: 1 }}>
+                <ModuleTree
+                  entities={activeSnapshot.entities}
+                  constraints={activeSnapshot.constraints}
+                  selectedIds={selectedIds}
+                  onSelect={(id) => toggleSelect(id)}
+                />
+              </div>
             </div>
           )}
-
-          {error && <p style={styles.errorMsg}>{error}</p>}
         </aside>
 
-        {/* MAIN AREA — 3D viewer */}
         <main style={styles.viewport}>
-          {activeSnapshot ? (
+          {loadingSnap ? (
+            <div style={styles.viewportPlaceholder}>
+              <p style={styles.viewportText}>Loading model...</p>
+            </div>
+          ) : activeSnapshot ? (
             <Viewport
               entities={activeSnapshot.entities}
               constraints={activeSnapshot.constraints}
               selectedIds={selectedIds}
-              onSelect={toggleSelect}
+              onSelect={(id) => toggleSelect(id)}
             />
           ) : (
             <div style={styles.viewportPlaceholder}>
               <span style={styles.viewportIcon}>⬡</span>
-              <p style={styles.viewportText}>3D Viewport</p>
-              <p style={styles.viewportSub}>Select a snapshot to view its assembly</p>
+              <p style={styles.viewportText}>No model to display</p>
+              <p style={styles.viewportSub}>Upload/import snapshots from your pipeline, then open this repo.</p>
             </div>
           )}
         </main>
 
-        {/* RIGHT PANEL */}
         <aside style={styles.rightPanel}>
-          {selectedIds.length > 0 && activeSnapshot ? (
+          {selectedEntity ? (
             <div style={styles.inspectPanel}>
-              <div style={styles.sideSectionHeader}>Inspect</div>
-              <p style={styles.inspectTitle}>
-                <b>{selectedIds.length === 1 ? entityById(selectedIds[0]!)?.name ?? "Unknown" : `${selectedIds.length} selected`}</b>
-              </p>
-              <p style={styles.inspectText}>
-                This viewer is read-only. Editing tools are disabled.
-              </p>
-              {selectedIds.length === 1 && (
-                <div style={styles.inspectMeta}>
-                  <div><span style={styles.metaLabel}>Kind:</span> {entityById(selectedIds[0]!)?.kind ?? "-"}</div>
-                  <div><span style={styles.metaLabel}>Path:</span> {entityById(selectedIds[0]!)?.path ?? "-"}</div>
-                </div>
-              )}
+              <div style={styles.sideSectionHeader}>
+                <span>Parameters</span>
+              </div>
+              <p style={styles.paramTitle}>{selectedEntity.name}</p>
+              <div style={styles.paramList}>
+                {Object.entries(toParameterMap(selectedEntity)).map(([key, value]) => (
+                  <div key={key} style={styles.paramRow}>
+                    <span style={styles.paramKey}>{key}</span>
+                    <span style={styles.paramValue}>{stringifyParam(value)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
-            <div style={styles.rightPanelPlaceholder}>
-              Select module(s) to inspect details.
+            <div style={styles.rightPlaceholder}>
+              Click a module in the viewport or tree to inspect its parameters.
             </div>
           )}
         </aside>
       </div>
+      {error && <p style={styles.errorMsg}>{error}</p>}
     </div>
   );
+}
+
+function toParameterMap(entity: Entity): Record<string, unknown> {
+  return {
+    id: entity.id,
+    entityId: entity.entityId,
+    parentEntityId: entity.parentEntityId,
+    kind: entity.kind,
+    name: entity.name,
+    path: entity.path,
+    transform: entity.transform,
+    renderRef: entity.renderRef,
+    attributes: entity.attributes,
+  };
+}
+
+function stringifyParam(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -221,6 +228,15 @@ const styles: Record<string, React.CSSProperties> = {
   visibility: {
     fontSize: 11, color: "#6b7280", border: "1px solid #e5e7eb",
     borderRadius: 10, padding: "1px 8px",
+  },
+  statePill: {
+    marginLeft: "auto",
+    fontSize: 11,
+    color: "#475569",
+    border: "1px solid #cbd5e1",
+    borderRadius: 10,
+    padding: "1px 8px",
+    backgroundColor: "#f8fafc",
   },
   body: { display: "flex", flex: 1, overflow: "hidden" },
   sidebar: {
@@ -253,73 +269,59 @@ const styles: Record<string, React.CSSProperties> = {
   },
   snapFile: { fontSize: 13, color: "#111827", fontWeight: 500 },
   snapDate: { fontSize: 11, color: "#9ca3af", marginTop: 1 },
-  constraintPanel: {
-    borderBottom: "1px solid #f3f4f6",
-    padding: "10px 12px",
-    backgroundColor: "#fefce8",
-  },
-  constraintPair: { fontSize: 12, color: "#374151", margin: "4px 0 8px" },
-  fixHint: { fontSize: 11, color: "#6b7280", margin: "0 0 8px" },
-  checkRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", marginBottom: 4, cursor: "pointer" },
-  stepInput: {
-    width: 70,
-    marginLeft: "auto",
-    padding: "3px 6px",
-    fontSize: 12,
-    border: "1px solid #d1d5db",
-    borderRadius: 4,
-  },
-  moveGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 6,
-    marginTop: 8,
-  },
-  moveBtn: {
-    padding: "6px 0",
-    fontSize: 12,
-    fontWeight: 600,
-    backgroundColor: "#fff",
-    color: "#374151",
-    border: "1px solid #d1d5db",
-    borderRadius: 6,
-    cursor: "pointer",
-  },
-  fixBtn: {
-    flex: 1, padding: "6px 0", fontSize: 13, fontWeight: 600,
-    backgroundColor: "#111827", color: "#fff",
-    border: "none", borderRadius: 6, cursor: "pointer",
-  },
-  cancelBtn: {
-    flex: 1, padding: "6px 0", fontSize: 13,
-    backgroundColor: "transparent", color: "#6b7280",
-    border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer",
-  },
-  errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0 },
   viewport: {
     flex: 1, overflow: "hidden", position: "relative",
   },
   rightPanel: {
-    width: 220,
+    width: 320,
     borderLeft: "1px solid #e5e7eb",
     backgroundColor: "#fff",
     overflowY: "auto",
-    flexShrink: 0,
   },
-  rightPanelPlaceholder: {
+  inspectPanel: {
+    padding: "10px 12px",
+  },
+  rightPlaceholder: {
     fontSize: 12,
     color: "#9ca3af",
     padding: "12px",
   },
-  inspectPanel: {
-    borderBottom: "1px solid #f3f4f6",
-    padding: "10px 12px",
-    backgroundColor: "#f8fafc",
+  paramTitle: {
+    margin: "0 0 10px",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#111827",
   },
-  inspectTitle: { fontSize: 12, color: "#111827", margin: "4px 0 8px" },
-  inspectText: { fontSize: 12, color: "#475569", margin: "0 0 8px" },
-  inspectMeta: { fontSize: 12, color: "#334155", display: "grid", gap: 4 },
-  metaLabel: { color: "#64748b", fontWeight: 600 },
+  paramList: {
+    display: "grid",
+    gap: 8,
+  },
+  paramRow: {
+    display: "grid",
+    gap: 2,
+    paddingBottom: 6,
+    borderBottom: "1px solid #f1f5f9",
+  },
+  paramKey: {
+    fontSize: 11,
+    color: "#64748b",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  },
+  paramValue: {
+    fontSize: 12,
+    color: "#0f172a",
+    wordBreak: "break-word",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace",
+  },
+  errorMsg: {
+    fontSize: 12,
+    color: "#ef4444",
+    padding: "8px 12px",
+    margin: 0,
+    borderTop: "1px solid #fee2e2",
+    backgroundColor: "#fff1f2",
+  },
   viewportPlaceholder: { textAlign: "center", color: "#9ca3af" },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },
   viewportText: { fontSize: 18, fontWeight: 600, color: "#6b7280", margin: 0 },

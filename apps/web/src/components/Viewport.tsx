@@ -8,7 +8,7 @@ import {
   Html,
   OrbitControls,
 } from "@react-three/drei";
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import * as THREE from "three";
 import type { Constraint, Entity } from "../types";
 
@@ -118,6 +118,7 @@ function EntityMesh({
   isSelected: boolean;
   onSelect: (id: string, additive: boolean) => void;
 }) {
+  const [hovered, setHovered] = useState(false);
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected ? "#f59e0b" : baseColor;
   const size = KIND_SIZE[node.kind] ?? 4;
@@ -128,7 +129,11 @@ function EntityMesh({
     : PartModel;
 
   return (
-    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id, e.shiftKey); }}>
+    <group
+      onClick={(e) => { e.stopPropagation(); onSelect(node.id, e.shiftKey); }}
+      onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
+      onPointerOut={() => setHovered(false)}
+    >
       <Model color={color} size={size} />
 
       {/* selection ring */}
@@ -139,30 +144,32 @@ function EntityMesh({
         </mesh>
       )}
 
-      {/* floating label */}
-      <Html
-        position={[0, size * 0.55 + 1.5, 0]}
-        center
-        distanceFactor={60}
-        zIndexRange={[10, 0]}
-        style={{ pointerEvents: "none" }}
-      >
-        <div
-          style={{
-            background: isSelected ? "#f59e0b" : "rgba(255,255,255,0.92)",
-            color: isSelected ? "#fff" : "#1e293b",
-            padding: "2px 8px",
-            borderRadius: 4,
-            fontSize: 11,
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
-            border: `1px solid ${isSelected ? "#d97706" : "#e2e8f0"}`,
-          }}
+      {/* floating label on hover/selection only */}
+      {(isSelected || hovered) && (
+        <Html
+          position={[0, size * 0.55 + 1.5, 0]}
+          center
+          distanceFactor={60}
+          zIndexRange={[10, 0]}
+          style={{ pointerEvents: "none" }}
         >
-          {node.name}
-        </div>
-      </Html>
+          <div
+            style={{
+              background: isSelected ? "#f59e0b" : "rgba(255,255,255,0.92)",
+              color: isSelected ? "#fff" : "#1e293b",
+              padding: "2px 8px",
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+              border: `1px solid ${isSelected ? "#d97706" : "#e2e8f0"}`,
+            }}
+          >
+            {node.name}
+          </div>
+        </Html>
+      )}
     </group>
   );
 }

@@ -5,7 +5,7 @@ type Props = {
   node: TreeNodeType;
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string, additive: boolean) => void;
+  onSelect?: (id: string, additive: boolean) => void;
   onDelete?: (id: string) => void;
   depth?: number;
 };
@@ -33,7 +33,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, onDelete, d
   return (
     <div style={{ paddingLeft: depth === 0 ? 0 : 16 }}>
       <div
-        onClick={(e) => onSelect(node.id, e.shiftKey)}
+        onClick={(e) => onSelect?.(node.id, e.shiftKey)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -42,7 +42,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, onDelete, d
           gap: 6,
           padding: "3px 8px",
           borderRadius: 4,
-          cursor: "pointer",
+          cursor: onSelect ? "pointer" : "default",
           backgroundColor: isSelected ? "#dbeafe" : hovered ? "#f9fafb" : "transparent",
           userSelect: "none",
         }}
