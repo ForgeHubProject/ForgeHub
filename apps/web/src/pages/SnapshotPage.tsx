@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createConstraint,
-  deleteConstraint,
   deleteEntity,
   deleteSnapshot,
   getSnapshot,
@@ -12,7 +11,7 @@ import {
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
-import type { Constraint, Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
+import type { Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
 
 type Props = {
   token: string;
@@ -81,45 +80,74 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   }
 
   function toggleSelect(id: string, additive: boolean) {
+    if (!activeSnapshot) {
+      setSelectedIds([id]);
+      return;
+    }
+
+    const subtreeIds = collectSubtreeIds(id, activeSnapshot.entities);
+    const subtreeSet = new Set(subtreeIds);
+
     setSelectedIds((prev) => {
       if (!additive) {
-        return [id];
+        return subtreeIds;
       }
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 2) return [prev[1]!, id];
-      return [...prev, id];
+
+      const hasAll = subtreeIds.every((sid) => prev.includes(sid));
+      if (hasAll) {
+        return prev.filter((sid) => !subtreeSet.has(sid));
+      }
+
+      const merged = new Set(prev);
+      for (const sid of subtreeIds) {
+        merged.add(sid);
+      }
+      return [...merged];
     });
   }
 
   async function fixSelected() {
-    if (!activeSnapshot || selectedIds.length !== 2) return;
+    if (!activeSnapshot || selectedIds.length < 2) return;
     setError(null);
     try {
-      const c = await createConstraint(
-        token, handle, repoName, activeSnapshot.id,
-        selectedIds[0]!, selectedIds[1]!, posFixed, rotFixed,
+      const pairCalls: Array<Promise<unknown>> = [];
+      for (let i = 0; i < selectedIds.length; i++) {
+        for (let j = i + 1; j < selectedIds.length; j++) {
+          pairCalls.push(
+            createConstraint(
+              token,
+              handle,
+              repoName,
+              activeSnapshot.id,
+              selectedIds[i]!,
+              selectedIds[j]!,
+              posFixed,
+              rotFixed,
+            ),
+          );
+        }
+      }
+
+      const settled = await Promise.allSettled(pairCalls);
+      const failures = settled.filter((s) => s.status === "rejected") as PromiseRejectedResult[];
+      const nonDuplicateFailures = failures.filter((f) => {
+        const msg = f.reason instanceof Error ? f.reason.message : String(f.reason);
+        return !msg.toLowerCase().includes("already exists");
+      });
+      if (nonDuplicateFailures.length > 0) {
+        throw nonDuplicateFailures[0]!.reason;
+      }
+
+      const refreshed = await getSnapshot(
+        token,
+        handle,
+        repoName,
+        activeSnapshot.id,
       );
-      setActiveSnapshot((prev) =>
-        prev ? { ...prev, constraints: [...prev.constraints, c] } : prev,
-      );
+      setActiveSnapshot(refreshed);
       setSelectedIds([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create constraint");
-    }
-  }
-
-  async function unfix(constraintId: string) {
-    if (!activeSnapshot) return;
-    setError(null);
-    try {
-      await deleteConstraint(token, handle, repoName, activeSnapshot.id, constraintId);
-      setActiveSnapshot((prev) =>
-        prev
-          ? { ...prev, constraints: prev.constraints.filter((c) => c.id !== constraintId) }
-          : prev,
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove constraint");
     }
   }
 
@@ -331,15 +359,14 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             </div>
           )}
 
-          {/* constraint panel — shown when 2 entities selected */}
-          {selectedIds.length === 2 && activeSnapshot && (
+          {/* constraint panel — shown when 2+ entities selected */}
+          {selectedIds.length >= 2 && activeSnapshot && (
             <div style={styles.constraintPanel}>
               <div style={styles.sideSectionHeader}>Fix selected</div>
               <p style={styles.constraintPair}>
-                <b>{entityById(selectedIds[0]!)?.name ?? "?"}</b>
-                {" ↔ "}
-                <b>{entityById(selectedIds[1]!)?.name ?? "?"}</b>
+                <b>{selectedIds.length} modules selected</b>
               </p>
+              <p style={styles.fixHint}>Creates pairwise fixes across the selected set.</p>
               <label style={styles.checkRow}>
                 <input
                   type="checkbox"
@@ -357,34 +384,11 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                 Rotation fixed
               </label>
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <button onClick={fixSelected} style={styles.fixBtn}>Fix</button>
+                <button onClick={fixSelected} style={styles.fixBtn}>
+                  Fix {selectedIds.length} modules
+                </button>
                 <button onClick={() => setSelectedIds([])} style={styles.cancelBtn}>Cancel</button>
               </div>
-            </div>
-          )}
-
-          {/* constraints list */}
-          {activeSnapshot && activeSnapshot.constraints.length > 0 && (
-            <div style={styles.sideSection}>
-              <div style={styles.sideSectionHeader}>Constraints</div>
-              {activeSnapshot.constraints.map((c: Constraint) => {
-                const a = entityById(c.entityAId);
-                const b = entityById(c.entityBId);
-                return (
-                  <div key={c.id} style={styles.constraintRow}>
-                    <div style={styles.constraintNames}>
-                      <span>{a?.name ?? "?"}</span>
-                      <span style={{ color: "#9ca3af" }}>↔</span>
-                      <span>{b?.name ?? "?"}</span>
-                    </div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      {c.positionFixed && <span style={badge("#3b82f6")}>P</span>}
-                      {c.rotationFixed && <span style={badge("#8b5cf6")}>R</span>}
-                      <button onClick={() => unfix(c.id)} style={styles.unfixBtn} title="Remove constraint">✕</button>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           )}
 
@@ -438,7 +442,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
               </div>
             </div>
           ) : (
-            <div style={styles.rightPanelPlaceholder}>Select one entity to move it</div>
+            <div style={styles.rightPanelPlaceholder}>
+              Select one module to move it. Hold Shift for multi-select.
+            </div>
           )}
         </aside>
       </div>
@@ -455,13 +461,6 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       )}
     </div>
   );
-}
-
-function badge(color: string): React.CSSProperties {
-  return {
-    fontSize: 9, fontWeight: 700, color: "#fff", backgroundColor: color,
-    borderRadius: 3, padding: "1px 4px", lineHeight: 1.5,
-  };
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -520,6 +519,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#fefce8",
   },
   constraintPair: { fontSize: 12, color: "#374151", margin: "4px 0 8px" },
+  fixHint: { fontSize: 11, color: "#6b7280", margin: "0 0 8px" },
   checkRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", marginBottom: 4, cursor: "pointer" },
   stepInput: {
     width: 70,
@@ -554,15 +554,6 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1, padding: "6px 0", fontSize: 13,
     backgroundColor: "transparent", color: "#6b7280",
     border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer",
-  },
-  constraintRow: {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "5px 12px",
-  },
-  constraintNames: { display: "flex", gap: 4, fontSize: 12, color: "#374151", alignItems: "center" },
-  unfixBtn: {
-    fontSize: 11, color: "#ef4444", background: "none",
-    border: "none", cursor: "pointer", padding: "2px 4px",
   },
   errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0 },
   viewport: {

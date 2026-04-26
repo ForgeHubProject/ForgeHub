@@ -37,20 +37,12 @@ const toRad = (d: number) => d * (Math.PI / 180);
 // ─── per-kind 3D geometry ─────────────────────────────────────────────────────
 
 function AssemblyModel({ color, size }: { color: string; size: number }) {
-  const s = size;
+  const s = Math.max(0.6, size * 0.22);
   return (
-    <group>
-      {/* transparent shell */}
-      <mesh>
-        <boxGeometry args={[s, s * 0.7, s]} />
-        <meshStandardMaterial color={color} transparent opacity={0.08} side={THREE.DoubleSide} />
-      </mesh>
-      {/* wireframe outline */}
-      <mesh>
-        <boxGeometry args={[s, s * 0.7, s]} />
-        <meshBasicMaterial color={color} wireframe transparent opacity={0.4} />
-      </mesh>
-    </group>
+    <mesh castShadow receiveShadow>
+      <octahedronGeometry args={[s, 0]} />
+      <meshStandardMaterial color={color} metalness={0.45} roughness={0.35} />
+    </mesh>
   );
 }
 
@@ -110,7 +102,7 @@ const KIND_COLOR: Record<string, string> = {
 };
 
 const KIND_SIZE: Record<string, number> = {
-  assembly: 9,
+  assembly: 2.4,
   module:   6,
   part:     3.5,
 };
