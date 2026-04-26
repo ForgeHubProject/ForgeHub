@@ -58,3 +58,33 @@ export type Snapshot = SnapshotSummary & {
 };
 
 export type TreeNode = Entity & { children: TreeNode[] };
+
+export type DiffEntitySnapshot = {
+  entityId: string;
+  parentEntityId: string | null;
+  kind: string;
+  name: string;
+  path: string;
+  transform: Transform | null;
+  attributes: Record<string, unknown>;
+};
+
+export type DiffChangeType = "added" | "removed" | "modified" | "moved" | "unchanged";
+
+export type DiffChange = {
+  entityId: string;
+  name: string;
+  kind: string;
+  path: string;
+  type: DiffChangeType;
+  fieldChanges: Array<{ field: string; before: unknown; after: unknown }>;
+  before: DiffEntitySnapshot | null;
+  after: DiffEntitySnapshot | null;
+};
+
+export type DiffResult = {
+  baseSnapshotId: string;
+  targetSnapshotId: string;
+  summary: { added: number; removed: number; modified: number; moved: number; unchanged: number };
+  changes: DiffChange[];
+};

@@ -8,9 +8,9 @@ import {
   Html,
   OrbitControls,
 } from "@react-three/drei";
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import * as THREE from "three";
-import type { Constraint, Entity } from "../types";
+import type { Constraint, DiffChange, DiffChangeType, DiffEntitySnapshot, Entity } from "../types";
 
 // ─── tree builder ────────────────────────────────────────────────────────────
 
@@ -34,23 +34,25 @@ function buildTree(entities: Entity[]): VNode[] {
 
 const toRad = (d: number) => d * (Math.PI / 180);
 
+// ─── diff color mapping ───────────────────────────────────────────────────────
+
+const DIFF_COLOR: Record<DiffChangeType, string> = {
+  added:     "#22c55e",
+  removed:   "#ef4444",
+  modified:  "#f59e0b",
+  moved:     "#f97316",
+  unchanged: "#475569",
+};
+
 // ─── per-kind 3D geometry ─────────────────────────────────────────────────────
 
 function AssemblyModel({ color, size }: { color: string; size: number }) {
-  const s = size;
+  const s = Math.max(0.6, size * 0.22);
   return (
-    <group>
-      {/* transparent shell */}
-      <mesh>
-        <boxGeometry args={[s, s * 0.7, s]} />
-        <meshStandardMaterial color={color} transparent opacity={0.08} side={THREE.DoubleSide} />
-      </mesh>
-      {/* wireframe outline */}
-      <mesh>
-        <boxGeometry args={[s, s * 0.7, s]} />
-        <meshBasicMaterial color={color} wireframe transparent opacity={0.4} />
-      </mesh>
-    </group>
+    <mesh castShadow receiveShadow>
+      <octahedronGeometry args={[s, 0]} />
+      <meshStandardMaterial color={color} metalness={0.45} roughness={0.35} />
+    </mesh>
   );
 }
 
@@ -58,12 +60,10 @@ function ModuleModel({ color, size }: { color: string; size: number }) {
   const s = size;
   return (
     <group>
-      {/* PCB board */}
       <mesh position={[0, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[s, s * 0.15, s * 0.7]} />
         <meshStandardMaterial color={color} metalness={0.3} roughness={0.65} />
       </mesh>
-      {/* chip bumps */}
       {([-0.28, 0, 0.28] as number[]).map((x) =>
         ([-0.18, 0.18] as number[]).map((z) => (
           <mesh key={`${x}-${z}`} position={[x * s, s * 0.11, z * s]} castShadow>
@@ -80,17 +80,14 @@ function PartModel({ color, size }: { color: string; size: number }) {
   const s = size;
   return (
     <group>
-      {/* main body */}
       <mesh position={[0, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[s, s * 0.55, s]} />
         <meshStandardMaterial color={color} metalness={0.55} roughness={0.3} />
       </mesh>
-      {/* top cap */}
       <mesh position={[0, s * 0.32, 0]} castShadow>
         <boxGeometry args={[s * 0.75, s * 0.1, s * 0.75]} />
         <meshStandardMaterial color={color} metalness={0.7} roughness={0.2} />
       </mesh>
-      {/* pin row */}
       {([-0.3, -0.15, 0, 0.15, 0.3] as number[]).map((x) => (
         <mesh key={x} position={[x * s, -s * 0.33, 0]}>
           <cylinderGeometry args={[s * 0.025, s * 0.025, s * 0.12, 6]} />
@@ -110,7 +107,7 @@ const KIND_COLOR: Record<string, string> = {
 };
 
 const KIND_SIZE: Record<string, number> = {
-  assembly: 9,
+  assembly: 2.4,
   module:   6,
   part:     3.5,
 };
@@ -153,19 +150,60 @@ function LocalAxes({ size }: { size: number }) {
   );
 }
 
+// ─── removed entity ghost ─────────────────────────────────────────────────────
+
+function GhostEntity({ snap }: { snap: DiffEntitySnapshot }) {
+  const p = (snap.transform?.position ?? [0, 0, 0]) as [number, number, number];
+  const r = (snap.transform ? snap.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
+  const s = (snap.transform?.scale ?? [1, 1, 1]) as [number, number, number];
+  const size = KIND_SIZE[snap.kind] ?? 4;
+
+  return (
+    <group position={p} rotation={r} scale={s}>
+      <mesh>
+        <boxGeometry args={[size, size * 0.7, size]} />
+        <meshBasicMaterial color="#ef4444" wireframe transparent opacity={0.55} />
+      </mesh>
+      <Html
+        position={[0, size * 0.5 + 1.5, 0]}
+        center
+        distanceFactor={60}
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none" }}
+      >
+        <div style={{
+          background: "#ef4444", color: "#fff",
+          padding: "2px 8px", borderRadius: 4,
+          fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.18)", opacity: 0.85,
+        }}>
+          — {snap.name}
+        </div>
+      </Html>
+    </group>
+  );
+}
+
 // ─── single entity ───────────────────────────────────────────────────────────
 
 function EntityMesh({
   node,
   isSelected,
   onSelect,
+  diffType,
 }: {
   node: VNode;
   isSelected: boolean;
-  onSelect: (id: string, multi: boolean) => void;
+  onSelect: (id: string) => void;
+  diffType?: DiffChangeType;
 }) {
+  const [hovered, setHovered] = useState(false);
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
-  const color = isSelected ? "#f59e0b" : baseColor;
+  const color = isSelected
+    ? "#f59e0b"
+    : diffType
+    ? DIFF_COLOR[diffType]
+    : baseColor;
   const size = KIND_SIZE[node.kind] ?? 4;
 
   const Model =
@@ -173,11 +211,24 @@ function EntityMesh({
     : node.kind === "module" ? ModuleModel
     : PartModel;
 
+  const labelBg =
+    isSelected          ? "#f59e0b"
+    : diffType === "added"     ? "#22c55e"
+    : diffType === "modified"  ? "#f59e0b"
+    : diffType === "moved"     ? "#f97316"
+    : diffType === "unchanged" ? "rgba(71,85,105,0.75)"
+    : "rgba(255,255,255,0.92)";
+
+  const labelTextColor = (diffType && diffType !== "unchanged") || isSelected ? "#fff" : "#1e293b";
+
   return (
-    <group onClick={(e) => { e.stopPropagation(); onSelect(node.id, e.nativeEvent.shiftKey); }}>
+    <group
+      onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
+      onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
+      onPointerOut={() => setHovered(false)}
+    >
       <Model color={color} size={size} />
 
-      {/* selection ring */}
       {isSelected && (
         <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[size * 0.62, size * 0.78, 32]} />
@@ -185,33 +236,28 @@ function EntityMesh({
         </mesh>
       )}
 
-      {/* local axes gizmo — shown on selection */}
       {isSelected && <LocalAxes size={size} />}
 
-      {/* floating label */}
-      <Html
-        position={[0, size * 0.55 + 1.5, 0]}
-        center
-        distanceFactor={60}
-        zIndexRange={[10, 0]}
-        style={{ pointerEvents: "none" }}
-      >
-        <div
-          style={{
-            background: isSelected ? "#f59e0b" : "rgba(255,255,255,0.92)",
-            color: isSelected ? "#fff" : "#1e293b",
-            padding: "2px 8px",
-            borderRadius: 4,
-            fontSize: 11,
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
-            border: `1px solid ${isSelected ? "#d97706" : "#e2e8f0"}`,
-          }}
+      {(isSelected || hovered || diffType) && (
+        <Html
+          position={[0, size * 0.55 + 1.5, 0]}
+          center
+          distanceFactor={60}
+          zIndexRange={[10, 0]}
+          style={{ pointerEvents: "none" }}
         >
-          {node.name}
-        </div>
-      </Html>
+          <div style={{
+            background: labelBg,
+            color: labelTextColor,
+            padding: "2px 8px", borderRadius: 4,
+            fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+            border: `1px solid ${isSelected ? "#d97706" : "transparent"}`,
+          }}>
+            {node.name}
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -222,22 +268,36 @@ function SceneNode({
   node,
   selectedIds,
   onSelect,
+  diffTypeMap,
 }: {
   node: VNode;
   selectedIds: string[];
-  onSelect: (id: string, multi: boolean) => void;
+  onSelect: (id: string) => void;
+  diffTypeMap: Map<string, DiffChangeType> | null;
 }) {
   const p = (node.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (node.transform ? node.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
   const s = (node.transform?.scale ?? [1, 1, 1]) as [number, number, number];
+  const diffType = diffTypeMap ? (diffTypeMap.get(node.entityId) ?? "unchanged") : undefined;
 
   return (
     <group position={p} rotation={r} scale={s}>
       {node.transform !== null && (
-        <EntityMesh node={node} isSelected={selectedIds.includes(node.id)} onSelect={onSelect} />
+        <EntityMesh
+          node={node}
+          isSelected={selectedIds.includes(node.id)}
+          onSelect={onSelect}
+          diffType={diffType}
+        />
       )}
       {node.children.map((child) => (
-        <SceneNode key={child.id} node={child} selectedIds={selectedIds} onSelect={onSelect} />
+        <SceneNode
+          key={child.id}
+          node={child}
+          selectedIds={selectedIds}
+          onSelect={onSelect}
+          diffTypeMap={diffTypeMap}
+        />
       ))}
     </group>
   );
@@ -249,11 +309,26 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string, multi: boolean) => void;
+  onSelect: (id: string) => void;
+  diffChanges?: DiffChange[] | null;
 };
 
-export function Viewport({ entities, selectedIds, onSelect }: Props) {
+export function Viewport({ entities, selectedIds, onSelect, diffChanges }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
+
+  const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
+    if (!diffChanges) return null;
+    const m = new Map<string, DiffChangeType>();
+    for (const c of diffChanges) m.set(c.entityId, c.type);
+    return m;
+  }, [diffChanges]);
+
+  const removedSnaps = useMemo<DiffEntitySnapshot[]>(() => {
+    if (!diffChanges) return [];
+    return diffChanges
+      .filter((c) => c.type === "removed" && c.before?.transform)
+      .map((c) => c.before!);
+  }, [diffChanges]);
 
   return (
     <Canvas
@@ -272,10 +347,21 @@ export function Viewport({ entities, selectedIds, onSelect }: Props) {
         <Bounds fit clip observe damping={6} margin={1.4}>
           <group>
             {roots.map((root) => (
-              <SceneNode key={root.id} node={root} selectedIds={selectedIds} onSelect={onSelect} />
+              <SceneNode
+                key={root.id}
+                node={root}
+                selectedIds={selectedIds}
+                onSelect={onSelect}
+                diffTypeMap={diffTypeMap}
+              />
             ))}
           </group>
         </Bounds>
+
+        {/* Removed entity ghosts are outside Bounds so they don't affect camera fit */}
+        {removedSnaps.map((snap) => (
+          <GhostEntity key={snap.entityId} snap={snap} />
+        ))}
 
         <Grid
           args={[500, 500]}

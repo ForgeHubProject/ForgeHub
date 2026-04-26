@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
+import { compareRoutes } from "./routes/compare.js";
 import { constraintRoutes } from "./routes/constraints.js";
 import { devUiRoutes } from "./routes/dev-ui.js";
 import { entityRoutes } from "./routes/entities.js";
@@ -49,6 +50,7 @@ async function buildServer() {
   await app.register(authRoutes);
   await app.register(repoRoutes);
   await app.register(snapshotRoutes);
+  await app.register(compareRoutes);
   await app.register(constraintRoutes);
   await app.register(entityRoutes);
   await app.register(gitHttpRoutes);

@@ -1,4 +1,4 @@
-import type { Constraint, Repo, Snapshot, SnapshotSummary, User } from "./types";
+import type { Constraint, DiffResult, Repo, Snapshot, SnapshotSummary, User } from "./types";
 
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -129,6 +129,19 @@ export async function deleteEntity(
     method: "DELETE",
     token,
   });
+}
+
+export async function compareDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  baseId: string,
+  targetId: string,
+): Promise<DiffResult> {
+  return req(
+    `/repos/${handle}/${repoName}/compare?base=${encodeURIComponent(baseId)}&target=${encodeURIComponent(targetId)}`,
+    { token: token ?? undefined },
+  );
 }
 
 export async function deleteConstraint(

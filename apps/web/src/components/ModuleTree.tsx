@@ -22,11 +22,10 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectedIds: string[];
-  onSelect: (id: string, multi: boolean) => void;
-  onDelete: (id: string) => void;
+  onSelect?: (id: string) => void;
 };
 
-export function ModuleTree({ entities, constraints, selectedIds, onSelect, onDelete }: Props) {
+export function ModuleTree({ entities, constraints, selectedIds, onSelect }: Props) {
   const roots = buildTree(entities);
 
   if (roots.length === 0) {
@@ -42,7 +41,6 @@ export function ModuleTree({ entities, constraints, selectedIds, onSelect, onDel
           constraints={constraints}
           selectedIds={selectedIds}
           onSelect={onSelect}
-          onDelete={onDelete}
         />
       ))}
     </div>
