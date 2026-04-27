@@ -187,9 +187,19 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     const write = canWrite(repo, actorId);
 
     if (service === "git-receive-pack" && !write) {
+      // 401 + WWW-Authenticate so git knows to prompt for credentials.
+      // Without this, git just prints "403" and never asks for a password.
+      if (!actorId) {
+        reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+        return reply.status(401).send({ error: "Authentication required" });
+      }
       return reply.status(403).send({ error: "Write access denied" });
     }
     if (service === "git-upload-pack" && !read) {
+      if (!actorId) {
+        reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+        return reply.status(401).send({ error: "Authentication required" });
+      }
       return reply.status(404).send({ error: "Repository not found" });
     }
 
@@ -253,6 +263,10 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const actorId = await resolveActorIdFromAuthHeader(app, request);
+    if (!actorId) {
+      reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+      return reply.status(401).send({ error: "Authentication required" });
+    }
     if (!canWrite(repo, actorId)) {
       return reply.status(403).send({ error: "Write access denied" });
     }
