@@ -363,3 +363,6 @@ tags
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/node,python,visualstudiocode,vim
+
+test-data/repo-test/
+apps/api/git-storage/
