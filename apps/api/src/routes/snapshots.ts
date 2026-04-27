@@ -133,6 +133,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
         sourceFile: snapshot.sourceFile,
         schemaVersion: snapshot.schemaVersion,
         createdAt: snapshot.createdAt.toISOString(),
+        gitCommitSha: snapshot.gitCommitSha ?? null,
         entities: snapshot.entities.map(formatEntity),
         constraints: snapshot.constraints.map(formatConstraint),
       });
@@ -153,7 +154,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
       const snapshots = await prisma.snapshot.findMany({
         where: { repoId: repo.id },
         orderBy: { createdAt: "desc" },
-        select: { id: true, label: true, sourceFile: true, schemaVersion: true, createdAt: true },
+        select: { id: true, label: true, sourceFile: true, schemaVersion: true, createdAt: true, gitCommitSha: true },
       });
 
       return {
@@ -191,6 +192,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
         sourceFile: snapshot.sourceFile,
         schemaVersion: snapshot.schemaVersion,
         createdAt: snapshot.createdAt.toISOString(),
+        gitCommitSha: snapshot.gitCommitSha ?? null,
         entities: snapshot.entities.map(formatEntity),
         constraints: snapshot.constraints.map(formatConstraint),
       };

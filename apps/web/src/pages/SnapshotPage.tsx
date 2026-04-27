@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { compareDiff, getSnapshot, getSnapshots } from "../api";
+import { API_BASE, compareDiff, getSnapshot, getSnapshots } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { DiffChange, DiffResult, Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
@@ -44,8 +44,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [diffResult, setDiffResult]   = useState<DiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
-  const handle   = repo.ownerHandle ?? user.handle;
-  const repoName = repo.name;
+  const handle    = repo.ownerHandle ?? user.handle;
+  const repoName  = repo.name;
+  const cloneUrl  = `${API_BASE}/git/${handle}/${repoName}.git`;
 
   // Group snapshots by sourceFile → Modules
   const modules = useMemo<Module[]>(() => {
@@ -68,6 +69,19 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       : [...snapshots].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     return [...list].reverse(); // newest first for display
   }, [selectedModuleFile, modules, snapshots]);
+
+  async function refreshSnapshots() {
+    setLoadingSnap(true);
+    setError(null);
+    try {
+      const r = await getSnapshots(token, handle, repoName);
+      setSnapshots(r.snapshots);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to refresh");
+    } finally {
+      setLoadingSnap(false);
+    }
+  }
 
   // Auto-load latest snapshot on mount
   useEffect(() => {
@@ -153,6 +167,25 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
         <button onClick={onBack} style={styles.backBtn}>← Repos</button>
         <span style={styles.repoTitle}>{repo.fullName ?? repo.name}</span>
         <span style={styles.visibility}>{repo.visibility}</span>
+        <div style={styles.cloneRow}>
+          <span style={styles.cloneLabel}>clone</span>
+          <code style={styles.cloneUrl}>{cloneUrl}</code>
+          <button
+            style={styles.copyBtn}
+            onClick={() => navigator.clipboard.writeText(cloneUrl)}
+            title="Copy clone URL"
+          >
+            ⎘
+          </button>
+        </div>
+        <button
+          onClick={refreshSnapshots}
+          disabled={loadingSnap}
+          style={styles.refreshBtn}
+          title="Refresh after git push"
+        >
+          ↻
+        </button>
       </header>
 
       <div style={styles.body}>
@@ -261,7 +294,12 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                   </div>
                   <div style={styles.commitInfo}>
                     <span style={styles.commitMsg}>{c.label ?? c.sourceFile}</span>
-                    <span style={styles.commitDate}>{new Date(c.createdAt).toLocaleDateString()}</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span style={styles.commitDate}>{new Date(c.createdAt).toLocaleDateString()}</span>
+                      {c.gitCommitSha && (
+                        <span style={styles.commitSha}>{c.gitCommitSha.slice(0, 7)}</span>
+                      )}
+                    </div>
                     {hasDiff && (
                       <div style={styles.commitDiffBadges}>
                         {diffResult!.summary.added    > 0 && <span style={diffBadgeStyle("#22c55e")}>+{diffResult!.summary.added}</span>}
@@ -434,6 +472,11 @@ const styles: Record<string, React.CSSProperties> = {
   backBtn: { fontSize: 13, color: "#6b7280", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
   repoTitle:  { fontSize: 15, fontWeight: 600, color: "#111827" },
   visibility: { fontSize: 11, color: "#6b7280", border: "1px solid #e5e7eb", borderRadius: 10, padding: "1px 8px" },
+  cloneRow:   { display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px" },
+  cloneLabel: { fontSize: 10, color: "#94a3b8", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
+  cloneUrl:   { fontSize: 12, color: "#334155", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
+  copyBtn:    { fontSize: 14, color: "#64748b", background: "none", border: "none", cursor: "pointer", padding: "0 2px", lineHeight: 1 },
+  refreshBtn: { fontSize: 16, color: "#64748b", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", cursor: "pointer" },
   body:    { display: "flex", flex: 1, overflow: "hidden" },
 
   sidebar: { width: 240, borderRight: "1px solid #e5e7eb", backgroundColor: "#fff", display: "flex", flexDirection: "column", overflow: "hidden" },
@@ -473,6 +516,7 @@ const styles: Record<string, React.CSSProperties> = {
   commitInfo: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
   commitMsg:  { fontSize: 12, color: "#111827", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   commitDate: { fontSize: 10, color: "#9ca3af" },
+  commitSha:  { fontSize: 10, color: "#94a3b8", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", background: "#f1f5f9", borderRadius: 3, padding: "0 3px" },
   commitDiffBadges: { display: "flex", gap: 4, marginTop: 2 },
 
   diffPanel:      { borderBottom: "1px solid #f3f4f6", padding: "8px 0", flexShrink: 0 },

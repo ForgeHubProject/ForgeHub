@@ -22,6 +22,7 @@ export type SnapshotSummary = {
   sourceFile: string;
   schemaVersion: string;
   createdAt: string;
+  gitCommitSha: string | null;
 };
 
 export type Transform = {

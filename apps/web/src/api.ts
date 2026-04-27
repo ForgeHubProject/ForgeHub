@@ -1,6 +1,7 @@
 import type { Constraint, DiffResult, Repo, Snapshot, SnapshotSummary, User } from "./types";
 
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+const BASE = API_BASE;
 
 async function req<T>(
   path: string,
