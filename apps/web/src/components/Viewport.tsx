@@ -114,14 +114,14 @@ const KIND_SIZE: Record<string, number> = {
 
 // ─── removed entity ghost ─────────────────────────────────────────────────────
 
-function GhostEntity({ snap }: { snap: DiffEntitySnapshot }) {
+function GhostEntity({ snap, onSelect }: { snap: DiffEntitySnapshot; onSelect?: (entityId: string) => void }) {
   const p = (snap.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (snap.transform ? snap.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
   const s = (snap.transform?.scale ?? [1, 1, 1]) as [number, number, number];
   const size = KIND_SIZE[snap.kind] ?? 4;
 
   return (
-    <group position={p} rotation={r} scale={s}>
+    <group position={p} rotation={r} scale={s} onClick={(e) => { e.stopPropagation(); onSelect?.(snap.entityId); }}>
       <mesh>
         <boxGeometry args={[size, size * 0.7, size]} />
         <meshBasicMaterial color="#ef4444" wireframe transparent opacity={0.55} />
@@ -271,17 +271,19 @@ type Props = {
   selectedIds: string[];
   onSelect: (id: string) => void;
   diffChanges?: DiffChange[] | null;
+  diffMode?: boolean;
+  onSelectGhost?: (entityId: string) => void;
 };
 
-export function Viewport({ entities, selectedIds, onSelect, diffChanges }: Props) {
+export function Viewport({ entities, selectedIds, onSelect, diffChanges, diffMode = true, onSelectGhost }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
-    if (!diffChanges) return null;
+    if (!diffChanges || !diffMode) return null;
     const m = new Map<string, DiffChangeType>();
     for (const c of diffChanges) m.set(c.entityId, c.type);
     return m;
-  }, [diffChanges]);
+  }, [diffChanges, diffMode]);
 
   const removedSnaps = useMemo<DiffEntitySnapshot[]>(() => {
     if (!diffChanges) return [];
@@ -319,8 +321,8 @@ export function Viewport({ entities, selectedIds, onSelect, diffChanges }: Props
         </Bounds>
 
         {/* Removed entity ghosts are outside Bounds so they don't affect camera fit */}
-        {removedSnaps.map((snap) => (
-          <GhostEntity key={snap.entityId} snap={snap} />
+        {diffMode && removedSnaps.map((snap) => (
+          <GhostEntity key={snap.entityId} snap={snap} onSelect={onSelectGhost} />
         ))}
 
         <Grid
