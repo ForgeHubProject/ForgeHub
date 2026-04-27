@@ -65,6 +65,7 @@ model Snapshot {
   sourceFile    String
   schemaVersion String       @default("0.1.0")
   createdAt     DateTime     @default(now())
+  gitCommitSha  String?
 
   repo          Repo         @relation(fields: [repoId], references: [id], onDelete: Cascade)
   entities      Entity[]
