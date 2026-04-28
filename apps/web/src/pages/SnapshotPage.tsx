@@ -43,6 +43,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
 
   const [diffResult, setDiffResult]   = useState<DiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
+  const [diffMode, setDiffMode]       = useState(true);
+  const [ghostSelectedId, setGhostSelectedId] = useState<string | null>(null);
 
   const handle    = repo.ownerHandle ?? user.handle;
   const repoName  = repo.name;
@@ -123,6 +125,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       setActiveSnapshot(snap);
       setActiveCommitId(commitId);
       setSelectedIds([]);
+      setGhostSelectedId(null);
+      setDiffMode(true);
 
       if (predecessor) {
         setDiffLoading(true);
@@ -156,10 +160,13 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       ? activeSnapshot?.entities.find((e) => e.id === selectedIds[0])
       : null;
 
-  const selectedDiffChange =
-    selectedEntity && diffResult
-      ? diffResult.changes.find((c) => c.entityId === selectedEntity.entityId)
-      : null;
+  // Works for both live entities and ghost (removed) entities
+  const selectedChange = useMemo(() => {
+    if (!diffResult) return null;
+    if (ghostSelectedId) return diffResult.changes.find((c) => c.entityId === ghostSelectedId) ?? null;
+    if (selectedEntity) return diffResult.changes.find((c) => c.entityId === selectedEntity.entityId) ?? null;
+    return null;
+  }, [diffResult, ghostSelectedId, selectedEntity]);
 
   return (
     <div style={styles.shell}>
@@ -245,14 +252,61 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
               entities={activeSnapshot.entities}
               constraints={activeSnapshot.constraints}
               selectedIds={selectedIds}
-              onSelect={(id) => setSelectedIds([id])}
+              onSelect={(id) => { setSelectedIds([id]); setGhostSelectedId(null); }}
               diffChanges={diffResult?.changes ?? null}
+              diffMode={diffMode}
+              onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectedIds([]); }}
             />
           ) : (
             <div style={styles.viewportPlaceholder}>
               <span style={styles.viewportIcon}>⬡</span>
               <p style={styles.viewportText}>No model to display</p>
               <p style={styles.viewportSub}>Import snapshots from your pipeline, then open this repo.</p>
+            </div>
+          )}
+
+          {/* Diff / Normal toggle */}
+          {activeSnapshot && diffResult && (
+            <button style={styles.diffToggle} onClick={() => setDiffMode((d) => !d)}>
+              {diffMode ? "◑ Diff" : "◐ Normal"}
+            </button>
+          )}
+
+          {/* Changes overlay HUD */}
+          {diffMode && diffResult && activeSnapshot && (
+            <div style={styles.changesOverlay}>
+              <div style={styles.overlayHeader}>
+                <span>Changes</span>
+                <div style={{ display: "flex", gap: 3 }}>
+                  {diffResult.summary.added    > 0 && <span style={diffCountStyle(DIFF_COLOR.added)}>+{diffResult.summary.added}</span>}
+                  {diffResult.summary.removed  > 0 && <span style={diffCountStyle(DIFF_COLOR.removed)}>−{diffResult.summary.removed}</span>}
+                  {diffResult.summary.modified > 0 && <span style={diffCountStyle(DIFF_COLOR.modified)}>~{diffResult.summary.modified}</span>}
+                  {diffResult.summary.moved    > 0 && <span style={diffCountStyle(DIFF_COLOR.moved)}>↔{diffResult.summary.moved}</span>}
+                </div>
+              </div>
+              {diffResult.changes.filter((c) => c.type !== "unchanged").map((c) => {
+                const isSelected = ghostSelectedId === c.entityId || selectedEntity?.entityId === c.entityId;
+                return (
+                  <div
+                    key={c.entityId}
+                    style={{ ...styles.overlayRow, ...(isSelected ? styles.overlayRowSelected : {}) }}
+                    onClick={() => {
+                      if (c.type === "removed") {
+                        setGhostSelectedId(c.entityId); setSelectedIds([]);
+                      } else {
+                        const match = activeSnapshot.entities.find((e) => e.entityId === c.entityId);
+                        if (match) { setSelectedIds([match.id]); setGhostSelectedId(null); }
+                      }
+                    }}
+                  >
+                    <span style={{ color: DIFF_COLOR[c.type], fontWeight: 700, fontSize: 11, width: 12, flexShrink: 0 }}>
+                      {DIFF_ICON[c.type]}
+                    </span>
+                    <span style={styles.overlayName}>{c.name}</span>
+                    <span style={styles.overlayKind}>{c.kind}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </main>
@@ -313,49 +367,13 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             })}
           </div>
 
-          {/* Diff change list */}
-          {diffResult && (
-            <div style={styles.diffPanel}>
-              <div style={styles.sideSectionHeader}>
-                <span>Changes</span>
-                <div style={{ display: "flex", gap: 4 }}>
-                  {diffResult.summary.added    > 0 && <span style={diffCountStyle(DIFF_COLOR.added)}>+{diffResult.summary.added}</span>}
-                  {diffResult.summary.removed  > 0 && <span style={diffCountStyle(DIFF_COLOR.removed)}>−{diffResult.summary.removed}</span>}
-                  {diffResult.summary.modified > 0 && <span style={diffCountStyle(DIFF_COLOR.modified)}>~{diffResult.summary.modified}</span>}
-                  {diffResult.summary.moved    > 0 && <span style={diffCountStyle(DIFF_COLOR.moved)}>↔{diffResult.summary.moved}</span>}
-                </div>
-              </div>
-              <div style={styles.diffChangeList}>
-                {diffResult.changes
-                  .filter((c) => c.type !== "unchanged")
-                  .map((c) => (
-                    <div
-                      key={c.entityId}
-                      style={{
-                        ...styles.diffChangeRow,
-                        ...(selectedEntity?.entityId === c.entityId ? styles.diffChangeRowSelected : {}),
-                      }}
-                      onClick={() => {
-                        const match = activeSnapshot?.entities.find((e) => e.entityId === c.entityId);
-                        if (match) setSelectedIds([match.id]);
-                      }}
-                    >
-                      <span style={{ color: DIFF_COLOR[c.type], fontWeight: 700, width: 14, flexShrink: 0 }}>
-                        {DIFF_ICON[c.type]}
-                      </span>
-                      <span style={styles.diffChangeName}>{c.name}</span>
-                      <span style={styles.diffChangeKind}>{c.kind}</span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-
           {/* Entity inspector */}
-          {selectedDiffChange ? (
-            <DiffInspector change={selectedDiffChange} />
-          ) : selectedEntity ? (
-            <ParameterInspector entity={selectedEntity} />
+          {(selectedEntity || ghostSelectedId) ? (
+            <EntityInspector
+              entity={selectedEntity ?? null}
+              change={selectedChange}
+              diffMode={diffMode}
+            />
           ) : (
             <div style={styles.rightPlaceholder}>
               Click a commit to explore its diff, or select an entity in the viewport.
@@ -371,80 +389,119 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function ParameterInspector({ entity }: { entity: Entity }) {
+type PropKind = "normal" | "changed" | "added" | "removed";
+type PropRow  = { label: string; value: string; kind: PropKind; before?: string };
+
+function EntityInspector({ entity, change, diffMode }: {
+  entity: Entity | null;
+  change: DiffChange | null;
+  diffMode: boolean;
+}) {
+  const type       = change?.type;
+  const isRemoved  = type === "removed";
+  const isAdded    = type === "added";
+  const isModified = type === "modified" || type === "moved";
+
+  // For removed ghosts, fall back to the before-snapshot as data source
+  const src = entity
+    ? { name: entity.name, kind: entity.kind, path: entity.path, transform: entity.transform, attributes: entity.attributes }
+    : isRemoved ? change!.before
+    : null;
+
+  if (!src) return <div style={styles.rightPlaceholder}>No data.</div>;
+
+  const globalKind: PropKind = !diffMode ? "normal" : isRemoved ? "removed" : isAdded ? "added" : "normal";
+  const getfc = (field: string) => change?.fieldChanges.find((f) => f.field === field);
+
+  const rows: PropRow[] = [];
+
+  const push = (label: string, value: unknown, field?: string) => {
+    const fc = field ? getfc(field) : null;
+    rows.push({
+      label,
+      value: fmtVal(value),
+      kind: !diffMode ? "normal" : fc ? "changed" : globalKind,
+      before: fc && diffMode ? fmtVal(fc.before) : undefined,
+    });
+  };
+
+  push("name", src.name, "name");
+  push("kind", src.kind);
+  push("path", src.path);
+  if (src.transform) {
+    push("position", src.transform.position, "position");
+    push("rotation", src.transform.rotationEulerDeg, "rotation");
+    push("scale",    src.transform.scale, "scale");
+  }
+
+  // Expand attributes per-key with fine-grained diff
+  const attrFc     = getfc("attributes");
+  const curAttrs   = src.attributes ?? {};
+  const prevAttrs  = (attrFc?.before ?? {}) as Record<string, unknown>;
+  const nextAttrs  = (attrFc?.after  ?? {}) as Record<string, unknown>;
+  const allAttrKeys = new Set([...Object.keys(curAttrs), ...Object.keys(prevAttrs)]);
+
+  for (const key of allAttrKeys) {
+    const inPrev = key in prevAttrs;
+    const inNext = key in nextAttrs;
+    if (diffMode && attrFc && inPrev && !inNext) {
+      rows.push({ label: key, value: fmtVal(prevAttrs[key]), kind: "removed" });
+    } else {
+      const val  = curAttrs[key] ?? prevAttrs[key];
+      let kind: PropKind = globalKind;
+      let before: string | undefined;
+      if (diffMode && attrFc) {
+        if (!inPrev && inNext)                                            kind = "added";
+        else if (JSON.stringify(prevAttrs[key]) !== JSON.stringify(nextAttrs[key])) {
+          kind = "changed"; before = fmtVal(prevAttrs[key]);
+        }
+      }
+      rows.push({ label: key, value: fmtVal(val), kind, before });
+    }
+  }
+
   return (
-    <div style={{ padding: "10px 12px" }}>
-      <div style={styles.sideSectionHeader}><span>Parameters</span></div>
-      <p style={styles.paramTitle}>{entity.name}</p>
-      <div style={styles.paramList}>
-        {Object.entries(toParamMap(entity)).map(([key, value]) => (
-          <div key={key} style={styles.paramRow}>
-            <span style={styles.paramKey}>{key}</span>
-            <span style={styles.paramValue}>{stringifyParam(value)}</span>
-          </div>
-        ))}
+    <div style={{ padding: "10px 12px", overflowY: "auto", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{src.name}</span>
+        {change && diffMode && (
+          <span style={{ fontSize: 11, fontWeight: 700, color: DIFF_COLOR[type!] }}>
+            {DIFF_ICON[type!]} {type}
+          </span>
+        )}
       </div>
+      {rows.map((row, i) => (
+        <div key={i} style={propRowStyle(row.kind)}>
+          <span style={styles.paramKey}>{row.label}</span>
+          <span style={styles.paramValue}>{row.value}</span>
+          {row.before !== undefined && (
+            <span style={{ fontSize: 10, color: DIFF_COLOR.removed, fontFamily: "monospace" }}>was: {row.before}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
 
-function DiffInspector({ change }: { change: DiffChange }) {
-  const color = DIFF_COLOR[change.type] ?? "#6b7280";
-  return (
-    <div style={{ padding: "10px 12px" }}>
-      <div style={styles.sideSectionHeader}>
-        <span>Change Details</span>
-        <span style={{ color, fontWeight: 700, fontSize: 11 }}>
-          {DIFF_ICON[change.type]} {change.type}
-        </span>
-      </div>
-      <p style={styles.paramTitle}>{change.name}</p>
-      <p style={{ fontSize: 11, color: "#6b7280", margin: "0 0 12px" }}>{change.kind}</p>
-      {change.type === "added"   && <p style={{ fontSize: 12, color }}>New entity in this commit.</p>}
-      {change.type === "removed" && <p style={{ fontSize: 12, color }}>Removed in this commit.</p>}
-      {change.fieldChanges.length > 0 && (
-        <>
-          <p style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", margin: "8px 0 6px" }}>
-            Changed Fields
-          </p>
-          {change.fieldChanges.map((fc, i) => (
-            <div key={i} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 2 }}>{fc.field}</div>
-              <div style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: "3px 6px" }}>
-                <span style={{ fontSize: 10, color: DIFF_COLOR.removed }}>before</span>
-                <span style={styles.paramValue}>{stringifyParam(fc.before)}</span>
-                <span style={{ fontSize: 10, color: DIFF_COLOR.added }}>after</span>
-                <span style={styles.paramValue}>{stringifyParam(fc.after)}</span>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-    </div>
-  );
+function fmtVal(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "boolean") return String(v);
+  if (typeof v === "string")  return v;
+  if (typeof v === "number")  return Number.isInteger(v) ? String(v) : v.toFixed(3);
+  if (Array.isArray(v) && v.every((x) => typeof x === "number"))
+    return (v as number[]).map((n) => n.toFixed(2)).join(", ");
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function propRowStyle(kind: PropKind): React.CSSProperties {
+  const bg = kind === "changed" ? "#fef9c3"
+    : kind === "added"   ? "#dcfce7"
+    : kind === "removed" ? "#fee2e2"
+    : "transparent";
+  return { display: "grid", gap: 1, padding: "3px 6px", borderRadius: 4, marginBottom: 3, backgroundColor: bg, borderBottom: "1px solid #f1f5f9" };
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-function toParamMap(entity: Entity): Record<string, unknown> {
-  return {
-    id: entity.id,
-    entityId: entity.entityId,
-    parentEntityId: entity.parentEntityId,
-    kind: entity.kind,
-    name: entity.name,
-    path: entity.path,
-    transform: entity.transform,
-    renderRef: entity.renderRef,
-    attributes: entity.attributes,
-  };
-}
-
-function stringifyParam(value: unknown): string {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-  try { return JSON.stringify(value); } catch { return String(value); }
-}
 
 function diffCountStyle(color: string): React.CSSProperties {
   return {
@@ -495,6 +552,13 @@ const styles: Record<string, React.CSSProperties> = {
   moduleCommitCount: { fontSize: 11, color: "#9ca3af", flexShrink: 0 },
 
   viewport: { flex: 1, overflow: "hidden", position: "relative" },
+  diffToggle: { position: "absolute", top: 12, right: 88, zIndex: 10, fontSize: 12, fontWeight: 600, color: "#e2e8f0", background: "rgba(15,23,42,0.75)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, padding: "4px 10px", cursor: "pointer", backdropFilter: "blur(4px)" },
+  changesOverlay: { position: "absolute", bottom: 28, left: 12, zIndex: 10, background: "rgba(15,23,42,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, minWidth: 200, maxWidth: 260, maxHeight: 260, overflowY: "auto", backdropFilter: "blur(6px)" },
+  overlayHeader:  { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid rgba(255,255,255,0.08)" },
+  overlayRow:         { display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", cursor: "pointer" },
+  overlayRowSelected: { backgroundColor: "rgba(255,255,255,0.08)" },
+  overlayName: { fontSize: 12, color: "#e2e8f0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
+  overlayKind: { fontSize: 10, color: "#64748b", flexShrink: 0 },
   viewportPlaceholder: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#9ca3af" },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },
   viewportText: { fontSize: 18, fontWeight: 600, color: "#6b7280", margin: 0 },
@@ -518,13 +582,6 @@ const styles: Record<string, React.CSSProperties> = {
   commitDate: { fontSize: 10, color: "#9ca3af" },
   commitSha:  { fontSize: 10, color: "#94a3b8", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", background: "#f1f5f9", borderRadius: 3, padding: "0 3px" },
   commitDiffBadges: { display: "flex", gap: 4, marginTop: 2 },
-
-  diffPanel:      { borderBottom: "1px solid #f3f4f6", padding: "8px 0", flexShrink: 0 },
-  diffChangeList: { display: "flex", flexDirection: "column" },
-  diffChangeRow:         { display: "flex", alignItems: "center", gap: 6, padding: "3px 12px", cursor: "pointer" },
-  diffChangeRowSelected: { backgroundColor: "#eff6ff" },
-  diffChangeName: { fontSize: 12, color: "#111827", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  diffChangeKind: { fontSize: 10, color: "#9ca3af", flexShrink: 0 },
 
   rightPlaceholder: { fontSize: 12, color: "#9ca3af", padding: "12px", flex: 1 },
   paramTitle: { margin: "0 0 10px", fontSize: 14, fontWeight: 600, color: "#111827" },
