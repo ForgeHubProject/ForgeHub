@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "prepare": "prisma generate"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

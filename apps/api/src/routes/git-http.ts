@@ -1,7 +1,12 @@
-import { spawn } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import bcrypt from "bcryptjs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { bareRepoPathFromKey } from "../git-storage.js";
+import { ingestCommitRange } from "../ingest.js";
 import { prisma } from "../prisma.js";
+
+const execFile = promisify(execFileCb);
 
 type GitService = "git-upload-pack" | "git-receive-pack";
 
@@ -23,9 +28,7 @@ async function resolveActorIdFromAuthHeader(
   request: FastifyRequest,
 ): Promise<string | undefined> {
   const header = request.headers.authorization;
-  if (!header) {
-    return undefined;
-  }
+  if (!header) return undefined;
 
   if (header.startsWith("Bearer ")) {
     const token = header.slice("Bearer ".length).trim();
@@ -45,13 +48,25 @@ async function resolveActorIdFromAuthHeader(
       const decoded = Buffer.from(encoded, "base64").toString("utf8");
       const sep = decoded.indexOf(":");
       if (sep < 0) return undefined;
+      const username = decoded.slice(0, sep).trim();
       const password = decoded.slice(sep + 1).trim();
       if (!password) return undefined;
-      const payload = await app.jwt.verify<{ sub?: string }>(password);
-      return payload.sub;
-    } catch {
-      return undefined;
-    }
+
+      // Accept JWT token as password (for scripted/CI usage)
+      try {
+        const payload = await app.jwt.verify<{ sub?: string }>(password);
+        return payload.sub;
+      } catch { /* not a JWT, fall through */ }
+
+      // Accept handle-or-email + ForgeHub password (for interactive git prompts)
+      const user = await prisma.user.findFirst({
+        where: { OR: [{ handle: username.toLowerCase() }, { email: username.toLowerCase() }] },
+        select: { id: true, passwordHash: true },
+      });
+      if (user && await bcrypt.compare(password, user.passwordHash)) {
+        return user.id;
+      }
+    } catch { /* ignore */ }
   }
 
   return undefined;
@@ -172,9 +187,19 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     const write = canWrite(repo, actorId);
 
     if (service === "git-receive-pack" && !write) {
+      // 401 + WWW-Authenticate so git knows to prompt for credentials.
+      // Without this, git just prints "403" and never asks for a password.
+      if (!actorId) {
+        reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+        return reply.status(401).send({ error: "Authentication required" });
+      }
       return reply.status(403).send({ error: "Write access denied" });
     }
     if (service === "git-upload-pack" && !read) {
+      if (!actorId) {
+        reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+        return reply.status(401).send({ error: "Authentication required" });
+      }
       return reply.status(404).send({ error: "Repository not found" });
     }
 
@@ -238,12 +263,36 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const actorId = await resolveActorIdFromAuthHeader(app, request);
+    if (!actorId) {
+      reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
+      return reply.status(401).send({ error: "Authentication required" });
+    }
     if (!canWrite(repo, actorId)) {
       return reply.status(403).send({ error: "Write access denied" });
     }
 
     const repoPath = bareRepoPathFromKey(repo.storageKey);
+
+    // Snapshot HEAD before push so we know which commits are new
+    let headBefore: string | null = null;
+    try {
+      const { stdout } = await execFile("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoPath });
+      headBefore = stdout.trim();
+    } catch { /* empty repo — first push */ }
+
     await pipeGitService(reply, request, "git-receive-pack", repoPath, false);
+
+    // Ingest any new .gltf files from newly pushed commits (fire-and-forget)
+    try {
+      const { stdout } = await execFile("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoPath });
+      const headAfter = stdout.trim();
+      if (headAfter && headAfter !== headBefore) {
+        const repoId = repo.id;
+        ingestCommitRange(repoId, repoPath, headBefore ?? "0".repeat(40), headAfter)
+          .catch((err: unknown) => app.log.error({ err }, "post-push ingestion failed"));
+      }
+    } catch { /* HEAD didn't update — nothing to ingest */ }
+
     return reply;
   });
 }

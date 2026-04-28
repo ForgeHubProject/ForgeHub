@@ -1,0 +1,14 @@
+{
+  "asset": { "version": "2.0", "generator": "ForgeHub test data" },
+  "scene": 0,
+  "scenes": [{ "name": "Single Part", "nodes": [0] }],
+  "nodes": [
+    {
+      "name": "Bracket",
+      "mesh": 0,
+      "translation": [0, 0, 0],
+      "rotation": [0, 0, 0, 1],
+      "scale": [1, 1, 1]
+    }
+  ]
+}
