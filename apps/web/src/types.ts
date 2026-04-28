@@ -89,3 +89,34 @@ export type DiffResult = {
   summary: { added: number; removed: number; modified: number; moved: number; unchanged: number };
   changes: DiffChange[];
 };
+
+export type BranchInfo = {
+  name: string;
+  sha: string;
+  subject: string;
+  date: string;
+  isDefault: boolean;
+  protected: boolean;
+};
+
+export type TagInfo = {
+  name: string;
+  sha: string;
+  subject: string;
+  date: string;
+};
+
+export type PullRequest = {
+  id: string;
+  number: number;
+  title: string;
+  description: string | null;
+  fromBranch: string;
+  toBranch: string;
+  state: "open" | "merged" | "closed";
+  mergeable?: boolean | null;
+  mergedAt: string | null;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+};

@@ -3,13 +3,17 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
+import { branchRoutes } from "./routes/branches.js";
 import { compareRoutes } from "./routes/compare.js";
 import { constraintRoutes } from "./routes/constraints.js";
 import { devUiRoutes } from "./routes/dev-ui.js";
 import { entityRoutes } from "./routes/entities.js";
+import { forkRoutes } from "./routes/forks.js";
 import { gitHttpRoutes } from "./routes/git-http.js";
+import { pullRoutes } from "./routes/pulls.js";
 import { repoRoutes } from "./routes/repos.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
+import { tagRoutes } from "./routes/tags.js";
 
 async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -53,6 +57,10 @@ async function buildServer() {
   await app.register(compareRoutes);
   await app.register(constraintRoutes);
   await app.register(entityRoutes);
+  await app.register(branchRoutes);
+  await app.register(tagRoutes);
+  await app.register(forkRoutes);
+  await app.register(pullRoutes);
   await app.register(gitHttpRoutes);
 
   return app;
