@@ -270,12 +270,13 @@ type Props = {
   constraints: Constraint[];
   selectedIds: string[];
   onSelect: (id: string) => void;
+  onDeselect?: () => void;
   diffChanges?: DiffChange[] | null;
   diffMode?: boolean;
   onSelectGhost?: (entityId: string) => void;
 };
 
-export function Viewport({ entities, selectedIds, onSelect, diffChanges, diffMode = true, onSelectGhost }: Props) {
+export function Viewport({ entities, selectedIds, onSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
@@ -298,6 +299,7 @@ export function Viewport({ entities, selectedIds, onSelect, diffChanges, diffMod
       camera={{ position: [80, 80, 120], fov: 45, near: 0.1, far: 50000 }}
       gl={{ antialias: true }}
       style={{ background: "#0f172a" }}
+      onPointerMissed={() => onDeselect?.()}
     >
       <ambientLight intensity={0.5} />
       <directionalLight position={[60, 120, 80]} intensity={1.4} castShadow />

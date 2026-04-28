@@ -253,6 +253,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
               constraints={activeSnapshot.constraints}
               selectedIds={selectedIds}
               onSelect={(id) => { setSelectedIds([id]); setGhostSelectedId(null); }}
+              onDeselect={() => { setSelectedIds([]); setGhostSelectedId(null); }}
               diffChanges={diffResult?.changes ?? null}
               diffMode={diffMode}
               onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectedIds([]); }}
