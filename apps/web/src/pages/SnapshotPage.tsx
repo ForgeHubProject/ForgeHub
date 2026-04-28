@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { API_BASE, closePull, compareDiff, createPull, forkRepo, getSnapshot, getSnapshots, listBranches, listPulls, mergePull } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
-import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, User } from "../types";
+import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
 
 type Props = {
   token: string;
@@ -47,9 +47,16 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [ghostSelectedId, setGhostSelectedId] = useState<string | null>(null);
 
   // Branch selector
-  const [branches, setBranches]           = useState<BranchInfo[]>([]);
+  const [branches, setBranches]             = useState<BranchInfo[]>([]);
+  const [tags, setTags]                     = useState<TagInfo[]>([]);
   const [defaultBranchName, setDefaultBranchName] = useState<string>("");
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+  const [showBranchMenu, setShowBranchMenu] = useState(false);
+  const [branchFilter, setBranchFilter]     = useState("");
+  const [newBranchName, setNewBranchName]   = useState("");
+  const [creatingBranch, setCreatingBranch] = useState(false);
+  const [branchError, setBranchError]       = useState<string | null>(null);
+  const branchMenuRef = useRef<HTMLDivElement>(null);
 
   // Tab: "code" | "pulls"
   const [activeTab, setActiveTab] = useState<"code" | "pulls">("code");
@@ -111,11 +118,54 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
 
   async function loadBranches() {
     try {
-      const r = await listBranches(token, handle, repoName);
-      setBranches(r.branches);
-      setDefaultBranchName(r.defaultBranch);
+      const [br, tg] = await Promise.all([
+        listBranches(token, handle, repoName),
+        listTags(token, handle, repoName),
+      ]);
+      setBranches(br.branches);
+      setDefaultBranchName(br.defaultBranch);
+      setTags(tg.tags);
     } catch { /* ignore if no git storage yet */ }
   }
+
+  async function handleCreateBranch() {
+    if (!newBranchName.trim()) return;
+    setCreatingBranch(true);
+    setBranchError(null);
+    try {
+      await createBranch(token, handle, repoName, newBranchName.trim(), selectedBranch ?? (defaultBranchName || "HEAD"));
+      setNewBranchName("");
+      await loadBranches();
+      handleBranchChange(newBranchName.trim());
+      setShowBranchMenu(false);
+    } catch (e) {
+      setBranchError(e instanceof Error ? e.message : "Failed to create branch");
+    } finally {
+      setCreatingBranch(false);
+    }
+  }
+
+  async function handleDeleteBranch(branch: string) {
+    if (!confirm(`Delete branch "${branch}"?`)) return;
+    try {
+      await deleteBranch(token, handle, repoName, branch);
+      if (selectedBranch === branch) setSelectedBranch(null);
+      await loadBranches();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete branch");
+    }
+  }
+
+  // Close branch menu on outside click
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (branchMenuRef.current && !branchMenuRef.current.contains(e.target as Node)) {
+        setShowBranchMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
 
   async function loadPulls(filter: typeof pullsFilter = pullsFilter) {
     setPullsLoading(true);
@@ -302,78 +352,187 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     return null;
   }, [diffResult, ghostSelectedId, selectedEntity]);
 
+  const activeBranchLabel = selectedBranch ?? defaultBranchName ?? "main";
+  const filteredBranches = branches.filter((b) =>
+    b.name.toLowerCase().includes(branchFilter.toLowerCase())
+  );
+
   return (
     <div style={styles.shell}>
+      {/* ── Row 1: repo identity + actions ── */}
       <header style={styles.topbar}>
-        <button onClick={onBack} style={styles.backBtn}>← Repos</button>
-        <span style={styles.repoTitle}>{repo.fullName ?? repo.name}</span>
-        <span style={styles.visibility}>{repo.visibility}</span>
+        <button onClick={onBack} style={styles.backBtn}>←</button>
 
-        {/* Branch selector */}
-        {branches.length > 0 && (
-          <select
-            value={selectedBranch ?? "__all__"}
-            onChange={(e) => handleBranchChange(e.target.value)}
-            style={styles.branchSelect}
-          >
-            <option value="__all__">All branches</option>
-            {branches.map((b) => (
-              <option key={b.name} value={b.name}>
-                {b.isDefault ? `${b.name} (default)` : b.name}
-                {b.protected ? " 🔒" : ""}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {/* Tab bar */}
-        <div style={styles.tabBar}>
-          <button
-            style={{ ...styles.tabBtn, ...(activeTab === "code" ? styles.tabBtnActive : {}) }}
-            onClick={() => setActiveTab("code")}
-          >
-            Code
-          </button>
-          <button
-            style={{ ...styles.tabBtn, ...(activeTab === "pulls" ? styles.tabBtnActive : {}) }}
-            onClick={() => { setActiveTab("pulls"); loadPulls(); }}
-          >
-            Pull Requests
-          </button>
+        {/* Breadcrumb */}
+        <div style={styles.breadcrumb}>
+          <span style={styles.breadcrumbOwner}>{handle}</span>
+          <span style={styles.breadcrumbSep}>/</span>
+          <span style={styles.breadcrumbRepo}>{repoName}</span>
         </div>
+        <span style={styles.visibilityBadge}>{repo.visibility}</span>
 
-        <div style={styles.cloneRow}>
-          <span style={styles.cloneLabel}>clone</span>
-          <code style={styles.cloneUrl}>{cloneUrl}</code>
-          <button
-            style={styles.copyBtn}
-            onClick={() => navigator.clipboard.writeText(cloneUrl)}
-            title="Copy clone URL"
-          >
-            ⎘
-          </button>
-        </div>
-        {!isOwner && (
+        <div style={{ flex: 1 }} />
+
+        {/* Action buttons (GitHub-style top-right) */}
+        <div style={styles.actionBtns}>
           <button
             onClick={handleFork}
-            disabled={forking}
-            style={styles.forkBtn}
-            title="Fork this repository"
+            disabled={forking || !isOwner === false}
+            style={{ ...styles.actionBtn, ...(isOwner ? styles.actionBtnDisabled : {}) }}
+            title={isOwner ? "Cannot fork your own repo" : "Fork this repository"}
           >
-            {forking ? "Forking…" : "⑂ Fork"}
+            ⑂ Fork
           </button>
-        )}
-        {forkMsg && <span style={{ fontSize: 12, color: "#22c55e" }}>{forkMsg}</span>}
-
-        <button
-          onClick={() => refreshSnapshots()}
-          disabled={loadingSnap}
-          style={styles.refreshBtn}
-          title="Refresh after git push"
-        >
-          ↻
-        </button>
+          {forkMsg && <span style={{ fontSize: 11, color: "#22c55e" }}>{forkMsg}</span>}
+          <button
+            onClick={() => refreshSnapshots()}
+            disabled={loadingSnap}
+            style={styles.actionBtn}
+            title="Refresh commits"
+          >
+            ↻
+          </button>
+        </div>
       </header>
+
+      {/* ── Row 2: tabs + branch selector + clone ── */}
+      <div style={styles.subnav}>
+        {/* Tabs */}
+        <div style={styles.navTabs}>
+          <button
+            style={{ ...styles.navTab, ...(activeTab === "code" ? styles.navTabActive : {}) }}
+            onClick={() => setActiveTab("code")}
+          >
+            <span style={styles.navTabIcon}>{"<>"}</span> Code
+          </button>
+          <button
+            style={{ ...styles.navTab, ...(activeTab === "pulls" ? styles.navTabActive : {}) }}
+            onClick={() => { setActiveTab("pulls"); loadPulls(); }}
+          >
+            ⑂ Pull Requests
+            {pulls.filter((p) => p.state === "open").length > 0 && (
+              <span style={styles.navTabBadge}>{pulls.filter((p) => p.state === "open").length}</span>
+            )}
+          </button>
+        </div>
+
+        <div style={{ flex: 1 }} />
+
+        {/* Branch dropdown + stats + clone */}
+        {activeTab === "code" && (
+          <div style={styles.codeToolbar}>
+            {/* Branch popover */}
+            <div style={{ position: "relative" }} ref={branchMenuRef}>
+              <button
+                style={styles.branchBtn}
+                onClick={() => { setShowBranchMenu((v) => !v); setBranchFilter(""); setBranchError(null); }}
+              >
+                <span style={styles.branchBtnIcon}>⎇</span>
+                <span style={{ fontWeight: 600 }}>{activeBranchLabel}</span>
+                <span style={{ marginLeft: 4, opacity: 0.6 }}>▾</span>
+              </button>
+
+              {showBranchMenu && (
+                <div style={styles.branchMenu}>
+                  <div style={styles.branchMenuHeader}>Switch branches</div>
+
+                  <div style={styles.branchMenuSearch}>
+                    <input
+                      autoFocus
+                      placeholder="Filter branches…"
+                      value={branchFilter}
+                      onChange={(e) => setBranchFilter(e.target.value)}
+                      style={styles.branchMenuInput}
+                    />
+                  </div>
+
+                  <div style={styles.branchMenuList}>
+                    {/* "All branches" option */}
+                    <button
+                      style={{ ...styles.branchMenuItem, ...(selectedBranch === null ? styles.branchMenuItemActive : {}) }}
+                      onClick={() => { handleBranchChange("__all__"); setShowBranchMenu(false); }}
+                    >
+                      <span style={styles.branchMenuCheck}>{selectedBranch === null ? "✓" : ""}</span>
+                      <span>All branches</span>
+                    </button>
+
+                    {filteredBranches.length > 0 && (
+                      <div style={styles.branchMenuGroupLabel}>Branches</div>
+                    )}
+
+                    {filteredBranches.map((b) => (
+                      <div key={b.name} style={styles.branchMenuRow}>
+                        <button
+                          style={{ ...styles.branchMenuItem, ...(selectedBranch === b.name ? styles.branchMenuItemActive : {}) }}
+                          onClick={() => { handleBranchChange(b.name); setShowBranchMenu(false); }}
+                        >
+                          <span style={styles.branchMenuCheck}>{selectedBranch === b.name ? "✓" : ""}</span>
+                          <span style={{ flex: 1 }}>{b.name}</span>
+                          {b.isDefault && <span style={styles.branchDefaultBadge}>default</span>}
+                          {b.protected && <span style={{ fontSize: 10, opacity: 0.6 }}>🔒</span>}
+                        </button>
+                        {isOwner && !b.isDefault && !b.protected && (
+                          <button
+                            style={styles.branchDeleteBtn}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteBranch(b.name); }}
+                            title="Delete branch"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+
+                    {filteredBranches.length === 0 && branchFilter && (
+                      <div style={{ padding: "8px 12px", fontSize: 12, color: "#9ca3af" }}>No branches match</div>
+                    )}
+                  </div>
+
+                  {/* New branch */}
+                  {isOwner && (
+                    <div style={styles.branchMenuCreate}>
+                      <div style={styles.branchMenuGroupLabel}>New branch from <strong>{activeBranchLabel}</strong></div>
+                      <div style={{ display: "flex", gap: 6, padding: "6px 10px" }}>
+                        <input
+                          placeholder="branch-name"
+                          value={newBranchName}
+                          onChange={(e) => setNewBranchName(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleCreateBranch()}
+                          style={styles.branchMenuInput}
+                        />
+                        <button
+                          style={styles.branchCreateBtn}
+                          disabled={!newBranchName.trim() || creatingBranch}
+                          onClick={handleCreateBranch}
+                        >
+                          {creatingBranch ? "…" : "Create"}
+                        </button>
+                      </div>
+                      {branchError && <div style={{ padding: "0 10px 8px", fontSize: 11, color: "#ef4444" }}>{branchError}</div>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Branch + tag counts */}
+            {branches.length > 0 && (
+              <div style={styles.repoStats}>
+                <span>⎇ {branches.length} branch{branches.length !== 1 ? "es" : ""}</span>
+                <span style={{ opacity: 0.4 }}>·</span>
+                <span>◈ {tags.length} tag{tags.length !== 1 ? "s" : ""}</span>
+              </div>
+            )}
+
+            {/* Clone */}
+            <div style={styles.cloneRow}>
+              <span style={styles.cloneLabel}>clone</span>
+              <code style={styles.cloneUrl}>{cloneUrl}</code>
+              <button style={styles.copyBtn} onClick={() => navigator.clipboard.writeText(cloneUrl)} title="Copy">⎘</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={styles.body}>
         {/* ── Pull Requests tab ── */}
@@ -846,18 +1005,60 @@ function diffBadgeStyle(color: string): React.CSSProperties {
 
 // ─── styles ───────────────────────────────────────────────────────────────────
 
+const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+
 const styles: Record<string, React.CSSProperties> = {
-  shell:   { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#f9fafb" },
-  topbar:  { display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", backgroundColor: "#fff", borderBottom: "1px solid #e5e7eb", flexShrink: 0 },
-  backBtn: { fontSize: 13, color: "#6b7280", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
-  repoTitle:  { fontSize: 15, fontWeight: 600, color: "#111827" },
-  visibility: { fontSize: 11, color: "#6b7280", border: "1px solid #e5e7eb", borderRadius: 10, padding: "1px 8px" },
-  cloneRow:   { display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px" },
+  shell: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#f9fafb" },
+
+  // Row 1
+  topbar: { display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", backgroundColor: "#fff", borderBottom: "1px solid #e5e7eb", flexShrink: 0 },
+  backBtn: { fontSize: 16, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
+  breadcrumb: { display: "flex", alignItems: "center", gap: 4 },
+  breadcrumbOwner: { fontSize: 14, color: "#6b7280", fontWeight: 500, cursor: "default" },
+  breadcrumbSep:   { fontSize: 14, color: "#d1d5db" },
+  breadcrumbRepo:  { fontSize: 14, color: "#111827", fontWeight: 700 },
+  visibilityBadge: { fontSize: 11, color: "#6b7280", border: "1px solid #d1d5db", borderRadius: 10, padding: "1px 8px", fontWeight: 500 },
+  actionBtns: { display: "flex", alignItems: "center", gap: 8 },
+  actionBtn:  { display: "flex", alignItems: "center", gap: 5, fontSize: 13, fontWeight: 500, color: "#374151", background: "#f9fafb", border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 12px", cursor: "pointer" },
+  actionBtnDisabled: { opacity: 0.45, cursor: "not-allowed" },
+
+  // Row 2
+  subnav: { display: "flex", alignItems: "center", gap: 0, padding: "0 20px", backgroundColor: "#fff", borderBottom: "1px solid #e5e7eb", flexShrink: 0 },
+  navTabs: { display: "flex", gap: 0 },
+  navTab:  { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", borderBottom: "2px solid transparent", padding: "10px 14px", cursor: "pointer", whiteSpace: "nowrap" as const },
+  navTabActive: { color: "#111827", borderBottomColor: "#f97316", fontWeight: 600 },
+  navTabIcon:   { fontSize: 12, fontFamily: MONO },
+  navTabBadge:  { fontSize: 11, fontWeight: 600, background: "#f97316", color: "#fff", borderRadius: 10, padding: "0 6px", minWidth: 18, textAlign: "center" as const },
+  codeToolbar: { display: "flex", alignItems: "center", gap: 10, padding: "8px 0" },
+
+  // Branch dropdown
+  branchBtn: { display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#111827", background: "#f6f8fa", border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" as const },
+  branchBtnIcon: { fontSize: 14 },
+  branchMenu: { position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 100, width: 280, background: "#fff", border: "1px solid #d1d5db", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", overflow: "hidden" },
+  branchMenuHeader: { padding: "10px 12px", fontSize: 12, fontWeight: 600, color: "#6b7280", borderBottom: "1px solid #f3f4f6", textAlign: "center" as const },
+  branchMenuSearch: { padding: "8px 10px", borderBottom: "1px solid #f3f4f6" },
+  branchMenuInput:  { width: "100%", fontSize: 13, border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 8px", outline: "none", boxSizing: "border-box" as const, fontFamily: "inherit" },
+  branchMenuList:   { maxHeight: 220, overflowY: "auto" as const },
+  branchMenuGroupLabel: { fontSize: 11, fontWeight: 600, color: "#9ca3af", padding: "6px 12px 2px", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
+  branchMenuRow:    { display: "flex", alignItems: "center" },
+  branchMenuItem:   { display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "7px 12px", fontSize: 13, color: "#111827", background: "none", border: "none", cursor: "pointer", textAlign: "left" as const },
+  branchMenuItemActive: { background: "#f0f9ff", fontWeight: 600 },
+  branchMenuCheck:  { width: 14, fontSize: 12, color: "#3b82f6", flexShrink: 0 },
+  branchDefaultBadge: { fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontWeight: 600 },
+  branchDeleteBtn:  { fontSize: 12, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "6px 10px", flexShrink: 0 },
+  branchMenuCreate: { borderTop: "1px solid #f3f4f6" },
+  branchCreateBtn:  { fontSize: 12, fontWeight: 600, color: "#fff", background: "#2563eb", border: "none", borderRadius: 5, padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" as const },
+
+  // Repo stats
+  repoStats: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" as const },
+
+  // Clone
+  cloneRow:   { display: "flex", alignItems: "center", gap: 6, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px" },
   cloneLabel: { fontSize: 10, color: "#94a3b8", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
-  cloneUrl:   { fontSize: 12, color: "#334155", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
+  cloneUrl:   { fontSize: 12, color: "#334155", fontFamily: MONO, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
   copyBtn:    { fontSize: 14, color: "#64748b", background: "none", border: "none", cursor: "pointer", padding: "0 2px", lineHeight: 1 },
-  refreshBtn: { fontSize: 16, color: "#64748b", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", cursor: "pointer" },
-  body:    { display: "flex", flex: 1, overflow: "hidden" },
+
+  body: { display: "flex", flex: 1, overflow: "hidden" },
 
   sidebar: { width: 240, borderRight: "1px solid #e5e7eb", backgroundColor: "#fff", display: "flex", flexDirection: "column", overflow: "hidden" },
   sideSection:       { borderBottom: "1px solid #f3f4f6", padding: "10px 0" },
@@ -914,14 +1115,6 @@ const styles: Record<string, React.CSSProperties> = {
   paramValue: { fontSize: 12, color: "#0f172a", wordBreak: "break-word", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
   errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0, borderTop: "1px solid #fee2e2", backgroundColor: "#fff1f2" },
 
-  forkBtn:      { fontSize: 12, fontWeight: 600, color: "#374151", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
-  // Branch selector
-  branchSelect: { fontSize: 12, color: "#374151", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 8px", background: "#fff", cursor: "pointer" },
-
-  // Tab bar
-  tabBar:       { display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 8, padding: 2 },
-  tabBtn:       { fontSize: 12, fontWeight: 500, color: "#6b7280", background: "none", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" },
-  tabBtnActive: { backgroundColor: "#fff", color: "#111827", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
 
   // PR panel
   pullsPanel:   { display: "flex", flex: 1, overflow: "hidden" },
