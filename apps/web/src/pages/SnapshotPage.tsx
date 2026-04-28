@@ -125,7 +125,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       setBranches(br.branches);
       setDefaultBranchName(br.defaultBranch);
       setTags(tg.tags);
-    } catch { /* ignore if no git storage yet */ }
+    } catch (e) {
+      setError(`Branch load failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function handleCreateBranch() {
