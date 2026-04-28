@@ -27,6 +27,7 @@ model User {
   updatedAt      DateTime           @updatedAt
   repos          Repo[]
   collaborations RepoCollaborator[]
+  pullRequests   PullRequest[]
 }
 
 model Repo {
@@ -39,8 +40,10 @@ model Repo {
   owner         User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
-  collaborators RepoCollaborator[]
-  snapshots     Snapshot[]
+  collaborators     RepoCollaborator[]
+  snapshots         Snapshot[]
+  pullRequests      PullRequest[]
+  protectedBranches ProtectedBranch[]
 
   @@unique([ownerId, name])
 }
@@ -97,6 +100,42 @@ model Entity {
   constraintsAsB Constraint[] @relation("ConstraintEntityB")
 
   @@unique([snapshotId, entityId])
+}
+
+enum PRState {
+  OPEN
+  MERGED
+  CLOSED
+}
+
+model PullRequest {
+  id          String   @id @default(cuid())
+  repoId      String
+  number      Int
+  title       String
+  description String?
+  fromBranch  String
+  toBranch    String
+  state       PRState  @default(OPEN)
+  mergedAt    DateTime?
+  authorId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repo   Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id])
+
+  @@unique([repoId, number])
+}
+
+model ProtectedBranch {
+  id     String @id @default(cuid())
+  repoId String
+  branch String
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, branch])
 }
 
 model Constraint {

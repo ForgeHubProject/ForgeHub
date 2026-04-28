@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { API_BASE, compareDiff, getSnapshot, getSnapshots } from "../api";
+import { API_BASE, closePull, compareDiff, createPull, forkRepo, getSnapshot, getSnapshots, listBranches, listPulls, mergePull } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
-import type { DiffChange, DiffResult, Entity, Repo, Snapshot, SnapshotSummary, User } from "../types";
+import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, User } from "../types";
 
 type Props = {
   token: string;
@@ -46,9 +46,33 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [diffMode, setDiffMode]       = useState(true);
   const [ghostSelectedId, setGhostSelectedId] = useState<string | null>(null);
 
+  // Branch selector
+  const [branches, setBranches]           = useState<BranchInfo[]>([]);
+  const [defaultBranchName, setDefaultBranchName] = useState<string>("");
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+
+  // Tab: "code" | "pulls"
+  const [activeTab, setActiveTab] = useState<"code" | "pulls">("code");
+
+  // Pull requests
+  const [pulls, setPulls]                 = useState<PullRequest[]>([]);
+  const [pullsLoading, setPullsLoading]   = useState(false);
+  const [selectedPr, setSelectedPr]       = useState<PullRequest | null>(null);
+  const [prActionLoading, setPrActionLoading] = useState(false);
+  const [prError, setPrError]             = useState<string | null>(null);
+  const [showNewPr, setShowNewPr]         = useState(false);
+  const [newPrTitle, setNewPrTitle]       = useState("");
+  const [newPrFrom, setNewPrFrom]         = useState("");
+  const [newPrDesc, setNewPrDesc]         = useState("");
+  const [pullsFilter, setPullsFilter]     = useState<"open" | "merged" | "closed" | "all">("open");
+
+  const [forking, setForking]     = useState(false);
+  const [forkMsg, setForkMsg]     = useState<string | null>(null);
+
   const handle    = repo.ownerHandle ?? user.handle;
   const repoName  = repo.name;
   const cloneUrl  = `${API_BASE}/git/${handle}/${repoName}.git`;
+  const isOwner   = handle === user.handle;
 
   // Group snapshots by sourceFile → Modules
   const modules = useMemo<Module[]>(() => {
@@ -72,11 +96,11 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     return [...list].reverse(); // newest first for display
   }, [selectedModuleFile, modules, snapshots]);
 
-  async function refreshSnapshots() {
+  async function refreshSnapshots(branch?: string) {
     setLoadingSnap(true);
     setError(null);
     try {
-      const r = await getSnapshots(token, handle, repoName);
+      const r = await getSnapshots(token, handle, repoName, branch ?? selectedBranch ?? undefined);
       setSnapshots(r.snapshots);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to refresh");
@@ -85,7 +109,91 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  // Auto-load latest snapshot on mount
+  async function loadBranches() {
+    try {
+      const r = await listBranches(token, handle, repoName);
+      setBranches(r.branches);
+      setDefaultBranchName(r.defaultBranch);
+    } catch { /* ignore if no git storage yet */ }
+  }
+
+  async function loadPulls(filter: typeof pullsFilter = pullsFilter) {
+    setPullsLoading(true);
+    setPrError(null);
+    try {
+      const r = await listPulls(token, handle, repoName, filter);
+      setPulls(r.pulls);
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Failed to load PRs");
+    } finally {
+      setPullsLoading(false);
+    }
+  }
+
+  async function handleMergePr(pr: PullRequest) {
+    setPrActionLoading(true);
+    setPrError(null);
+    try {
+      await mergePull(token, handle, repoName, pr.number);
+      setSelectedPr({ ...pr, state: "merged" });
+      await loadPulls();
+      await refreshSnapshots();
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Merge failed");
+    } finally {
+      setPrActionLoading(false);
+    }
+  }
+
+  async function handleClosePr(pr: PullRequest) {
+    setPrActionLoading(true);
+    setPrError(null);
+    try {
+      await closePull(token, handle, repoName, pr.number);
+      setSelectedPr({ ...pr, state: "closed" });
+      await loadPulls();
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Failed to close PR");
+    } finally {
+      setPrActionLoading(false);
+    }
+  }
+
+  async function handleFork() {
+    setForking(true);
+    setForkMsg(null);
+    try {
+      const forked = await forkRepo(token, handle, repoName);
+      setForkMsg(`Forked as ${forked.name}`);
+    } catch (e) {
+      setForkMsg(e instanceof Error ? e.message : "Fork failed");
+    } finally {
+      setForking(false);
+    }
+  }
+
+  async function handleCreatePr() {
+    if (!newPrTitle.trim() || !newPrFrom) return;
+    setPrActionLoading(true);
+    setPrError(null);
+    try {
+      const pr = await createPull(token, handle, repoName, newPrTitle.trim(), newPrFrom, defaultBranchName || undefined, newPrDesc || undefined);
+      setShowNewPr(false);
+      setNewPrTitle(""); setNewPrFrom(""); setNewPrDesc("");
+      await loadPulls();
+      setSelectedPr(pr);
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Failed to create PR");
+    } finally {
+      setPrActionLoading(false);
+    }
+  }
+
+  // Auto-load latest snapshot + branches on mount
+  useEffect(() => {
+    loadBranches();
+  }, [handle, repoName]);
+
   useEffect(() => {
     let cancelled = false;
     setLoadingSnap(true);
@@ -146,6 +254,32 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
+  async function handleBranchChange(branch: string) {
+    const b = branch === "__all__" ? null : branch;
+    setSelectedBranch(b);
+    setActiveSnapshot(null);
+    setActiveCommitId(null);
+    setDiffResult(null);
+    setSelectedIds([]);
+    setLoadingSnap(true);
+    setError(null);
+    try {
+      const r = await getSnapshots(token, handle, repoName, b ?? undefined);
+      setSnapshots(r.snapshots);
+      const latest = r.snapshots[0];
+      if (latest) {
+        const snap = await getSnapshot(token, handle, repoName, latest.id);
+        setActiveSnapshot(snap);
+        setActiveCommitId(latest.id);
+        setSelectedModuleFile(latest.sourceFile);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setLoadingSnap(false);
+    }
+  }
+
   function handleModuleClick(sourceFile: string) {
     setSelectedModuleFile(sourceFile);
     const mod = modules.find((m) => m.sourceFile === sourceFile);
@@ -174,6 +308,40 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
         <button onClick={onBack} style={styles.backBtn}>← Repos</button>
         <span style={styles.repoTitle}>{repo.fullName ?? repo.name}</span>
         <span style={styles.visibility}>{repo.visibility}</span>
+
+        {/* Branch selector */}
+        {branches.length > 0 && (
+          <select
+            value={selectedBranch ?? "__all__"}
+            onChange={(e) => handleBranchChange(e.target.value)}
+            style={styles.branchSelect}
+          >
+            <option value="__all__">All branches</option>
+            {branches.map((b) => (
+              <option key={b.name} value={b.name}>
+                {b.isDefault ? `${b.name} (default)` : b.name}
+                {b.protected ? " 🔒" : ""}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {/* Tab bar */}
+        <div style={styles.tabBar}>
+          <button
+            style={{ ...styles.tabBtn, ...(activeTab === "code" ? styles.tabBtnActive : {}) }}
+            onClick={() => setActiveTab("code")}
+          >
+            Code
+          </button>
+          <button
+            style={{ ...styles.tabBtn, ...(activeTab === "pulls" ? styles.tabBtnActive : {}) }}
+            onClick={() => { setActiveTab("pulls"); loadPulls(); }}
+          >
+            Pull Requests
+          </button>
+        </div>
+
         <div style={styles.cloneRow}>
           <span style={styles.cloneLabel}>clone</span>
           <code style={styles.cloneUrl}>{cloneUrl}</code>
@@ -185,8 +353,20 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             ⎘
           </button>
         </div>
+        {!isOwner && (
+          <button
+            onClick={handleFork}
+            disabled={forking}
+            style={styles.forkBtn}
+            title="Fork this repository"
+          >
+            {forking ? "Forking…" : "⑂ Fork"}
+          </button>
+        )}
+        {forkMsg && <span style={{ fontSize: 12, color: "#22c55e" }}>{forkMsg}</span>}
+
         <button
-          onClick={refreshSnapshots}
+          onClick={() => refreshSnapshots()}
           disabled={loadingSnap}
           style={styles.refreshBtn}
           title="Refresh after git push"
@@ -196,7 +376,148 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       </header>
 
       <div style={styles.body}>
+        {/* ── Pull Requests tab ── */}
+        {activeTab === "pulls" && (
+          <div style={styles.pullsPanel}>
+            {/* PR list */}
+            <div style={styles.prList}>
+              <div style={styles.prListHeader}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>Pull Requests</span>
+                <button style={styles.newPrBtn} onClick={() => setShowNewPr(true)}>+ New</button>
+              </div>
+              <div style={{ display: "flex", gap: 4, padding: "6px 12px", borderBottom: "1px solid #f3f4f6" }}>
+                {(["open", "merged", "closed", "all"] as const).map((f) => (
+                  <button
+                    key={f}
+                    style={{ ...styles.filterBtn, ...(pullsFilter === f ? styles.filterBtnActive : {}) }}
+                    onClick={() => { setPullsFilter(f); loadPulls(f); }}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+              {pullsLoading && <p style={{ ...styles.muted, padding: "8px 12px" }}>Loading…</p>}
+              {!pullsLoading && pulls.length === 0 && (
+                <p style={{ ...styles.muted, padding: "8px 12px" }}>No {pullsFilter === "all" ? "" : pullsFilter} pull requests.</p>
+              )}
+              {pulls.map((pr) => (
+                <button
+                  key={pr.id}
+                  style={{ ...styles.prItem, ...(selectedPr?.id === pr.id ? styles.prItemActive : {}) }}
+                  onClick={() => setSelectedPr(pr)}
+                >
+                  <span style={{ ...styles.prStateDot, backgroundColor: pr.state === "open" ? "#22c55e" : pr.state === "merged" ? "#a78bfa" : "#9ca3af" }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      #{pr.number} {pr.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                      {pr.fromBranch} → {pr.toBranch} · {pr.author}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* PR detail */}
+            <div style={styles.prDetail}>
+              {showNewPr ? (
+                <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <h3 style={{ margin: 0, fontSize: 15 }}>New Pull Request</h3>
+                  <label style={styles.prFormLabel}>
+                    From branch
+                    <select
+                      value={newPrFrom}
+                      onChange={(e) => setNewPrFrom(e.target.value)}
+                      style={styles.prFormInput}
+                    >
+                      <option value="">— select —</option>
+                      {branches.filter((b) => !b.isDefault).map((b) => (
+                        <option key={b.name} value={b.name}>{b.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={styles.prFormLabel}>
+                    Into
+                    <input readOnly value={defaultBranchName || "(default)"} style={{ ...styles.prFormInput, opacity: 0.6 }} />
+                  </label>
+                  <label style={styles.prFormLabel}>
+                    Title
+                    <input
+                      value={newPrTitle}
+                      onChange={(e) => setNewPrTitle(e.target.value)}
+                      placeholder="Title…"
+                      style={styles.prFormInput}
+                    />
+                  </label>
+                  <label style={styles.prFormLabel}>
+                    Description
+                    <textarea
+                      value={newPrDesc}
+                      onChange={(e) => setNewPrDesc(e.target.value)}
+                      placeholder="Optional description…"
+                      rows={3}
+                      style={{ ...styles.prFormInput, resize: "vertical" }}
+                    />
+                  </label>
+                  {prError && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      style={styles.mergeBtn}
+                      disabled={prActionLoading || !newPrTitle.trim() || !newPrFrom}
+                      onClick={handleCreatePr}
+                    >
+                      {prActionLoading ? "Creating…" : "Create PR"}
+                    </button>
+                    <button style={styles.closeBtn} onClick={() => setShowNewPr(false)}>Cancel</button>
+                  </div>
+                </div>
+              ) : selectedPr ? (
+                <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ ...styles.prStateDot, width: 10, height: 10, backgroundColor: selectedPr.state === "open" ? "#22c55e" : selectedPr.state === "merged" ? "#a78bfa" : "#9ca3af" }} />
+                    <h3 style={{ margin: 0, fontSize: 15, flex: 1 }}>#{selectedPr.number} {selectedPr.title}</h3>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    <strong>{selectedPr.fromBranch}</strong> → <strong>{selectedPr.toBranch}</strong>
+                    {" · "} by {selectedPr.author}
+                    {" · "} {new Date(selectedPr.createdAt).toLocaleDateString()}
+                  </div>
+                  {selectedPr.description && (
+                    <p style={{ fontSize: 13, color: "#374151", margin: 0, lineHeight: 1.5 }}>{selectedPr.description}</p>
+                  )}
+                  {selectedPr.mergedAt && (
+                    <div style={{ fontSize: 12, color: "#7c3aed" }}>Merged {new Date(selectedPr.mergedAt).toLocaleString()}</div>
+                  )}
+                  {prError && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>}
+                  {selectedPr.state === "open" && (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        style={styles.mergeBtn}
+                        disabled={prActionLoading}
+                        onClick={() => handleMergePr(selectedPr)}
+                      >
+                        {prActionLoading ? "Merging…" : "Merge PR"}
+                      </button>
+                      <button
+                        style={styles.closeBtn}
+                        disabled={prActionLoading}
+                        onClick={() => handleClosePr(selectedPr)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding: 24, color: "#9ca3af", fontSize: 13 }}>Select a pull request to view details.</div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Left sidebar ── */}
+        {activeTab === "code" && (<>
         <aside style={styles.sidebar}>
 
           {/* Modules */}
@@ -381,6 +702,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             </div>
           )}
         </aside>
+        </>)}
       </div>
 
       {error && <p style={styles.errorMsg}>{error}</p>}
@@ -591,4 +913,29 @@ const styles: Record<string, React.CSSProperties> = {
   paramKey:   { fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" },
   paramValue: { fontSize: 12, color: "#0f172a", wordBreak: "break-word", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
   errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0, borderTop: "1px solid #fee2e2", backgroundColor: "#fff1f2" },
+
+  forkBtn:      { fontSize: 12, fontWeight: 600, color: "#374151", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  // Branch selector
+  branchSelect: { fontSize: 12, color: "#374151", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 8px", background: "#fff", cursor: "pointer" },
+
+  // Tab bar
+  tabBar:       { display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 8, padding: 2 },
+  tabBtn:       { fontSize: 12, fontWeight: 500, color: "#6b7280", background: "none", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" },
+  tabBtnActive: { backgroundColor: "#fff", color: "#111827", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
+
+  // PR panel
+  pullsPanel:   { display: "flex", flex: 1, overflow: "hidden" },
+  prList:       { width: 320, borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column", overflow: "hidden" },
+  prListHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px 8px", borderBottom: "1px solid #f3f4f6" },
+  newPrBtn:     { fontSize: 12, fontWeight: 600, color: "#3b82f6", background: "none", border: "1px solid #bfdbfe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  filterBtn:    { fontSize: 11, color: "#6b7280", background: "none", border: "1px solid transparent", borderRadius: 4, padding: "2px 8px", cursor: "pointer" },
+  filterBtnActive: { color: "#111827", background: "#f1f5f9", border: "1px solid #e5e7eb" },
+  prItem:       { display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer", textAlign: "left", width: "100%" },
+  prItemActive: { backgroundColor: "#f0f9ff" },
+  prStateDot:   { width: 8, height: 8, borderRadius: "50%", flexShrink: 0, marginTop: 4 },
+  prDetail:     { flex: 1, overflowY: "auto" },
+  prFormLabel:  { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#374151", fontWeight: 500 },
+  prFormInput:  { fontSize: 13, border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 10px", outline: "none", width: "100%", boxSizing: "border-box" },
+  mergeBtn:     { fontSize: 13, fontWeight: 600, color: "#fff", background: "#22c55e", border: "none", borderRadius: 6, padding: "7px 18px", cursor: "pointer" },
+  closeBtn:     { fontSize: 13, fontWeight: 600, color: "#6b7280", background: "#f3f4f6", border: "none", borderRadius: 6, padding: "7px 14px", cursor: "pointer" },
 };

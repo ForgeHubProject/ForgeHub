@@ -1,4 +1,4 @@
-import type { Constraint, DiffResult, Repo, Snapshot, SnapshotSummary, User } from "./types";
+import type { BranchInfo, Constraint, DiffResult, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const BASE = API_BASE;
@@ -65,8 +65,10 @@ export async function getSnapshots(
   token: string | null,
   handle: string,
   repoName: string,
+  branch?: string,
 ): Promise<{ snapshots: SnapshotSummary[] }> {
-  return req(`/repos/${handle}/${repoName}/snapshots`, { token: token ?? undefined });
+  const qs = branch ? `?branch=${encodeURIComponent(branch)}` : "";
+  return req(`/repos/${handle}/${repoName}/snapshots${qs}`, { token: token ?? undefined });
 }
 
 export async function getSnapshot(
@@ -171,4 +173,137 @@ export async function moveEntityPosition(
     token,
     body: JSON.stringify({ delta }),
   });
+}
+
+// ─── branches ────────────────────────────────────────────────────────────────
+
+export async function listBranches(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ branches: BranchInfo[]; defaultBranch: string }> {
+  return req(`/repos/${handle}/${repoName}/branches`, { token: token ?? undefined });
+}
+
+export async function createBranch(
+  token: string,
+  handle: string,
+  repoName: string,
+  branch: string,
+  from?: string,
+): Promise<{ branch: string }> {
+  return req(`/repos/${handle}/${repoName}/branches`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ branch, from }),
+  });
+}
+
+export async function deleteBranch(
+  token: string,
+  handle: string,
+  repoName: string,
+  branch: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/branches/${encodeURIComponent(branch)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+// ─── tags ─────────────────────────────────────────────────────────────────────
+
+export async function listTags(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ tags: TagInfo[] }> {
+  return req(`/repos/${handle}/${repoName}/tags`, { token: token ?? undefined });
+}
+
+// ─── pull requests ────────────────────────────────────────────────────────────
+
+export async function listPulls(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  state?: "open" | "closed" | "merged" | "all",
+): Promise<{ pulls: PullRequest[] }> {
+  const qs = state ? `?state=${state}` : "";
+  return req(`/repos/${handle}/${repoName}/pulls${qs}`, { token: token ?? undefined });
+}
+
+export async function createPull(
+  token: string,
+  handle: string,
+  repoName: string,
+  title: string,
+  fromBranch: string,
+  toBranch?: string,
+  description?: string,
+): Promise<PullRequest> {
+  return req(`/repos/${handle}/${repoName}/pulls`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ title, fromBranch, toBranch, description }),
+  });
+}
+
+export async function getPull(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<PullRequest> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}`, { token: token ?? undefined });
+}
+
+export async function mergePull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commitMessage?: string,
+): Promise<{ merged: boolean; sha: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/merge`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ commitMessage }),
+  });
+}
+
+export async function closePull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ state: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ state: "closed" }),
+  });
+}
+
+export async function reopenPull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ state: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ state: "open" }),
+  });
+}
+
+// ─── fork ─────────────────────────────────────────────────────────────────────
+
+export async function forkRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<Repo> {
+  return req(`/repos/${handle}/${repoName}/fork`, { method: "POST", token });
 }

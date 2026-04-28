@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../prisma.js";
 import { parseGltf, type GltfDocument } from "../gltf-parser.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { branchShas } from "../git-utils.js";
 
 const gltfNodeSchema = z.object({
   name: z.string().optional(),
@@ -140,16 +141,24 @@ export async function snapshotRoutes(app: FastifyInstance) {
     },
   );
 
-  // GET /repos/:handle/:name/snapshots — list snapshots
+  // GET /repos/:handle/:name/snapshots — list snapshots (optional ?branch= filter)
   app.get(
     "/repos/:handle/:name/snapshots",
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
       const { handle, name } = request.params as { handle: string; name: string };
       const userId = (request as { user?: { sub: string } }).user?.sub;
+      const { branch } = request.query as { branch?: string };
 
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
+
+      // When branch is specified, filter to only snapshots whose gitCommitSha is reachable from that branch
+      let allowedShas: Set<string> | null = null;
+      if (branch && repo.storageKey) {
+        const shas = await branchShas(repo.storageKey, branch);
+        allowedShas = new Set(shas);
+      }
 
       const snapshots = await prisma.snapshot.findMany({
         where: { repoId: repo.id },
@@ -157,8 +166,12 @@ export async function snapshotRoutes(app: FastifyInstance) {
         select: { id: true, label: true, sourceFile: true, schemaVersion: true, createdAt: true, gitCommitSha: true },
       });
 
+      const filtered = allowedShas
+        ? snapshots.filter((s) => s.gitCommitSha && allowedShas!.has(s.gitCommitSha))
+        : snapshots;
+
       return {
-        snapshots: snapshots.map((s) => ({ ...s, createdAt: s.createdAt.toISOString() })),
+        snapshots: filtered.map((s) => ({ ...s, createdAt: s.createdAt.toISOString() })),
       };
     },
   );
