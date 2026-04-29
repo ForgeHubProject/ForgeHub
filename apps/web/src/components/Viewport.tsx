@@ -153,16 +153,14 @@ type SelectionState = "none" | "selected" | "ancestor";
 function EntityMesh({
   node,
   selectionState,
-  isCtrlSelected,
   onSelect,
-  onCtrlSelect,
+  onDirectSelect,
   diffType,
 }: {
   node: VNode;
   selectionState: SelectionState;
-  isCtrlSelected: boolean;
   onSelect: (id: string) => void;
-  onCtrlSelect: (id: string) => void;
+  onDirectSelect: (id: string) => void;
   diffType?: DiffChangeType;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -171,8 +169,6 @@ function EntityMesh({
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected
     ? "#f59e0b"
-    : isCtrlSelected
-    ? "#06b6d4"
     : diffType
     ? DIFF_COLOR[diffType]
     : baseColor;
@@ -199,7 +195,7 @@ function EntityMesh({
       onClick={(e) => {
         e.stopPropagation();
         if (e.nativeEvent.ctrlKey || e.nativeEvent.metaKey) {
-          onCtrlSelect(node.id);
+          onDirectSelect(node.id);
         } else {
           onSelect(node.id);
         }
@@ -225,15 +221,7 @@ function EntityMesh({
         </mesh>
       )}
 
-      {/* Ctrl-selected ring — cyan */}
-      {isCtrlSelected && (
-        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[size * 0.55, size * 0.68, 32]} />
-          <meshBasicMaterial color="#06b6d4" transparent opacity={0.8} side={THREE.DoubleSide} />
-        </mesh>
-      )}
-
-      {(isSelected || isCtrlSelected || isAncestor || hovered || diffType) && (
+      {(isSelected || isAncestor || hovered || diffType) && (
         <Html
           position={[0, size * 0.55 + 1.5, 0]}
           center
@@ -263,16 +251,14 @@ function EntityMesh({
 function SceneNode({
   node,
   selectionPath,
-  ctrlSelectedIds,
   onSelect,
-  onCtrlSelect,
+  onDirectSelect,
   diffTypeMap,
 }: {
   node: VNode;
   selectionPath: string[];
-  ctrlSelectedIds: Set<string>;
   onSelect: (id: string) => void;
-  onCtrlSelect: (id: string) => void;
+  onDirectSelect: (id: string) => void;
   diffTypeMap: Map<string, DiffChangeType> | null;
 }) {
   const p = (node.transform?.position ?? [0, 0, 0]) as [number, number, number];
@@ -291,9 +277,8 @@ function SceneNode({
         <EntityMesh
           node={node}
           selectionState={selectionState}
-          isCtrlSelected={ctrlSelectedIds.has(node.id)}
           onSelect={onSelect}
-          onCtrlSelect={onCtrlSelect}
+          onDirectSelect={onDirectSelect}
           diffType={diffType}
         />
       )}
@@ -302,9 +287,8 @@ function SceneNode({
           key={child.id}
           node={child}
           selectionPath={selectionPath}
-          ctrlSelectedIds={ctrlSelectedIds}
           onSelect={onSelect}
-          onCtrlSelect={onCtrlSelect}
+          onDirectSelect={onDirectSelect}
           diffTypeMap={diffTypeMap}
         />
       ))}
@@ -318,18 +302,16 @@ type Props = {
   entities: Entity[];
   constraints: Constraint[];
   selectionPath: string[];
-  ctrlSelectedIds?: string[];
   onSelect: (id: string) => void;
-  onCtrlSelect?: (id: string) => void;
+  onDirectSelect?: (id: string) => void;
   onDeselect?: () => void;
   diffChanges?: DiffChange[] | null;
   diffMode?: boolean;
   onSelectGhost?: (entityId: string) => void;
 };
 
-export function Viewport({ entities, selectionPath, ctrlSelectedIds, onSelect, onCtrlSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
+export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
-  const ctrlSet = useMemo(() => new Set(ctrlSelectedIds ?? []), [ctrlSelectedIds]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
     if (!diffChanges || !diffMode) return null;
@@ -367,9 +349,8 @@ export function Viewport({ entities, selectionPath, ctrlSelectedIds, onSelect, o
                 key={root.id}
                 node={root}
                 selectionPath={selectionPath}
-                ctrlSelectedIds={ctrlSet}
                 onSelect={onSelect}
-                onCtrlSelect={onCtrlSelect ?? (() => {})}
+                onDirectSelect={onDirectSelect ?? onSelect}
                 diffTypeMap={diffTypeMap}
               />
             ))}
