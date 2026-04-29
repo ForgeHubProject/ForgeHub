@@ -491,7 +491,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                   </div>
 
                   {/* New branch */}
-                  {isOwner && (
+                  {/* New branch — only when repo has commits */}
+                  {isOwner && branches.length > 0 && (
                     <div style={styles.branchMenuCreate}>
                       <div style={styles.branchMenuGroupLabel}>New branch from <strong>{activeBranchLabel}</strong></div>
                       <div style={{ display: "flex", gap: 6, padding: "6px 10px" }}>
@@ -511,6 +512,11 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                         </button>
                       </div>
                       {branchError && <div style={{ padding: "0 10px 8px", fontSize: 11, color: "#ef4444" }}>{branchError}</div>}
+                    </div>
+                  )}
+                  {isOwner && branches.length === 0 && (
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: "#9ca3af", borderTop: "1px solid #f3f4f6" }}>
+                      Push a commit first to create branches.
                     </div>
                   )}
                 </div>
