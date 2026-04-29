@@ -135,22 +135,29 @@ export async function performMerge(
     await execFile("git", ["clone", "--local", repoPath, tmpDir], { maxBuffer: MAX });
     await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
 
-    // Check if already merged
+    // Check if already merged (use origin/ prefix — local branch doesn't exist in the clone)
     try {
-      const { stdout: mbOut } = await execFile("git", ["merge-base", "--is-ancestor", fromBranch, "HEAD"], { cwd: tmpDir });
-      void mbOut;
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
       return { ok: false, alreadyMerged: true };
     } catch { /* not ancestor — proceed */ }
 
-    // Attempt merge
+    // Attempt merge with explicit identity so git doesn't fail on unconfigured hosts
     try {
-      await execFile("git", ["merge", "--no-ff", "-m", message, `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", [
+        "-c", "user.name=ForgeHub",
+        "-c", "user.email=merge@forgehub.io",
+        "merge", "--no-ff", "-m", message, `origin/${fromBranch}`,
+      ], { cwd: tmpDir, maxBuffer: MAX });
     } catch {
       return { ok: false, conflicts: true };
     }
 
     // Push result back to bare repo
-    await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
 
     const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
     return { ok: true, sha: sha.trim() };

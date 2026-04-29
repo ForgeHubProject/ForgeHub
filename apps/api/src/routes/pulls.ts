@@ -163,7 +163,13 @@ export async function pullRoutes(app: FastifyInstance) {
     // Capture the toBranch SHA before merge for ingestion range
     const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
 
-    const result = await performMerge(repo.storageKey, pr.fromBranch, pr.toBranch, message);
+    let result: Awaited<ReturnType<typeof performMerge>>;
+    try {
+      result = await performMerge(repo.storageKey, pr.fromBranch, pr.toBranch, message);
+    } catch (err) {
+      app.log.error({ err }, "performMerge threw unexpectedly");
+      return reply.status(500).send({ error: "Merge failed due to a server error" });
+    }
 
     if (!result.ok) {
       if ("alreadyMerged" in result) return reply.status(409).send({ error: "Branch is already merged" });
