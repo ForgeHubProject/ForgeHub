@@ -37,7 +37,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [selectedModuleFile, setSelectedModuleFile] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | null>(null);
   const [activeCommitId, setActiveCommitId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds]       = useState<string[]>([]);
+  const [selectionPath, setSelectionPath]   = useState<string[]>([]);
   const [loadingSnap, setLoadingSnap]       = useState(false);
   const [error, setError]                   = useState<string | null>(null);
 
@@ -284,7 +284,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       const snap = await getSnapshot(token, handle, repoName, commitId);
       setActiveSnapshot(snap);
       setActiveCommitId(commitId);
-      setSelectedIds([]);
+      setSelectionPath([]);
       setGhostSelectedId(null);
       setDiffMode(true);
 
@@ -312,7 +312,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     setActiveSnapshot(null);
     setActiveCommitId(null);
     setDiffResult(null);
-    setSelectedIds([]);
+    setSelectionPath([]);
     setLoadingSnap(true);
     setError(null);
     try {
@@ -341,10 +341,64 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  const selectedEntity =
-    selectedIds.length === 1
-      ? activeSnapshot?.entities.find((e) => e.id === selectedIds[0])
-      : null;
+  // ── drill-down selection helpers ─────────────────────────────────────────────
+
+  function buildParentMap(entities: Entity[]): Map<string, string | null> {
+    const entityIdToDbId = new Map<string, string>();
+    for (const e of entities) entityIdToDbId.set(e.entityId, e.id);
+    const m = new Map<string, string | null>();
+    for (const e of entities) {
+      m.set(e.id, e.parentEntityId ? (entityIdToDbId.get(e.parentEntityId) ?? null) : null);
+    }
+    return m;
+  }
+
+  function getAncestorChain(id: string, parentMap: Map<string, string | null>): string[] {
+    const chain: string[] = [];
+    let cur: string | null = id;
+    while (cur !== null) {
+      chain.unshift(cur);
+      cur = parentMap.get(cur) ?? null;
+    }
+    return chain; // [root, ..., id]
+  }
+
+  function handleDrillSelect(clickedId: string) {
+    if (!activeSnapshot) return;
+    setGhostSelectedId(null);
+    const parentMap = buildParentMap(activeSnapshot.entities);
+    const chain = getAncestorChain(clickedId, parentMap);
+
+    if (selectionPath.length === 0) {
+      // Nothing selected yet — select the root ancestor
+      setSelectionPath([chain[0]]);
+      return;
+    }
+
+    const focusId = selectionPath[selectionPath.length - 1];
+    if (focusId === clickedId) return; // already focused
+
+    const focusIdx = chain.indexOf(focusId);
+    if (focusIdx !== -1) {
+      // Clicked entity is inside (or is) the focused node — drill one level deeper
+      const nextId = chain[focusIdx + 1];
+      if (nextId) setSelectionPath([...selectionPath, nextId]);
+    } else {
+      // Clicked outside current group — start fresh from root of clicked entity
+      setSelectionPath([chain[0]]);
+    }
+  }
+
+  function handleTreeSelect(id: string) {
+    if (!activeSnapshot) return;
+    setGhostSelectedId(null);
+    const parentMap = buildParentMap(activeSnapshot.entities);
+    setSelectionPath(getAncestorChain(id, parentMap));
+  }
+
+  const selectedEntity = activeSnapshot?.entities.find(
+    (e) => e.id === selectionPath[selectionPath.length - 1]
+  ) ?? null;
 
   // Works for both live entities and ghost (removed) entities
   const selectedChange = useMemo(() => {
@@ -721,8 +775,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                 <ModuleTree
                   entities={activeSnapshot.entities}
                   constraints={activeSnapshot.constraints}
-                  selectedIds={selectedIds}
-                  onSelect={(id) => setSelectedIds([id])}
+                  selectedIds={selectionPath}
+                  onSelect={(id) => handleTreeSelect(id)}
                 />
               </div>
             </div>
@@ -739,12 +793,12 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             <Viewport
               entities={activeSnapshot.entities}
               constraints={activeSnapshot.constraints}
-              selectedIds={selectedIds}
-              onSelect={(id) => { setSelectedIds([id]); setGhostSelectedId(null); }}
-              onDeselect={() => { setSelectedIds([]); setGhostSelectedId(null); }}
+              selectionPath={selectionPath}
+              onSelect={handleDrillSelect}
+              onDeselect={() => { setSelectionPath([]); setGhostSelectedId(null); }}
               diffChanges={diffResult?.changes ?? null}
               diffMode={diffMode}
-              onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectedIds([]); }}
+              onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectionPath([]); }}
             />
           ) : (
             <div style={styles.viewportPlaceholder}>
@@ -781,10 +835,10 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                     style={{ ...styles.overlayRow, ...(isSelected ? styles.overlayRowSelected : {}) }}
                     onClick={() => {
                       if (c.type === "removed") {
-                        setGhostSelectedId(c.entityId); setSelectedIds([]);
+                        setGhostSelectedId(c.entityId); setSelectionPath([]);
                       } else {
                         const match = activeSnapshot.entities.find((e) => e.entityId === c.entityId);
-                        if (match) { setSelectedIds([match.id]); setGhostSelectedId(null); }
+                        if (match) { handleTreeSelect(match.id); setGhostSelectedId(null); }
                       }
                     }}
                   >
