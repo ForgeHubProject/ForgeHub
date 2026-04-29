@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
@@ -7,8 +8,6 @@ import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Sna
 type Props = {
   token: string;
   user: User;
-  repo: Repo;
-  onBack: () => void;
 };
 
 type Module = {
@@ -32,7 +31,14 @@ const DIFF_ICON: Record<string, string> = {
   moved:    "↔",
 };
 
-export function SnapshotPage({ token, user, repo, onBack }: Props) {
+export function SnapshotPage({ token, user }: Props) {
+  const { handle = "", repoName = "" } = useParams<{ handle: string; repoName: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [repo, setRepo]       = useState<Repo | null>(null);
+  const [repoLoading, setRepoLoading] = useState(true);
+
   const [snapshots, setSnapshots]           = useState<SnapshotSummary[]>([]);
   const [selectedModuleFile, setSelectedModuleFile] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | null>(null);
@@ -50,7 +56,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [branches, setBranches]             = useState<BranchInfo[]>([]);
   const [tags, setTags]                     = useState<TagInfo[]>([]);
   const [defaultBranchName, setDefaultBranchName] = useState<string>("");
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(() => searchParams.get("branch"));
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branchFilter, setBranchFilter]     = useState("");
   const [newBranchName, setNewBranchName]   = useState("");
@@ -59,7 +65,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const branchMenuRef = useRef<HTMLDivElement>(null);
 
   // Tab: "code" | "pulls"
-  const [activeTab, setActiveTab] = useState<"code" | "pulls">("code");
+  const [activeTab, setActiveTab] = useState<"code" | "pulls">(() =>
+    searchParams.get("tab") === "pulls" ? "pulls" : "code"
+  );
 
   // Pull requests
   const [pulls, setPulls]                 = useState<PullRequest[]>([]);
@@ -76,10 +84,18 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [forking, setForking]     = useState(false);
   const [forkMsg, setForkMsg]     = useState<string | null>(null);
 
-  const handle    = repo.ownerHandle ?? user.handle;
-  const repoName  = repo.name;
   const cloneUrl  = `${API_BASE}/git/${handle}/${repoName}.git`;
   const isOwner   = handle === user.handle;
+
+  // Load repo metadata from API
+  useEffect(() => {
+    if (!handle || !repoName) return;
+    setRepoLoading(true);
+    getRepo(token, handle, repoName)
+      .then(setRepo)
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load repo"))
+      .finally(() => setRepoLoading(false));
+  }, [token, handle, repoName]);
 
   // Group snapshots by sourceFile → Modules
   const modules = useMemo<Module[]>(() => {
@@ -309,6 +325,10 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   async function handleBranchChange(branch: string) {
     const b = branch === "__all__" ? null : branch;
     setSelectedBranch(b);
+    setSearchParams((prev) => {
+      if (b) prev.set("branch", b); else prev.delete("branch");
+      return prev;
+    }, { replace: true });
     setActiveSnapshot(null);
     setActiveCommitId(null);
     setDiffResult(null);
@@ -417,7 +437,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     <div style={styles.shell}>
       {/* ── Row 1: repo identity + actions ── */}
       <header style={styles.topbar}>
-        <button onClick={onBack} style={styles.backBtn}>←</button>
+        <button onClick={() => navigate("/")} style={styles.backBtn}>←</button>
 
         {/* Breadcrumb */}
         <div style={styles.breadcrumb}>
@@ -425,7 +445,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
           <span style={styles.breadcrumbSep}>/</span>
           <span style={styles.breadcrumbRepo}>{repoName}</span>
         </div>
-        <span style={styles.visibilityBadge}>{repo.visibility}</span>
+        <span style={styles.visibilityBadge}>{repoLoading ? "…" : (repo?.visibility ?? "public")}</span>
 
         <div style={{ flex: 1 }} />
 
@@ -457,13 +477,20 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
         <div style={styles.navTabs}>
           <button
             style={{ ...styles.navTab, ...(activeTab === "code" ? styles.navTabActive : {}) }}
-            onClick={() => setActiveTab("code")}
+            onClick={() => {
+              setActiveTab("code");
+              setSearchParams((prev) => { prev.delete("tab"); return prev; }, { replace: true });
+            }}
           >
             <span style={styles.navTabIcon}>{"<>"}</span> Code
           </button>
           <button
             style={{ ...styles.navTab, ...(activeTab === "pulls" ? styles.navTabActive : {}) }}
-            onClick={() => { setActiveTab("pulls"); loadPulls(); }}
+            onClick={() => {
+              setActiveTab("pulls");
+              setSearchParams((prev) => { prev.set("tab", "pulls"); return prev; }, { replace: true });
+              loadPulls();
+            }}
           >
             ⑂ Pull Requests
             {pulls.filter((p) => p.state === "open").length > 0 && (
