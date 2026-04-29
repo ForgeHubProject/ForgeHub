@@ -148,18 +148,22 @@ function GhostEntity({ snap, onSelect }: { snap: DiffEntitySnapshot; onSelect?: 
 
 // ─── single entity ───────────────────────────────────────────────────────────
 
+type SelectionState = "none" | "selected" | "ancestor";
+
 function EntityMesh({
   node,
-  isSelected,
+  selectionState,
   onSelect,
   diffType,
 }: {
   node: VNode;
-  isSelected: boolean;
+  selectionState: SelectionState;
   onSelect: (id: string) => void;
   diffType?: DiffChangeType;
 }) {
   const [hovered, setHovered] = useState(false);
+  const isSelected = selectionState === "selected";
+  const isAncestor = selectionState === "ancestor";
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected
     ? "#f59e0b"
@@ -174,11 +178,12 @@ function EntityMesh({
     : PartModel;
 
   const labelBg =
-    isSelected          ? "#f59e0b"
-    : diffType === "added"     ? "#22c55e"
-    : diffType === "modified"  ? "#f59e0b"
-    : diffType === "moved"     ? "#f97316"
-    : diffType === "unchanged" ? "rgba(71,85,105,0.75)"
+    isSelected                         ? "#f59e0b"
+    : isAncestor                       ? "rgba(148,163,184,0.6)"
+    : diffType === "added"             ? "#22c55e"
+    : diffType === "modified"          ? "#f59e0b"
+    : diffType === "moved"             ? "#f97316"
+    : diffType === "unchanged"         ? "rgba(71,85,105,0.75)"
     : "rgba(255,255,255,0.92)";
 
   const labelTextColor = (diffType && diffType !== "unchanged") || isSelected ? "#fff" : "#1e293b";
@@ -191,14 +196,23 @@ function EntityMesh({
     >
       <Model color={color} size={size} />
 
-      {isSelected && (
+      {/* Ancestor context ring — dashed look via low segment count + gap */}
+      {isAncestor && (
         <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[size * 0.62, size * 0.78, 32]} />
-          <meshBasicMaterial color="#f59e0b" transparent opacity={0.7} side={THREE.DoubleSide} />
+          <ringGeometry args={[size * 0.68, size * 0.88, 18]} />
+          <meshBasicMaterial color="#94a3b8" transparent opacity={0.4} side={THREE.DoubleSide} />
         </mesh>
       )}
 
-      {(isSelected || hovered || diffType) && (
+      {/* Selected ring — solid yellow */}
+      {isSelected && (
+        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[size * 0.62, size * 0.78, 32]} />
+          <meshBasicMaterial color="#f59e0b" transparent opacity={0.75} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      {(isSelected || isAncestor || hovered || diffType) && (
         <Html
           position={[0, size * 0.55 + 1.5, 0]}
           center
@@ -212,7 +226,8 @@ function EntityMesh({
             padding: "2px 8px", borderRadius: 4,
             fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
             boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
-            border: `1px solid ${isSelected ? "#d97706" : "transparent"}`,
+            border: `1px solid ${isSelected ? "#d97706" : isAncestor ? "rgba(148,163,184,0.4)" : "transparent"}`,
+            opacity: isAncestor && !hovered ? 0.7 : 1,
           }}>
             {node.name}
           </div>
@@ -226,12 +241,12 @@ function EntityMesh({
 
 function SceneNode({
   node,
-  selectedIds,
+  selectionPath,
   onSelect,
   diffTypeMap,
 }: {
   node: VNode;
-  selectedIds: string[];
+  selectionPath: string[];
   onSelect: (id: string) => void;
   diffTypeMap: Map<string, DiffChangeType> | null;
 }) {
@@ -240,12 +255,17 @@ function SceneNode({
   const s = (node.transform?.scale ?? [1, 1, 1]) as [number, number, number];
   const diffType = diffTypeMap ? (diffTypeMap.get(node.entityId) ?? "unchanged") : undefined;
 
+  const selectionState: SelectionState =
+    selectionPath[selectionPath.length - 1] === node.id ? "selected"
+    : selectionPath.includes(node.id) ? "ancestor"
+    : "none";
+
   return (
     <group position={p} rotation={r} scale={s}>
       {node.transform !== null && (
         <EntityMesh
           node={node}
-          isSelected={selectedIds.includes(node.id)}
+          selectionState={selectionState}
           onSelect={onSelect}
           diffType={diffType}
         />
@@ -254,7 +274,7 @@ function SceneNode({
         <SceneNode
           key={child.id}
           node={child}
-          selectedIds={selectedIds}
+          selectionPath={selectionPath}
           onSelect={onSelect}
           diffTypeMap={diffTypeMap}
         />
@@ -268,7 +288,7 @@ function SceneNode({
 type Props = {
   entities: Entity[];
   constraints: Constraint[];
-  selectedIds: string[];
+  selectionPath: string[];
   onSelect: (id: string) => void;
   onDeselect?: () => void;
   diffChanges?: DiffChange[] | null;
@@ -276,7 +296,7 @@ type Props = {
   onSelectGhost?: (entityId: string) => void;
 };
 
-export function Viewport({ entities, selectedIds, onSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
+export function Viewport({ entities, selectionPath, onSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
@@ -314,7 +334,7 @@ export function Viewport({ entities, selectedIds, onSelect, onDeselect, diffChan
               <SceneNode
                 key={root.id}
                 node={root}
-                selectedIds={selectedIds}
+                selectionPath={selectionPath}
                 onSelect={onSelect}
                 diffTypeMap={diffTypeMap}
               />
