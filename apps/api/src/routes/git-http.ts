@@ -273,25 +273,37 @@ export async function gitHttpRoutes(app: FastifyInstance) {
 
     const repoPath = bareRepoPathFromKey(repo.storageKey);
 
-    // Snapshot HEAD before push so we know which commits are new
-    let headBefore: string | null = null;
+    // Snapshot all branch SHAs before the push
+    const shasBefore = new Map<string, string>();
     try {
-      const { stdout } = await execFile("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoPath });
-      headBefore = stdout.trim();
+      const { stdout } = await execFile("git", [
+        "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)",
+      ], { cwd: repoPath });
+      for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        const sep = line.indexOf("|");
+        shasBefore.set(line.slice(0, sep), line.slice(sep + 1));
+      }
     } catch { /* empty repo — first push */ }
 
     await pipeGitService(reply, request, "git-receive-pack", repoPath, false);
 
-    // Ingest any new .gltf files from newly pushed commits (fire-and-forget)
+    // After push: ingest any branch whose SHA changed or is new (fire-and-forget)
     try {
-      const { stdout } = await execFile("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoPath });
-      const headAfter = stdout.trim();
-      if (headAfter && headAfter !== headBefore) {
-        const repoId = repo.id;
-        ingestCommitRange(repoId, repoPath, headBefore ?? "0".repeat(40), headAfter)
-          .catch((err: unknown) => app.log.error({ err }, "post-push ingestion failed"));
+      const { stdout } = await execFile("git", [
+        "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)",
+      ], { cwd: repoPath });
+      const repoId = repo.id;
+      for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        const sep = line.indexOf("|");
+        const branchName = line.slice(0, sep);
+        const newSha = line.slice(sep + 1);
+        const oldSha = shasBefore.get(branchName) ?? "0".repeat(40);
+        if (newSha !== oldSha) {
+          ingestCommitRange(repoId, repoPath, oldSha, newSha)
+            .catch((err: unknown) => app.log.error({ err }, `post-push ingestion failed for ${branchName}`));
+        }
       }
-    } catch { /* HEAD didn't update — nothing to ingest */ }
+    } catch { /* nothing to ingest */ }
 
     return reply;
   });
