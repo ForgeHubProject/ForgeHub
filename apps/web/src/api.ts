@@ -48,6 +48,14 @@ export async function getMyRepos(token: string): Promise<{ repos: Repo[] }> {
   return req("/repos/mine", { token });
 }
 
+export async function getRepo(
+  token: string | null,
+  handle: string,
+  name: string,
+): Promise<Repo> {
+  return req(`/repos/${handle}/${name}`, { token: token ?? undefined });
+}
+
 export async function createRepo(
   token: string,
   name: string,

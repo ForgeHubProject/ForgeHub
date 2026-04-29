@@ -1,28 +1,24 @@
 import { useState } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
 import { RepoListPage } from "./pages/RepoListPage";
 import { SnapshotPage } from "./pages/SnapshotPage";
-import type { Repo, User } from "./types";
+import type { User } from "./types";
 
-type View =
-  | { name: "login" }
-  | { name: "repos" }
-  | { name: "snapshot"; repo: Repo };
-
-export function App() {
+function AppRoutes() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("fh_token"));
   const [user, setUser] = useState<User | null>(() => {
     const raw = localStorage.getItem("fh_user");
     return raw ? (JSON.parse(raw) as User) : null;
   });
-  const [view, setView] = useState<View>(token && user ? { name: "repos" } : { name: "login" });
+  const navigate = useNavigate();
 
   function handleAuth(t: string, u: User) {
     localStorage.setItem("fh_token", t);
     localStorage.setItem("fh_user", JSON.stringify(u));
     setToken(t);
     setUser(u);
-    setView({ name: "repos" });
+    navigate("/");
   }
 
   function handleLogout() {
@@ -30,34 +26,53 @@ export function App() {
     localStorage.removeItem("fh_user");
     setToken(null);
     setUser(null);
-    setView({ name: "login" });
+    navigate("/login");
   }
 
-  if (view.name === "login" || !token || !user) {
-    return <LoginPage onAuth={handleAuth} />;
-  }
+  const authed = !!token && !!user;
 
-  if (view.name === "repos") {
-    return (
-      <RepoListPage
-        token={token}
-        user={user}
-        onSelectRepo={(repo) => setView({ name: "snapshot", repo })}
-        onLogout={handleLogout}
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={authed ? <Navigate to="/" replace /> : <LoginPage onAuth={handleAuth} />}
       />
-    );
-  }
-
-  if (view.name === "snapshot") {
-    return (
-      <SnapshotPage
-        token={token}
-        user={user}
-        repo={view.repo}
-        onBack={() => setView({ name: "repos" })}
+      <Route
+        path="/"
+        element={
+          authed ? (
+            <RepoListPage
+              token={token!}
+              user={user!}
+              onSelectRepo={(repo) =>
+                navigate(`/${repo.ownerHandle ?? user!.handle}/${repo.name}`)
+              }
+              onLogout={handleLogout}
+            />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
       />
-    );
-  }
+      <Route
+        path="/:handle/:repoName/*"
+        element={
+          authed ? (
+            <SnapshotPage token={token!} user={user!} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
 
-  return null;
+export function App() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
+  );
 }
