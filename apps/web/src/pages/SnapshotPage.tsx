@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
@@ -7,8 +8,6 @@ import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Sna
 type Props = {
   token: string;
   user: User;
-  repo: Repo;
-  onBack: () => void;
 };
 
 type Module = {
@@ -32,12 +31,19 @@ const DIFF_ICON: Record<string, string> = {
   moved:    "↔",
 };
 
-export function SnapshotPage({ token, user, repo, onBack }: Props) {
+export function SnapshotPage({ token, user }: Props) {
+  const { handle = "", repoName = "" } = useParams<{ handle: string; repoName: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [repo, setRepo]       = useState<Repo | null>(null);
+  const [repoLoading, setRepoLoading] = useState(true);
+
   const [snapshots, setSnapshots]           = useState<SnapshotSummary[]>([]);
   const [selectedModuleFile, setSelectedModuleFile] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | null>(null);
   const [activeCommitId, setActiveCommitId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds]       = useState<string[]>([]);
+  const [selectionPath, setSelectionPath]   = useState<string[]>([]);
   const [loadingSnap, setLoadingSnap]       = useState(false);
   const [error, setError]                   = useState<string | null>(null);
 
@@ -50,7 +56,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [branches, setBranches]             = useState<BranchInfo[]>([]);
   const [tags, setTags]                     = useState<TagInfo[]>([]);
   const [defaultBranchName, setDefaultBranchName] = useState<string>("");
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(() => searchParams.get("branch"));
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branchFilter, setBranchFilter]     = useState("");
   const [newBranchName, setNewBranchName]   = useState("");
@@ -59,7 +65,9 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const branchMenuRef = useRef<HTMLDivElement>(null);
 
   // Tab: "code" | "pulls"
-  const [activeTab, setActiveTab] = useState<"code" | "pulls">("code");
+  const [activeTab, setActiveTab] = useState<"code" | "pulls">(() =>
+    searchParams.get("tab") === "pulls" ? "pulls" : "code"
+  );
 
   // Pull requests
   const [pulls, setPulls]                 = useState<PullRequest[]>([]);
@@ -76,10 +84,18 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   const [forking, setForking]     = useState(false);
   const [forkMsg, setForkMsg]     = useState<string | null>(null);
 
-  const handle    = repo.ownerHandle ?? user.handle;
-  const repoName  = repo.name;
   const cloneUrl  = `${API_BASE}/git/${handle}/${repoName}.git`;
   const isOwner   = handle === user.handle;
+
+  // Load repo metadata from API
+  useEffect(() => {
+    if (!handle || !repoName) return;
+    setRepoLoading(true);
+    getRepo(token, handle, repoName)
+      .then(setRepo)
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load repo"))
+      .finally(() => setRepoLoading(false));
+  }, [token, handle, repoName]);
 
   // Group snapshots by sourceFile → Modules
   const modules = useMemo<Module[]>(() => {
@@ -284,7 +300,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
       const snap = await getSnapshot(token, handle, repoName, commitId);
       setActiveSnapshot(snap);
       setActiveCommitId(commitId);
-      setSelectedIds([]);
+      setSelectionPath([]);
       setGhostSelectedId(null);
       setDiffMode(true);
 
@@ -309,10 +325,14 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
   async function handleBranchChange(branch: string) {
     const b = branch === "__all__" ? null : branch;
     setSelectedBranch(b);
+    setSearchParams((prev) => {
+      if (b) prev.set("branch", b); else prev.delete("branch");
+      return prev;
+    }, { replace: true });
     setActiveSnapshot(null);
     setActiveCommitId(null);
     setDiffResult(null);
-    setSelectedIds([]);
+    setSelectionPath([]);
     setLoadingSnap(true);
     setError(null);
     try {
@@ -341,10 +361,64 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     }
   }
 
-  const selectedEntity =
-    selectedIds.length === 1
-      ? activeSnapshot?.entities.find((e) => e.id === selectedIds[0])
-      : null;
+  // ── drill-down selection helpers ─────────────────────────────────────────────
+
+  function buildParentMap(entities: Entity[]): Map<string, string | null> {
+    const entityIdToDbId = new Map<string, string>();
+    for (const e of entities) entityIdToDbId.set(e.entityId, e.id);
+    const m = new Map<string, string | null>();
+    for (const e of entities) {
+      m.set(e.id, e.parentEntityId ? (entityIdToDbId.get(e.parentEntityId) ?? null) : null);
+    }
+    return m;
+  }
+
+  function getAncestorChain(id: string, parentMap: Map<string, string | null>): string[] {
+    const chain: string[] = [];
+    let cur: string | null = id;
+    while (cur !== null) {
+      chain.unshift(cur);
+      cur = parentMap.get(cur) ?? null;
+    }
+    return chain; // [root, ..., id]
+  }
+
+  function handleDrillSelect(clickedId: string) {
+    if (!activeSnapshot) return;
+    setGhostSelectedId(null);
+    const parentMap = buildParentMap(activeSnapshot.entities);
+    const chain = getAncestorChain(clickedId, parentMap);
+
+    if (selectionPath.length === 0) {
+      // Nothing selected yet — select the root ancestor
+      setSelectionPath([chain[0]]);
+      return;
+    }
+
+    const focusId = selectionPath[selectionPath.length - 1];
+    if (focusId === clickedId) return; // already focused
+
+    const focusIdx = chain.indexOf(focusId);
+    if (focusIdx !== -1) {
+      // Clicked entity is inside (or is) the focused node — drill one level deeper
+      const nextId = chain[focusIdx + 1];
+      if (nextId) setSelectionPath([...selectionPath, nextId]);
+    } else {
+      // Clicked outside current group — start fresh from root of clicked entity
+      setSelectionPath([chain[0]]);
+    }
+  }
+
+  function handleTreeSelect(id: string) {
+    if (!activeSnapshot) return;
+    setGhostSelectedId(null);
+    const parentMap = buildParentMap(activeSnapshot.entities);
+    setSelectionPath(getAncestorChain(id, parentMap));
+  }
+
+  const selectedEntity = activeSnapshot?.entities.find(
+    (e) => e.id === selectionPath[selectionPath.length - 1]
+  ) ?? null;
 
   // Works for both live entities and ghost (removed) entities
   const selectedChange = useMemo(() => {
@@ -363,7 +437,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
     <div style={styles.shell}>
       {/* ── Row 1: repo identity + actions ── */}
       <header style={styles.topbar}>
-        <button onClick={onBack} style={styles.backBtn}>←</button>
+        <button onClick={() => navigate("/")} style={styles.backBtn}>←</button>
 
         {/* Breadcrumb */}
         <div style={styles.breadcrumb}>
@@ -371,7 +445,7 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
           <span style={styles.breadcrumbSep}>/</span>
           <span style={styles.breadcrumbRepo}>{repoName}</span>
         </div>
-        <span style={styles.visibilityBadge}>{repo.visibility}</span>
+        <span style={styles.visibilityBadge}>{repoLoading ? "…" : (repo?.visibility ?? "public")}</span>
 
         <div style={{ flex: 1 }} />
 
@@ -403,13 +477,20 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
         <div style={styles.navTabs}>
           <button
             style={{ ...styles.navTab, ...(activeTab === "code" ? styles.navTabActive : {}) }}
-            onClick={() => setActiveTab("code")}
+            onClick={() => {
+              setActiveTab("code");
+              setSearchParams((prev) => { prev.delete("tab"); return prev; }, { replace: true });
+            }}
           >
             <span style={styles.navTabIcon}>{"<>"}</span> Code
           </button>
           <button
             style={{ ...styles.navTab, ...(activeTab === "pulls" ? styles.navTabActive : {}) }}
-            onClick={() => { setActiveTab("pulls"); loadPulls(); }}
+            onClick={() => {
+              setActiveTab("pulls");
+              setSearchParams((prev) => { prev.set("tab", "pulls"); return prev; }, { replace: true });
+              loadPulls();
+            }}
           >
             ⑂ Pull Requests
             {pulls.filter((p) => p.state === "open").length > 0 && (
@@ -491,7 +572,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                   </div>
 
                   {/* New branch */}
-                  {isOwner && (
+                  {/* New branch — only when repo has commits */}
+                  {isOwner && branches.length > 0 && (
                     <div style={styles.branchMenuCreate}>
                       <div style={styles.branchMenuGroupLabel}>New branch from <strong>{activeBranchLabel}</strong></div>
                       <div style={{ display: "flex", gap: 6, padding: "6px 10px" }}>
@@ -511,6 +593,11 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                         </button>
                       </div>
                       {branchError && <div style={{ padding: "0 10px 8px", fontSize: 11, color: "#ef4444" }}>{branchError}</div>}
+                    </div>
+                  )}
+                  {isOwner && branches.length === 0 && (
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: "#9ca3af", borderTop: "1px solid #f3f4f6" }}>
+                      Push a commit first to create branches.
                     </div>
                   )}
                 </div>
@@ -715,8 +802,8 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                 <ModuleTree
                   entities={activeSnapshot.entities}
                   constraints={activeSnapshot.constraints}
-                  selectedIds={selectedIds}
-                  onSelect={(id) => setSelectedIds([id])}
+                  selectedIds={selectionPath}
+                  onSelect={(id) => handleTreeSelect(id)}
                 />
               </div>
             </div>
@@ -733,12 +820,12 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
             <Viewport
               entities={activeSnapshot.entities}
               constraints={activeSnapshot.constraints}
-              selectedIds={selectedIds}
-              onSelect={(id) => { setSelectedIds([id]); setGhostSelectedId(null); }}
-              onDeselect={() => { setSelectedIds([]); setGhostSelectedId(null); }}
+              selectionPath={selectionPath}
+              onSelect={handleDrillSelect}
+              onDeselect={() => { setSelectionPath([]); setGhostSelectedId(null); }}
               diffChanges={diffResult?.changes ?? null}
               diffMode={diffMode}
-              onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectedIds([]); }}
+              onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectionPath([]); }}
             />
           ) : (
             <div style={styles.viewportPlaceholder}>
@@ -775,10 +862,10 @@ export function SnapshotPage({ token, user, repo, onBack }: Props) {
                     style={{ ...styles.overlayRow, ...(isSelected ? styles.overlayRowSelected : {}) }}
                     onClick={() => {
                       if (c.type === "removed") {
-                        setGhostSelectedId(c.entityId); setSelectedIds([]);
+                        setGhostSelectedId(c.entityId); setSelectionPath([]);
                       } else {
                         const match = activeSnapshot.entities.find((e) => e.entityId === c.entityId);
-                        if (match) { setSelectedIds([match.id]); setGhostSelectedId(null); }
+                        if (match) { handleTreeSelect(match.id); setGhostSelectedId(null); }
                       }
                     }}
                   >
