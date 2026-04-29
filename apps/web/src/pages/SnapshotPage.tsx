@@ -44,7 +44,6 @@ export function SnapshotPage({ token, user }: Props) {
   const [activeSnapshot, setActiveSnapshot] = useState<Snapshot | null>(null);
   const [activeCommitId, setActiveCommitId] = useState<string | null>(null);
   const [selectionPath, setSelectionPath]   = useState<string[]>([]);
-  const [ctrlSelectedIds, setCtrlSelectedIds] = useState<string[]>([]);
   const [loadingSnap, setLoadingSnap]       = useState(false);
   const [error, setError]                   = useState<string | null>(null);
 
@@ -382,12 +381,6 @@ export function SnapshotPage({ token, user }: Props) {
       cur = parentMap.get(cur) ?? null;
     }
     return chain; // [root, ..., id]
-  }
-
-  function handleCtrlSelect(id: string) {
-    setCtrlSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
   }
 
   function handleDrillSelect(clickedId: string) {
@@ -828,10 +821,9 @@ export function SnapshotPage({ token, user }: Props) {
               entities={activeSnapshot.entities}
               constraints={activeSnapshot.constraints}
               selectionPath={selectionPath}
-              ctrlSelectedIds={ctrlSelectedIds}
               onSelect={handleDrillSelect}
-              onCtrlSelect={handleCtrlSelect}
-              onDeselect={() => { setSelectionPath([]); setCtrlSelectedIds([]); setGhostSelectedId(null); }}
+              onDirectSelect={handleTreeSelect}
+              onDeselect={() => { setSelectionPath([]); setGhostSelectedId(null); }}
               diffChanges={diffResult?.changes ?? null}
               diffMode={diffMode}
               onSelectGhost={(eid) => { setGhostSelectedId(eid); setSelectionPath([]); }}

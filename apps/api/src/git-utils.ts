@@ -132,7 +132,7 @@ export async function performMerge(
 
   try {
     // Clone locally and checkout the target branch
-    await execFile("git", ["clone", "--local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
     await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
 
     // Check if already merged (use origin/ prefix — local branch doesn't exist in the clone)
