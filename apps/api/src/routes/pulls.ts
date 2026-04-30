@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, performMerge, resolveBranchSha } from "../git-utils.js";
+import { branchExists, defaultBranch, performMerge, resolveBranchSha, type MergeStrategy } from "../git-utils.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 
@@ -173,7 +173,7 @@ export async function pullRoutes(app: FastifyInstance) {
 
     if (!result.ok) {
       if ("alreadyMerged" in result) return reply.status(409).send({ error: "Branch is already merged" });
-      return reply.status(409).send({ error: "Merge conflict — cannot auto-merge" });
+      return reply.status(409).send({ error: "Merge conflict — cannot auto-merge", resolvable: true });
     }
 
     await prisma.pullRequest.update({
@@ -182,6 +182,60 @@ export async function pullRoutes(app: FastifyInstance) {
     });
 
     // Fire-and-forget: ingest any new .gltf files introduced by the merge
+    if (beforeSha && result.sha) {
+      const repoPath = bareRepoPathFromKey(repo.storageKey);
+      const repoId = repo.id;
+      const afterSha = result.sha;
+      setImmediate(() => {
+        ingestCommitRange(repoId, repoPath, beforeSha, afterSha).catch(() => {});
+      });
+    }
+
+    return { merged: true, sha: result.sha };
+  });
+
+  // POST /repos/:handle/:name/pulls/:number/merge-resolve — resolve a conflict with ours/theirs
+  app.post("/repos/:handle/:name/pulls/:number/merge-resolve", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "No git storage" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+    if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+
+    const { strategy, commitMessage } = request.body as { strategy?: string; commitMessage?: string };
+    if (strategy !== "ours" && strategy !== "theirs") {
+      return reply.status(400).send({ error: "strategy must be 'ours' or 'theirs'" });
+    }
+
+    const message = commitMessage?.trim()
+      || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number}) [resolved: ${strategy}]`;
+
+    const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
+
+    let result: Awaited<ReturnType<typeof performMerge>>;
+    try {
+      result = await performMerge(repo.storageKey, pr.fromBranch, pr.toBranch, message, strategy as MergeStrategy);
+    } catch (err) {
+      app.log.error({ err }, "merge-resolve: performMerge threw unexpectedly");
+      return reply.status(500).send({ error: "Merge failed due to a server error" });
+    }
+
+    if (!result.ok) {
+      if ("alreadyMerged" in result) return reply.status(409).send({ error: "Branch is already merged" });
+      return reply.status(409).send({ error: "Merge conflict could not be resolved automatically" });
+    }
+
+    await prisma.pullRequest.update({
+      where: { id: pr.id },
+      data: { state: "MERGED", mergedAt: new Date() },
+    });
+
     if (beforeSha && result.sha) {
       const repoPath = bareRepoPathFromKey(repo.storageKey);
       const repoId = repo.id;

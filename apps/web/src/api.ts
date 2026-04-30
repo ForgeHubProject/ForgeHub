@@ -280,6 +280,20 @@ export async function mergePull(
   });
 }
 
+export async function resolveMergePr(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  strategy: "ours" | "theirs",
+): Promise<{ merged: boolean; sha: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/merge-resolve`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ strategy }),
+  });
+}
+
 export async function closePull(
   token: string,
   handle: string,
