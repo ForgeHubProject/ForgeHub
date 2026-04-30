@@ -121,11 +121,14 @@ export type MergeResult =
   | { ok: false; conflicts: true }
   | { ok: false; alreadyMerged: true };
 
+export type MergeStrategy = "ours" | "theirs" | "none";
+
 export async function performMerge(
   storageKey: string,
   fromBranch: string,
   toBranch: string,
   message: string,
+  strategy: MergeStrategy = "none",
 ): Promise<MergeResult> {
   const repoPath = bareRepoPathFromKey(storageKey);
   const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-merge-"));
@@ -141,12 +144,14 @@ export async function performMerge(
       return { ok: false, alreadyMerged: true };
     } catch { /* not ancestor — proceed */ }
 
-    // Attempt merge with explicit identity so git doesn't fail on unconfigured hosts
+    // Attempt merge with explicit identity so git doesn't fail on unconfigured hosts.
+    // When a strategy is given, pass -X ours/-X theirs to auto-resolve conflicts.
+    const strategyArgs = strategy === "none" ? [] : ["-X", strategy];
     try {
       await execFile("git", [
         "-c", "user.name=ForgeHub",
         "-c", "user.email=merge@forgehub.io",
-        "merge", "--no-ff", "-m", message, `origin/${fromBranch}`,
+        "merge", "--no-ff", "-m", message, ...strategyArgs, `origin/${fromBranch}`,
       ], { cwd: tmpDir, maxBuffer: MAX });
     } catch {
       return { ok: false, conflicts: true };

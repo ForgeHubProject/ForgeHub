@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull } from "../api";
+import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull, resolveMergePr } from "../api";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { BranchInfo, DiffChange, DiffResult, Entity, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
@@ -75,6 +75,7 @@ export function SnapshotPage({ token, user }: Props) {
   const [selectedPr, setSelectedPr]       = useState<PullRequest | null>(null);
   const [prActionLoading, setPrActionLoading] = useState(false);
   const [prError, setPrError]             = useState<string | null>(null);
+  const [prConflict, setPrConflict]       = useState(false);
   const [showNewPr, setShowNewPr]         = useState(false);
   const [newPrTitle, setNewPrTitle]       = useState("");
   const [newPrFrom, setNewPrFrom]         = useState("");
@@ -201,13 +202,32 @@ export function SnapshotPage({ token, user }: Props) {
   async function handleMergePr(pr: PullRequest) {
     setPrActionLoading(true);
     setPrError(null);
+    setPrConflict(false);
     try {
       await mergePull(token, handle, repoName, pr.number);
       setSelectedPr({ ...pr, state: "merged" });
       await loadPulls();
       await refreshSnapshots();
     } catch (e) {
-      setPrError(e instanceof Error ? e.message : "Merge failed");
+      const msg = e instanceof Error ? e.message : "Merge failed";
+      setPrError(msg);
+      if (msg.includes("cannot auto-merge")) setPrConflict(true);
+    } finally {
+      setPrActionLoading(false);
+    }
+  }
+
+  async function handleResolveConflict(pr: PullRequest, strategy: "ours" | "theirs") {
+    setPrActionLoading(true);
+    setPrError(null);
+    setPrConflict(false);
+    try {
+      await resolveMergePr(token, handle, repoName, pr.number, strategy);
+      setSelectedPr({ ...pr, state: "merged" });
+      await loadPulls();
+      await refreshSnapshots();
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Resolution failed");
     } finally {
       setPrActionLoading(false);
     }
@@ -460,14 +480,6 @@ export function SnapshotPage({ token, user }: Props) {
             ⑂ Fork
           </button>
           {forkMsg && <span style={{ fontSize: 11, color: "#22c55e" }}>{forkMsg}</span>}
-          <button
-            onClick={() => refreshSnapshots()}
-            disabled={loadingSnap}
-            style={styles.actionBtn}
-            title="Refresh commits"
-          >
-            ↻
-          </button>
         </div>
       </header>
 
@@ -652,7 +664,7 @@ export function SnapshotPage({ token, user }: Props) {
                 <button
                   key={pr.id}
                   style={{ ...styles.prItem, ...(selectedPr?.id === pr.id ? styles.prItemActive : {}) }}
-                  onClick={() => setSelectedPr(pr)}
+                  onClick={() => { setSelectedPr(pr); setPrConflict(false); setPrError(null); }}
                 >
                   <span style={{ ...styles.prStateDot, backgroundColor: pr.state === "open" ? "#22c55e" : pr.state === "merged" ? "#a78bfa" : "#9ca3af" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -737,8 +749,38 @@ export function SnapshotPage({ token, user }: Props) {
                   {selectedPr.mergedAt && (
                     <div style={{ fontSize: 12, color: "#7c3aed" }}>Merged {new Date(selectedPr.mergedAt).toLocaleString()}</div>
                   )}
-                  {prError && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>}
-                  {selectedPr.state === "open" && (
+                  {prError && !prConflict && (
+                    <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>
+                  )}
+                  {prConflict && selectedPr.state === "open" && (
+                    <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#b91c1c" }}>
+                        ⚠ Merge conflict — the branches have conflicting changes to the same entities.
+                      </p>
+                      <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                        Choose which branch's version wins for all conflicting entities:
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          style={{ ...styles.closeBtn, background: "#1e3a5f", color: "#fff", fontSize: 12 }}
+                          disabled={prActionLoading}
+                          onClick={() => handleResolveConflict(selectedPr, "theirs")}
+                          title={`Keep ${selectedPr.fromBranch}'s version of conflicting entities`}
+                        >
+                          {prActionLoading ? "Resolving…" : `Keep ${selectedPr.fromBranch}`}
+                        </button>
+                        <button
+                          style={{ ...styles.closeBtn, fontSize: 12 }}
+                          disabled={prActionLoading}
+                          onClick={() => handleResolveConflict(selectedPr, "ours")}
+                          title={`Keep ${selectedPr.toBranch}'s version of conflicting entities`}
+                        >
+                          {prActionLoading ? "Resolving…" : `Keep ${selectedPr.toBranch}`}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {selectedPr.state === "open" && !prConflict && (
                     <div style={{ display: "flex", gap: 8 }}>
                       <button
                         style={styles.mergeBtn}
@@ -755,6 +797,14 @@ export function SnapshotPage({ token, user }: Props) {
                         Close
                       </button>
                     </div>
+                  )}
+                  {selectedPr.state === "open" && prConflict && !prActionLoading && (
+                    <button
+                      style={{ ...styles.closeBtn, alignSelf: "flex-start" }}
+                      onClick={() => { setPrConflict(false); setPrError(null); }}
+                    >
+                      Cancel
+                    </button>
                   )}
                 </div>
               ) : (
