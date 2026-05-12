@@ -47,6 +47,7 @@ function fmtSnap(e: EntityRow) {
 }
 
 export type GltfCompareResult = {
+  kind: "gltf-scene";
   baseSnapshotId: string;
   targetSnapshotId: string;
   summary: {
@@ -156,6 +157,7 @@ export function compareGltfSceneSnapshots(
   changes.sort((a, b) => a.path.localeCompare(b.path) || a.type.localeCompare(b.type));
 
   return {
+    kind: "gltf-scene" as const,
     baseSnapshotId,
     targetSnapshotId,
     summary: {
