@@ -1,7 +1,7 @@
-import { prisma } from "../prisma.js";
-import { parseGltf, type GltfDocument } from "../gltf-parser.js";
-import type { ArtifactHandler, IngestInput } from "./types.js";
-import { GLTF_SCENE_HANDLER_ID } from "./types.js";
+import { prisma } from "../../prisma.js";
+import { parseGltf, type GltfDocument } from "../../gltf-parser.js";
+import type { ArtifactHandler, IngestInput } from "../types.js";
+import { GLTF_SCENE_HANDLER_ID } from "../types.js";
 
 function matchesGltfPath(path: string): boolean {
   return path.toLowerCase().endsWith(".gltf");
