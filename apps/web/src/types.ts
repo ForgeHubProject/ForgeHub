@@ -55,6 +55,8 @@ export type Constraint = {
 
 export type Snapshot = SnapshotSummary & {
   repoId: string;
+  /** Present when handler stores UTF-8 inline (e.g. plain-text). */
+  snapshotBody: string | null;
   entities: Entity[];
   constraints: Constraint[];
 };
@@ -84,12 +86,39 @@ export type DiffChange = {
   after: DiffEntitySnapshot | null;
 };
 
-export type DiffResult = {
+export type GlTfDiffResult = {
+  kind?: "gltf-scene";
   baseSnapshotId: string;
   targetSnapshotId: string;
   summary: { added: number; removed: number; modified: number; moved: number; unchanged: number };
   changes: DiffChange[];
 };
+
+export type TextDiffLineRow = {
+  type: "added" | "removed" | "unchanged";
+  content: string;
+  oldLine: number | null;
+  newLine: number | null;
+};
+
+export type PlainTextDiffResult = {
+  kind: "plain-text";
+  baseSnapshotId: string;
+  targetSnapshotId: string;
+  summary: { added: number; removed: number; unchanged: number };
+  lines: TextDiffLineRow[];
+};
+
+/** Result of GET /compare — discriminated by `kind` or presence of `lines` vs `changes`. */
+export type DiffResult = GlTfDiffResult | PlainTextDiffResult;
+
+export function isPlainTextDiff(d: DiffResult | null): d is PlainTextDiffResult {
+  return d !== null && "lines" in d;
+}
+
+export function isGlTfDiff(d: DiffResult | null): d is GlTfDiffResult {
+  return d !== null && "changes" in d;
+}
 
 export type BranchInfo = {
   name: string;

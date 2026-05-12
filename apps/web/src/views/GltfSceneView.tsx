@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import type { DiffChange, Entity } from "../types";
+import { isGlTfDiff } from "../types";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 
@@ -94,7 +95,7 @@ export function GltfSceneView({
     activeSnapshot?.entities.find((e) => e.id === selectionPath[selectionPath.length - 1]) ?? null;
 
   const selectedChange = useMemo(() => {
-    if (!diffResult) return null;
+    if (!diffResult || !isGlTfDiff(diffResult)) return null;
     if (ghostSelectedId) return diffResult.changes.find((c) => c.entityId === ghostSelectedId) ?? null;
     if (selectedEntity) return diffResult.changes.find((c) => c.entityId === selectedEntity.entityId) ?? null;
     return null;
@@ -159,7 +160,7 @@ export function GltfSceneView({
               setSelectionPath([]);
               setGhostSelectedId(null);
             }}
-            diffChanges={diffResult?.changes ?? null}
+            diffChanges={isGlTfDiff(diffResult) ? diffResult.changes : null}
             diffMode={diffMode}
             onSelectGhost={(eid) => {
               setGhostSelectedId(eid);
@@ -174,13 +175,13 @@ export function GltfSceneView({
           </div>
         )}
 
-        {activeSnapshot && diffResult && (
+        {activeSnapshot && diffResult && isGlTfDiff(diffResult) && (
           <button style={styles.diffToggle} onClick={() => setDiffMode((d) => !d)}>
             {diffMode ? "◑ Diff" : "◐ Normal"}
           </button>
         )}
 
-        {diffMode && diffResult && activeSnapshot && (
+        {diffMode && diffResult && activeSnapshot && isGlTfDiff(diffResult) && (
           <div style={styles.changesOverlay}>
             <div style={styles.overlayHeader}>
               <span>Changes</span>
@@ -266,7 +267,7 @@ export function GltfSceneView({
                     <span style={styles.commitDate}>{new Date(c.createdAt).toLocaleDateString()}</span>
                     {c.gitCommitSha && <span style={styles.commitSha}>{c.gitCommitSha.slice(0, 7)}</span>}
                   </div>
-                  {hasDiff && diffResult && (
+                  {hasDiff && diffResult && isGlTfDiff(diffResult) && (
                     <div style={styles.commitDiffBadges}>
                       {diffResult.summary.added > 0 && (
                         <span style={diffBadgeStyle("#22c55e")}>+{diffResult.summary.added}</span>

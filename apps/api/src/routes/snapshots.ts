@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
-import { getHandler, GLTF_SCENE_HANDLER_ID } from "../handlers/index.js";
+import { getHandler, GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "../handlers/index.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchShas } from "../git-utils.js";
 
@@ -25,12 +25,25 @@ const gltfSchema = z
   })
   .passthrough();
 
-const ingestBodySchema = z.object({
-  handlerId: z.string().optional(),
-  gltf: gltfSchema,
-  label: z.string().max(200).optional(),
-  sourceFile: z.string().max(255).optional(),
-});
+const ingestBodySchema = z
+  .object({
+    handlerId: z.string().optional(),
+    gltf: gltfSchema.optional(),
+    text: z.string().optional(),
+    label: z.string().max(200).optional(),
+    sourceFile: z.string().max(255).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasGltf = data.gltf !== undefined;
+    const hasText = data.text !== undefined;
+    if (hasGltf === hasText) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide exactly one of gltf or text",
+        path: [],
+      });
+    }
+  });
 
 function formatEntity(e: {
   id: string; entityId: string; parentEntityId: string | null; kind: string;
@@ -90,26 +103,34 @@ export async function snapshotRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
       }
 
-      const { gltf, label, sourceFile } = parsed.data;
-      const requestedHandlerId = parsed.data.handlerId ?? GLTF_SCENE_HANDLER_ID;
+      const body = parsed.data;
+      const inferredHandlerId =
+        body.text !== undefined ? PLAIN_TEXT_HANDLER_ID : GLTF_SCENE_HANDLER_ID;
+      const requestedHandlerId = body.handlerId ?? inferredHandlerId;
       const handler = getHandler(requestedHandlerId);
       if (!handler) {
         return reply.status(400).send({ error: "Unknown handlerId", handlerId: requestedHandlerId });
       }
-      if (requestedHandlerId !== GLTF_SCENE_HANDLER_ID) {
-        return reply.status(501).send({
-          error: "This ingest shape is only implemented for the glTF scene handler",
+      if (requestedHandlerId !== inferredHandlerId) {
+        return reply.status(400).send({
+          error: "handlerId does not match payload (gltf → gltf-scene, text → plain-text)",
           handlerId: requestedHandlerId,
+          inferredHandlerId,
         });
       }
+
+      const utf8Text =
+        body.text !== undefined ? body.text : JSON.stringify(body.gltf);
+      const defaultSource =
+        inferredHandlerId === PLAIN_TEXT_HANDLER_ID ? "upload.txt" : "upload.gltf";
 
       let snapshotId: string;
       try {
         snapshotId = await handler.ingestFromUtf8Text({
           repoId: repo.id,
-          sourceFile: sourceFile?.trim() || "upload.gltf",
-          utf8Text: JSON.stringify(gltf),
-          label: label?.trim() || null,
+          sourceFile: body.sourceFile?.trim() || defaultSource,
+          utf8Text,
+          label: body.label?.trim() || null,
           gitCommitSha: null,
         });
       } catch (e) {
@@ -133,6 +154,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
         schemaVersion: snapshot.schemaVersion,
         createdAt: snapshot.createdAt.toISOString(),
         gitCommitSha: snapshot.gitCommitSha ?? null,
+        snapshotBody: snapshot.snapshotBody ?? null,
         entities: snapshot.entities.map(formatEntity),
         constraints: snapshot.constraints.map(formatConstraint),
       });
@@ -212,6 +234,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
         schemaVersion: snapshot.schemaVersion,
         createdAt: snapshot.createdAt.toISOString(),
         gitCommitSha: snapshot.gitCommitSha ?? null,
+        snapshotBody: snapshot.snapshotBody ?? null,
         entities: snapshot.entities.map(formatEntity),
         constraints: snapshot.constraints.map(formatConstraint),
       };

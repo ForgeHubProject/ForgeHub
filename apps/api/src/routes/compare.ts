@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { compareGltfSceneSnapshots, GLTF_SCENE_HANDLER_ID } from "../handlers/index.js";
+import {
+  compareGltfSceneSnapshots,
+  comparePlainTextSnapshots,
+  GLTF_SCENE_HANDLER_ID,
+  PLAIN_TEXT_HANDLER_ID,
+} from "../handlers/index.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 
 export async function compareRoutes(app: FastifyInstance) {
@@ -46,6 +51,15 @@ export async function compareRoutes(app: FastifyInstance) {
 
       if (baseSnap.handlerId === GLTF_SCENE_HANDLER_ID) {
         return compareGltfSceneSnapshots(base, target, baseSnap.entities, targetSnap.entities);
+      }
+
+      if (baseSnap.handlerId === PLAIN_TEXT_HANDLER_ID) {
+        return comparePlainTextSnapshots(
+          base,
+          target,
+          baseSnap.snapshotBody ?? "",
+          targetSnap.snapshotBody ?? "",
+        );
       }
 
       return reply.status(501).send({
