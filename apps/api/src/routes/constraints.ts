@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
+import { GLTF_SCENE_HANDLER_ID } from "../handlers/index.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 
 const createConstraintBodySchema = z.object({
@@ -41,6 +42,12 @@ export async function constraintRoutes(app: FastifyInstance) {
 
       const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
       if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Constraints apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
 
       const constraints = await prisma.constraint.findMany({
         where: { snapshotId },
@@ -67,6 +74,12 @@ export async function constraintRoutes(app: FastifyInstance) {
 
       const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
       if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Constraints apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
 
       const parsed = createConstraintBodySchema.safeParse(request.body);
       if (!parsed.success) {
@@ -123,6 +136,15 @@ export async function constraintRoutes(app: FastifyInstance) {
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
       if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
 
+      const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
+      if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Constraints apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
+
       const updateSchema = z.object({
         positionFixed: z.boolean().optional(),
         rotationFixed: z.boolean().optional(),
@@ -159,6 +181,15 @@ export async function constraintRoutes(app: FastifyInstance) {
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
       if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+      const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
+      if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Constraints apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
 
       const existing = await prisma.constraint.findFirst({
         where: { id: constraintId, snapshotId },

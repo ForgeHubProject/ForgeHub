@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
+import { GLTF_SCENE_HANDLER_ID } from "../handlers/index.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 
 async function collectSubtreeIds(snapshotId: string, rootDbId: string): Promise<string[]> {
@@ -73,6 +74,12 @@ export async function entityRoutes(app: FastifyInstance) {
 
       const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
       if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Entity transforms apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
 
       const entity = await prisma.entity.findFirst({ where: { id: entityId, snapshotId } });
       if (!entity) return reply.status(404).send({ error: "Entity not found" });
@@ -131,6 +138,12 @@ export async function entityRoutes(app: FastifyInstance) {
 
       const snapshot = await prisma.snapshot.findFirst({ where: { id: snapshotId, repoId: repo.id } });
       if (!snapshot) return reply.status(404).send({ error: "Snapshot not found" });
+      if (snapshot.handlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(400).send({
+          error: "Entity edits apply only to glTF scene snapshots",
+          handlerId: snapshot.handlerId,
+        });
+      }
 
       const entity = await prisma.entity.findFirst({ where: { id: entityId, snapshotId } });
       if (!entity) return reply.status(404).send({ error: "Entity not found" });

@@ -18,6 +18,7 @@ export type Repo = {
 
 export type SnapshotSummary = {
   id: string;
+  handlerId: string;
   label: string | null;
   sourceFile: string;
   schemaVersion: string;
