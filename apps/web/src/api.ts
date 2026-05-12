@@ -95,11 +95,12 @@ export async function ingestSnapshot(
   gltf: unknown,
   label?: string,
   sourceFile?: string,
+  handlerId?: string,
 ): Promise<Snapshot> {
   return req(`/repos/${handle}/${repoName}/snapshots`, {
     method: "POST",
     token,
-    body: JSON.stringify({ gltf, label, sourceFile }),
+    body: JSON.stringify({ gltf, label, sourceFile, ...(handlerId ? { handlerId } : {}) }),
   });
 }
 

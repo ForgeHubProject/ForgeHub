@@ -64,6 +64,7 @@ model RepoCollaborator {
 model Snapshot {
   id            String       @id @default(cuid())
   repoId        String
+  handlerId     String       @default("gltf-scene")
   label         String?
   sourceFile    String
   schemaVersion String       @default("0.1.0")

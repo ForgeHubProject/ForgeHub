@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
-import { parseGltf, type GltfDocument } from "../gltf-parser.js";
+import { getHandler, GLTF_SCENE_HANDLER_ID } from "../handlers/index.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchShas } from "../git-utils.js";
 
@@ -26,6 +26,7 @@ const gltfSchema = z
   .passthrough();
 
 const ingestBodySchema = z.object({
+  handlerId: z.string().optional(),
   gltf: gltfSchema,
   label: z.string().max(200).optional(),
   sourceFile: z.string().max(255).optional(),
@@ -72,7 +73,7 @@ function formatConstraint(c: {
 }
 
 export async function snapshotRoutes(app: FastifyInstance) {
-  // POST /repos/:handle/:name/snapshots — ingest a glTF
+  // POST /repos/:handle/:name/snapshots — ingest payload via artifact handler
   app.post(
     "/repos/:handle/:name/snapshots",
     { preHandler: [app.authenticate] },
@@ -90,46 +91,43 @@ export async function snapshotRoutes(app: FastifyInstance) {
       }
 
       const { gltf, label, sourceFile } = parsed.data;
-
-      let entities;
-      try {
-        entities = parseGltf(gltf as GltfDocument);
-      } catch (e) {
-        return reply.status(422).send({ error: "Could not parse glTF scene graph", details: String(e) });
+      const requestedHandlerId = parsed.data.handlerId ?? GLTF_SCENE_HANDLER_ID;
+      const handler = getHandler(requestedHandlerId);
+      if (!handler) {
+        return reply.status(400).send({ error: "Unknown handlerId", handlerId: requestedHandlerId });
+      }
+      if (requestedHandlerId !== GLTF_SCENE_HANDLER_ID) {
+        return reply.status(501).send({
+          error: "This ingest shape is only implemented for the glTF scene handler",
+          handlerId: requestedHandlerId,
+        });
       }
 
-      const snapshot = await prisma.snapshot.create({
-        data: {
+      let snapshotId: string;
+      try {
+        snapshotId = await handler.ingestFromUtf8Text({
           repoId: repo.id,
-          label: label?.trim() || null,
           sourceFile: sourceFile?.trim() || "upload.gltf",
-          entities: {
-            create: entities.map((e) => ({
-              entityId: e.entityId,
-              parentEntityId: e.parentEntityId ?? null,
-              kind: e.kind,
-              name: e.name,
-              path: e.path,
-              posX: e.transform?.position[0] ?? null,
-              posY: e.transform?.position[1] ?? null,
-              posZ: e.transform?.position[2] ?? null,
-              rotX: e.transform?.rotationEulerDeg[0] ?? null,
-              rotY: e.transform?.rotationEulerDeg[1] ?? null,
-              rotZ: e.transform?.rotationEulerDeg[2] ?? null,
-              scaleX: e.transform?.scale[0] ?? null,
-              scaleY: e.transform?.scale[1] ?? null,
-              scaleZ: e.transform?.scale[2] ?? null,
-              attributes: JSON.stringify(e.attributes),
-              renderRef: e.renderRef ? JSON.stringify(e.renderRef) : null,
-            })),
-          },
-        },
+          utf8Text: JSON.stringify(gltf),
+          label: label?.trim() || null,
+          gitCommitSha: null,
+        });
+      } catch (e) {
+        return reply.status(422).send({ error: "Could not ingest artifact", details: String(e) });
+      }
+
+      const snapshot = await prisma.snapshot.findFirst({
+        where: { id: snapshotId, repoId: repo.id },
         include: { entities: { orderBy: { path: "asc" } }, constraints: true },
       });
+      if (!snapshot) {
+        return reply.status(500).send({ error: "Snapshot created but not found" });
+      }
 
       return reply.status(201).send({
         id: snapshot.id,
         repoId: snapshot.repoId,
+        handlerId: snapshot.handlerId,
         label: snapshot.label,
         sourceFile: snapshot.sourceFile,
         schemaVersion: snapshot.schemaVersion,
@@ -153,7 +151,6 @@ export async function snapshotRoutes(app: FastifyInstance) {
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
 
-      // When branch is specified, filter to only snapshots whose gitCommitSha is reachable from that branch
       let allowedShas: Set<string> | null = null;
       if (branch && repo.storageKey) {
         const shas = await branchShas(repo.storageKey, branch);
@@ -163,7 +160,15 @@ export async function snapshotRoutes(app: FastifyInstance) {
       const snapshots = await prisma.snapshot.findMany({
         where: { repoId: repo.id },
         orderBy: { createdAt: "desc" },
-        select: { id: true, label: true, sourceFile: true, schemaVersion: true, createdAt: true, gitCommitSha: true },
+        select: {
+          id: true,
+          handlerId: true,
+          label: true,
+          sourceFile: true,
+          schemaVersion: true,
+          createdAt: true,
+          gitCommitSha: true,
+        },
       });
 
       const filtered = allowedShas
@@ -201,6 +206,7 @@ export async function snapshotRoutes(app: FastifyInstance) {
       return {
         id: snapshot.id,
         repoId: snapshot.repoId,
+        handlerId: snapshot.handlerId,
         label: snapshot.label,
         sourceFile: snapshot.sourceFile,
         schemaVersion: snapshot.schemaVersion,
@@ -212,7 +218,6 @@ export async function snapshotRoutes(app: FastifyInstance) {
     },
   );
 
-  // DELETE /repos/:handle/:name/snapshots/:snapshotId — delete a snapshot
   app.delete(
     "/repos/:handle/:name/snapshots/:snapshotId",
     { preHandler: [app.authenticate] },

@@ -71,6 +71,15 @@ The API listens on `PORT` (default **3001**).
 - `apps/api` — Fastify + Prisma (SQLite in dev) — auth and repos today
 - `apps/web`, `packages/*`, `workers/*` — not scaffolded yet (see `docs/tech-stack.md`)
 
+### Artifact handlers and UI views
+
+Snapshots are tagged with a **`handlerId`** string (default **`gltf-scene`**) that selects which backend parser/ingest path produced the row and which compare semantics apply. Cross-handler compare returns HTTP 400.
+
+- **Backend handlers** live under [`apps/api/src/handlers/`](apps/api/src/handlers/). Each handler registers with [`apps/api/src/handlers/registry.ts`](apps/api/src/handlers/registry.ts). Git post-receive ingest walks changed paths and calls the first handler whose `matchesPath()` accepts the file (today: `*.gltf` → glTF scene graph → `Entity` rows).
+- **Frontend workspaces** mirror this under [`apps/web/src/views/`](apps/web/src/views/). [`registry.tsx`](apps/web/src/views/registry.tsx) maps `handlerId` to a workspace component (with a fallback panel for unknown IDs). You can register additional UI at runtime via `registerRepoWorkspaceView(handlerId, Component)` if you split bundles later.
+
+To add a new open format: implement `ArtifactHandler` on the API (ingest + compare when applicable), register it in [`handlers/index.ts`](apps/api/src/handlers/index.ts), add a Prisma strategy if it is not scene-graph shaped, and add a matching view plus `registry.set` / `registerRepoWorkspaceView` on the web app.
+
 ### Accounts and repos (implemented)
 
 - `GET /health`

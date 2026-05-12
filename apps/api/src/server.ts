@@ -1,3 +1,4 @@
+import "./handlers/index.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
