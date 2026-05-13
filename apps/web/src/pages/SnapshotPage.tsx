@@ -10,6 +10,7 @@ import {
   predecessorSnapshotId,
   type GitCommitGroup,
 } from "../lib/commitGroups";
+import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "../views/constants";
 import type { CommitFilePreviewRow, RepoModule } from "../views/repoWorkspaceTypes";
 import { resolveRepoCodeWorkspace } from "../views/registry";
 
@@ -45,8 +46,13 @@ export function SnapshotPage({ token, user }: Props) {
   const [commitChangedFileCountLoadingByKey, setCommitChangedFileCountLoadingByKey] = useState<Record<string, boolean>>(
     {},
   );
+  const [changedCommitKeysForSelectedFile, setChangedCommitKeysForSelectedFile] = useState<Record<string, boolean>>({});
+  const [changedCommitKeysForSelectedFileLoading, setChangedCommitKeysForSelectedFileLoading] = useState<Record<string, boolean>>(
+    {},
+  );
   const expandFetchGen = useRef(0);
   const changedCountGen = useRef(0);
+  const selectedFileChangeGen = useRef(0);
 
   // Branch selector
   const [branches, setBranches]             = useState<BranchInfo[]>([]);
@@ -104,7 +110,10 @@ export function SnapshotPage({ token, user }: Props) {
     return Array.from(map.entries()).map(([sourceFile, commits]) => ({
       sourceFile,
       displayName: sourceFile.replace(/\.[^.]+$/, "").replace(/[_-]/g, " "),
-      commits: [...commits].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
+      commits: [...commits].sort((a, b) => {
+        const dt = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        return dt !== 0 ? dt : a.id.localeCompare(b.id);
+      }),
     }));
   }, [snapshots]);
 
@@ -117,7 +126,73 @@ export function SnapshotPage({ token, user }: Props) {
   useEffect(() => {
     setCommitChangedFileCountByKey({});
     setCommitChangedFileCountLoadingByKey({});
+    setChangedCommitKeysForSelectedFile({});
+    setChangedCommitKeysForSelectedFileLoading({});
   }, [snapshotListIdentity]);
+
+  // When a file is selected, compute which commits actually changed that file (vs its predecessor snapshot).
+  useEffect(() => {
+    if (!handle || !repoName) return;
+    if (!selectedModuleFile) {
+      setChangedCommitKeysForSelectedFile({});
+      setChangedCommitKeysForSelectedFileLoading({});
+      return;
+    }
+
+    const gen = ++selectedFileChangeGen.current;
+    const file = selectedModuleFile;
+    const chain = snapshots
+      .filter((s) => s.sourceFile === file)
+      .sort((a, b) => {
+        const dt = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        return dt !== 0 ? dt : a.id.localeCompare(b.id);
+      });
+
+    if (chain.length === 0) {
+      setChangedCommitKeysForSelectedFile({});
+      setChangedCommitKeysForSelectedFileLoading({});
+      return;
+    }
+
+    let cancelled = false;
+    const nextLoading: Record<string, boolean> = {};
+    for (const s of chain) {
+      const key = s.gitCommitSha ?? `local:${s.id}`;
+      nextLoading[key] = true;
+    }
+    setChangedCommitKeysForSelectedFile({});
+    setChangedCommitKeysForSelectedFileLoading(nextLoading);
+
+    async function compute(): Promise<void> {
+      const out: Record<string, boolean> = {};
+      for (let i = 0; i < chain.length; i++) {
+        const cur = chain[i]!;
+        const key = cur.gitCommitSha ?? `local:${cur.id}`;
+        const pred = i > 0 ? chain[i - 1]! : null;
+        if (!pred) {
+          out[key] = true; // first version counts as a change
+          continue;
+        }
+        try {
+          const diff = await compareDiff(token, handle, repoName, pred.id, cur.id);
+          const stats = diffResultToChangeCounts(diff);
+          out[key] = !isChangeCountsEmpty(stats);
+        } catch {
+          out[key] = true; // treat errors as "changed" so it stays visible
+        }
+      }
+      if (cancelled || selectedFileChangeGen.current !== gen) return;
+      setChangedCommitKeysForSelectedFile(out);
+      const doneLoading: Record<string, boolean> = {};
+      for (const k of Object.keys(nextLoading)) doneLoading[k] = false;
+      setChangedCommitKeysForSelectedFileLoading(doneLoading);
+    }
+
+    void compute();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, handle, repoName, snapshots, selectedModuleFile]);
 
   // Pre-compute "files changed" counts for multi-file commits so the chip is meaningful without clicking.
   useEffect(() => {
@@ -371,7 +446,10 @@ export function SnapshotPage({ token, user }: Props) {
     setDiffResult(null);
 
     // moduleCommits is sorted oldest→newest; find predecessor
-    const sorted = [...moduleCommits].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const sorted = [...moduleCommits].sort((a, b) => {
+      const dt = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      return dt !== 0 ? dt : a.id.localeCompare(b.id);
+    });
     const idx = sorted.findIndex((c) => c.id === commitId);
     const predecessor = idx > 0 ? sorted[idx - 1] : null;
 
@@ -474,6 +552,44 @@ export function SnapshotPage({ token, user }: Props) {
       group.snapshots.map(async (s) => {
         const pred = predecessorSnapshotId(s, snapshots);
         if (!pred) {
+          // No predecessor in our current snapshot chain → synthesize a diff against an "empty base"
+          // so the UI still renders +/− badges.
+          try {
+            if (s.handlerId === GLTF_SCENE_HANDLER_ID) {
+              const snap = await getSnapshot(token, handle, repoName, s.id);
+              return {
+                snapshotId: s.id,
+                stats: {
+                  added: snap.entities.length,
+                  removed: 0,
+                  modified: 0,
+                  moved: 0,
+                },
+                error: undefined,
+              };
+            }
+            if (s.handlerId === PLAIN_TEXT_HANDLER_ID) {
+              const snap = await getSnapshot(token, handle, repoName, s.id);
+              const body = snap.snapshotBody ?? "";
+              const rawLines = body === "" ? [] : body.split(/\r?\n/);
+              // Backend removes a trailing empty line if the file ends with a newline.
+              if (body.endsWith("\n") || body.endsWith("\r\n")) {
+                if (rawLines.length > 0) rawLines.pop();
+              }
+              return {
+                snapshotId: s.id,
+                stats: {
+                  added: rawLines.length,
+                  removed: 0,
+                  modified: 0,
+                  moved: 0,
+                },
+                error: undefined,
+              };
+            }
+          } catch {
+            // Fall through to generic "no predecessor" rendering.
+          }
           return {
             snapshotId: s.id,
             stats: null as { added: number; removed: number; modified: number; moved: number } | null,
@@ -919,6 +1035,8 @@ export function SnapshotPage({ token, user }: Props) {
             commitFilePreviews={commitFilePreviews}
             commitChangedFileCountByKey={commitChangedFileCountByKey}
             commitChangedFileCountLoadingByKey={commitChangedFileCountLoadingByKey}
+            changedCommitKeysForSelectedFile={changedCommitKeysForSelectedFile}
+            changedCommitKeysForSelectedFileLoading={changedCommitKeysForSelectedFileLoading}
             onCommitGroupToggle={handleCommitGroupToggle}
             onPickSnapshotFromCommit={onPickSnapshotFromCommit}
             handleModuleClick={handleModuleClick}

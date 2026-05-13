@@ -42,6 +42,8 @@ export function GltfSceneView({
   commitFilePreviews,
   commitChangedFileCountByKey,
   commitChangedFileCountLoadingByKey,
+  changedCommitKeysForSelectedFile,
+  changedCommitKeysForSelectedFileLoading,
   onCommitGroupToggle,
   onPickSnapshotFromCommit,
   activeCommitId,
@@ -252,6 +254,13 @@ export function GltfSceneView({
           {commitGroups.map((group, gi) => {
             const touchesChosen =
               !selectedModuleFile || group.snapshots.some((s) => s.sourceFile === selectedModuleFile);
+            const selectedFileTouched = Boolean(
+              selectedModuleFile && group.snapshots.some((s) => s.sourceFile === selectedModuleFile),
+            );
+            const selectedFileChanged = Boolean(selectedModuleFile && changedCommitKeysForSelectedFile?.[group.key]);
+            const selectedFileChangeLoading = Boolean(
+              selectedModuleFile && changedCommitKeysForSelectedFileLoading?.[group.key],
+            );
             const isActiveGroup = group.snapshots.some((s) => s.id === activeCommitId);
             const isExpanded = expandedCommitKey === group.key;
             const isLast = gi === commitGroups.length - 1;
@@ -261,7 +270,7 @@ export function GltfSceneView({
               <div
                 key={group.key}
                 style={{
-                  opacity: touchesChosen ? 1 : 0.38,
+                  opacity: touchesChosen ? (selectedFileTouched && !selectedFileChanged ? 0.45 : 1) : 0.2,
                   borderBottom: gi < commitGroups.length - 1 ? "1px solid #f3f4f6" : undefined,
                 }}
               >
@@ -271,6 +280,9 @@ export function GltfSceneView({
                     ...styles.commitBtn,
                     ...(isActiveGroup ? styles.commitBtnActive : {}),
                     width: "100%",
+                    ...(selectedFileTouched && selectedFileChanged
+                      ? { border: "1px solid #bfdbfe", background: "#eff6ff" }
+                      : {}),
                   }}
                   onClick={() => {
                     void onCommitGroupToggle(group);
@@ -306,6 +318,9 @@ export function GltfSceneView({
                           })}{" "}
                           {isExpanded ? "▾" : "▸"}
                         </span>
+                      )}
+                      {selectedModuleFile && selectedFileTouched && selectedFileChangeLoading && (
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checking…</span>
                       )}
                     </div>
                     {n === 1 && isActiveGroup && diffResult && isGlTfDiff(diffResult) && (
@@ -375,18 +390,20 @@ export function GltfSceneView({
                           )}
                           {!row.loading && row.stats && (
                             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                              {row.stats.added > 0 && (
-                                <span style={diffBadgeStyle("#22c55e")}>+{row.stats.added}</span>
-                              )}
-                              {row.stats.removed > 0 && (
-                                <span style={diffBadgeStyle("#ef4444")}>−{row.stats.removed}</span>
-                              )}
-                              {row.stats.modified > 0 && (
-                                <span style={diffBadgeStyle("#f59e0b")}>~{row.stats.modified}</span>
-                              )}
-                              {row.stats.moved > 0 && (
-                                <span style={diffBadgeStyle("#f97316")}>↔{row.stats.moved}</span>
-                              )}
+                              <span style={{ ...diffBadgeStyle("#22c55e"), opacity: row.stats.added > 0 ? 1 : 0.25 }}>
+                                +{row.stats.added}
+                              </span>
+                              <span style={{ ...diffBadgeStyle("#ef4444"), opacity: row.stats.removed > 0 ? 1 : 0.25 }}>
+                                −{row.stats.removed}
+                              </span>
+                              <span
+                                style={{ ...diffBadgeStyle("#f59e0b"), opacity: row.stats.modified > 0 ? 1 : 0.25 }}
+                              >
+                                ~{row.stats.modified}
+                              </span>
+                              <span style={{ ...diffBadgeStyle("#f97316"), opacity: row.stats.moved > 0 ? 1 : 0.25 }}>
+                                ↔{row.stats.moved}
+                              </span>
                             </div>
                           )}
                           {row.loading && <span style={{ fontSize: 10, color: "#94a3b8" }}>Diff…</span>}
