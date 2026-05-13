@@ -37,6 +37,8 @@ export function PlainTextView({
   commitFilePreviews,
   commitChangedFileCountByKey,
   commitChangedFileCountLoadingByKey,
+  changedCommitKeysForSelectedFile,
+  changedCommitKeysForSelectedFileLoading,
   onCommitGroupToggle,
   onPickSnapshotFromCommit,
   handleModuleClick,
@@ -176,6 +178,13 @@ export function PlainTextView({
           {commitGroups.map((group, gi) => {
             const touchesChosen =
               !selectedModuleFile || group.snapshots.some((s) => s.sourceFile === selectedModuleFile);
+            const selectedFileTouched = Boolean(
+              selectedModuleFile && group.snapshots.some((s) => s.sourceFile === selectedModuleFile),
+            );
+            const selectedFileChanged = Boolean(selectedModuleFile && changedCommitKeysForSelectedFile?.[group.key]);
+            const selectedFileChangeLoading = Boolean(
+              selectedModuleFile && changedCommitKeysForSelectedFileLoading?.[group.key],
+            );
             const isActiveGroup = group.snapshots.some((s) => s.id === activeCommitId);
             const isExpanded = expandedCommitKey === group.key;
             const isLast = gi === commitGroups.length - 1;
@@ -185,7 +194,7 @@ export function PlainTextView({
               <div
                 key={group.key}
                 style={{
-                  opacity: touchesChosen ? 1 : 0.38,
+                  opacity: touchesChosen ? (selectedFileTouched && !selectedFileChanged ? 0.45 : 1) : 0.2,
                   borderBottom: gi < commitGroups.length - 1 ? "1px solid #f3f4f6" : undefined,
                 }}
               >
@@ -195,6 +204,9 @@ export function PlainTextView({
                     ...styles.commitBtn,
                     ...(isActiveGroup ? styles.commitBtnActive : {}),
                     width: "100%",
+                    ...(selectedFileTouched && selectedFileChanged
+                      ? { border: "1px solid #bfdbfe", background: "#eff6ff" }
+                      : {}),
                   }}
                   onClick={() => {
                     void onCommitGroupToggle(group);
@@ -230,6 +242,9 @@ export function PlainTextView({
                           })}{" "}
                           {isExpanded ? "▾" : "▸"}
                         </span>
+                      )}
+                      {selectedModuleFile && selectedFileTouched && selectedFileChangeLoading && (
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checking…</span>
                       )}
                     </div>
                     {n === 1 && isActiveGroup && diffResult && isPlainTextDiff(diffResult) && (
@@ -294,12 +309,14 @@ export function PlainTextView({
                           {row.error && <span style={{ fontSize: 10, color: "#dc2626" }}>{row.error}</span>}
                           {!row.loading && row.stats && (
                             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                              {row.stats.added > 0 && (
-                                <span style={diffBadgeStyle("#22c55e")}>+{row.stats.added}</span>
-                              )}
-                              {row.stats.removed > 0 && (
-                                <span style={diffBadgeStyle("#ef4444")}>−{row.stats.removed}</span>
-                              )}
+                              <span style={{ ...diffBadgeStyle("#22c55e"), opacity: row.stats.added > 0 ? 1 : 0.25 }}>
+                                +{row.stats.added}
+                              </span>
+                              <span
+                                style={{ ...diffBadgeStyle("#ef4444"), opacity: row.stats.removed > 0 ? 1 : 0.25 }}
+                              >
+                                −{row.stats.removed}
+                              </span>
                             </div>
                           )}
                           {row.loading && <span style={{ fontSize: 10, color: "#94a3b8" }}>Diff…</span>}

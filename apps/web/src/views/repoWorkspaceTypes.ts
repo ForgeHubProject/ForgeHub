@@ -40,6 +40,10 @@ export type RepoCodeWorkspaceProps = {
   commitChangedFileCountByKey?: Record<string, number>;
   /** True while background/expand counting is in progress for a commit group. */
   commitChangedFileCountLoadingByKey?: Record<string, boolean>;
+  /** When a file is selected: commit key -> whether that file changed in that commit (vs predecessor). */
+  changedCommitKeysForSelectedFile?: Record<string, boolean>;
+  /** When a file is selected: commit key -> loading flag while we compute change status. */
+  changedCommitKeysForSelectedFileLoading?: Record<string, boolean>;
   onCommitGroupToggle: (group: GitCommitGroup) => void;
   onPickSnapshotFromCommit: (snap: SnapshotSummary) => void;
   handleModuleClick: (sourceFile: string) => void;
