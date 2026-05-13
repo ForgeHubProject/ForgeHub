@@ -3,8 +3,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull, resolveMergePr } from "../api";
 import type { BranchInfo, DiffResult, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
+import {
+  buildGitCommitGroups,
+  diffResultToChangeCounts,
+  isChangeCountsEmpty,
+  predecessorSnapshotId,
+  type GitCommitGroup,
+} from "../lib/commitGroups";
+import type { CommitFilePreviewRow, RepoModule } from "../views/repoWorkspaceTypes";
 import { resolveRepoCodeWorkspace } from "../views/registry";
-import type { RepoModule } from "../views/repoWorkspaceTypes";
 
 type Props = {
   token: string;
@@ -31,6 +38,15 @@ export function SnapshotPage({ token, user }: Props) {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffMode, setDiffMode]       = useState(true);
   const [ghostSelectedId, setGhostSelectedId] = useState<string | null>(null);
+
+  const [expandedCommitKey, setExpandedCommitKey] = useState<string | null>(null);
+  const [commitFilePreviews, setCommitFilePreviews] = useState<CommitFilePreviewRow[] | null>(null);
+  const [commitChangedFileCountByKey, setCommitChangedFileCountByKey] = useState<Record<string, number>>({});
+  const [commitChangedFileCountLoadingByKey, setCommitChangedFileCountLoadingByKey] = useState<Record<string, boolean>>(
+    {},
+  );
+  const expandFetchGen = useRef(0);
+  const changedCountGen = useRef(0);
 
   // Branch selector
   const [branches, setBranches]             = useState<BranchInfo[]>([]);
@@ -92,13 +108,76 @@ export function SnapshotPage({ token, user }: Props) {
     }));
   }, [snapshots]);
 
-  // Commits shown in right panel (newest first)
-  const visibleCommits = useMemo<SnapshotSummary[]>(() => {
-    const list = selectedModuleFile
-      ? (modules.find((m) => m.sourceFile === selectedModuleFile)?.commits ?? [])
-      : [...snapshots].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return [...list].reverse(); // newest first for display
-  }, [selectedModuleFile, modules, snapshots]);
+  const commitGroups = useMemo(() => buildGitCommitGroups(snapshots), [snapshots]);
+
+  const snapshotListIdentity = useMemo(
+    () => snapshots.map((s) => `${s.id}:${s.gitCommitSha ?? ""}`).join("|"),
+    [snapshots],
+  );
+  useEffect(() => {
+    setCommitChangedFileCountByKey({});
+    setCommitChangedFileCountLoadingByKey({});
+  }, [snapshotListIdentity]);
+
+  // Pre-compute "files changed" counts for multi-file commits so the chip is meaningful without clicking.
+  useEffect(() => {
+    if (!handle || !repoName) return;
+    if (snapshots.length === 0) return;
+
+    const gen = ++changedCountGen.current;
+    const groupsToCompute = commitGroups.filter((g) => g.snapshots.length > 1 && commitChangedFileCountByKey[g.key] === undefined);
+    if (groupsToCompute.length === 0) return;
+
+    let cancelled = false;
+
+    async function computeForGroup(group: GitCommitGroup): Promise<void> {
+      setCommitChangedFileCountLoadingByKey((prev) => ({ ...prev, [group.key]: true }));
+
+      let changed = 0;
+      for (const s of group.snapshots) {
+        const pred = predecessorSnapshotId(s, snapshots);
+        if (!pred) {
+          changed += 1; // first version counts as a change
+          continue;
+        }
+        try {
+          const diff = await compareDiff(token, handle, repoName, pred, s.id);
+          const stats = diffResultToChangeCounts(diff);
+          if (!isChangeCountsEmpty(stats)) changed += 1;
+        } catch {
+          // If compare fails, treat as changed so the commit remains "interesting" rather than looking empty.
+          changed += 1;
+        }
+      }
+
+      if (cancelled || changedCountGen.current !== gen) return;
+      setCommitChangedFileCountByKey((prev) => ({ ...prev, [group.key]: changed }));
+      setCommitChangedFileCountLoadingByKey((prev) => ({ ...prev, [group.key]: false }));
+    }
+
+    // Simple concurrency cap to avoid spamming the API.
+    const CONCURRENCY = 4;
+    const queue = [...groupsToCompute];
+    const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+      while (!cancelled && queue.length > 0) {
+        const g = queue.shift();
+        if (!g) return;
+        await computeForGroup(g);
+      }
+    });
+
+    void Promise.all(workers);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    token,
+    handle,
+    repoName,
+    snapshots,
+    commitGroups,
+    commitChangedFileCountByKey,
+  ]);
 
   async function refreshSnapshots(branch?: string) {
     setLoadingSnap(true);
@@ -333,6 +412,8 @@ export function SnapshotPage({ token, user }: Props) {
     setActiveCommitId(null);
     setDiffResult(null);
     setSelectionPath([]);
+    setExpandedCommitKey(null);
+    setCommitFilePreviews(null);
     setLoadingSnap(true);
     setError(null);
     try {
@@ -354,11 +435,93 @@ export function SnapshotPage({ token, user }: Props) {
 
   function handleModuleClick(sourceFile: string) {
     setSelectedModuleFile(sourceFile);
+    setExpandedCommitKey(null);
+    setCommitFilePreviews(null);
     const mod = modules.find((m) => m.sourceFile === sourceFile);
     if (mod && mod.commits.length > 0) {
       const latest = mod.commits[mod.commits.length - 1];
       loadCommit(latest.id, mod.commits);
     }
+  }
+
+  async function handleCommitGroupToggle(group: GitCommitGroup) {
+    if (group.snapshots.length === 1) {
+      setExpandedCommitKey(null);
+      setCommitFilePreviews(null);
+      const s = group.snapshots[0]!;
+      const mod = modules.find((m) => m.sourceFile === s.sourceFile);
+      await loadCommit(s.id, mod?.commits ?? [s]);
+      return;
+    }
+    if (expandedCommitKey === group.key) {
+      setExpandedCommitKey(null);
+      setCommitFilePreviews(null);
+      return;
+    }
+    const gen = ++expandFetchGen.current;
+    setExpandedCommitKey(group.key);
+    setCommitFilePreviews(
+      group.snapshots.map((s) => ({
+        snapshotId: s.id,
+        sourceFile: s.sourceFile,
+        handlerId: s.handlerId,
+        loading: true,
+        stats: null,
+      })),
+    );
+
+    const results = await Promise.all(
+      group.snapshots.map(async (s) => {
+        const pred = predecessorSnapshotId(s, snapshots);
+        if (!pred) {
+          return {
+            snapshotId: s.id,
+            stats: null as { added: number; removed: number; modified: number; moved: number } | null,
+            error: undefined as string | undefined,
+          };
+        }
+        try {
+          const diff = await compareDiff(token, handle, repoName, pred, s.id);
+          return { snapshotId: s.id, stats: diffResultToChangeCounts(diff), error: undefined };
+        } catch (e) {
+          return {
+            snapshotId: s.id,
+            stats: null,
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }),
+    );
+
+    if (expandFetchGen.current !== gen) return;
+
+    const rows: CommitFilePreviewRow[] = [];
+    for (const s of group.snapshots) {
+      const pred = predecessorSnapshotId(s, snapshots);
+      const r = results.find((x) => x.snapshotId === s.id)!;
+      const unchangedVsPred =
+        Boolean(pred) &&
+        !r.error &&
+        r.stats != null &&
+        isChangeCountsEmpty(r.stats);
+      if (unchangedVsPred) continue;
+      rows.push({
+        snapshotId: s.id,
+        sourceFile: s.sourceFile,
+        handlerId: s.handlerId,
+        loading: false,
+        stats: r.stats,
+        error: r.error,
+      });
+    }
+    setCommitFilePreviews(rows);
+    setCommitChangedFileCountByKey((prev) => ({ ...prev, [group.key]: rows.length }));
+    setCommitChangedFileCountLoadingByKey((prev) => ({ ...prev, [group.key]: false }));
+  }
+
+  function onPickSnapshotFromCommit(snap: SnapshotSummary) {
+    const mod = modules.find((m) => m.sourceFile === snap.sourceFile);
+    void loadCommit(snap.id, mod?.commits ?? [snap]);
   }
 
   const workspaceHandlerId =
@@ -751,7 +914,13 @@ export function SnapshotPage({ token, user }: Props) {
             setDiffMode={setDiffMode}
             ghostSelectedId={ghostSelectedId}
             setGhostSelectedId={setGhostSelectedId}
-            visibleCommits={visibleCommits}
+            commitGroups={commitGroups}
+            expandedCommitKey={expandedCommitKey}
+            commitFilePreviews={commitFilePreviews}
+            commitChangedFileCountByKey={commitChangedFileCountByKey}
+            commitChangedFileCountLoadingByKey={commitChangedFileCountLoadingByKey}
+            onCommitGroupToggle={handleCommitGroupToggle}
+            onPickSnapshotFromCommit={onPickSnapshotFromCommit}
             handleModuleClick={handleModuleClick}
             loadCommit={loadCommit}
           />
