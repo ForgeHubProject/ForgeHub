@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { commitGroupFileChipLabel } from "../lib/commitGroups";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 import { isPlainTextDiff } from "../types";
@@ -26,15 +27,19 @@ export function PlainTextView({
   diffLoading,
   modules,
   selectedModuleFile,
-  setSelectedModuleFile,
   activeSnapshot,
   activeCommitId,
   diffResult,
   diffMode,
   setDiffMode,
-  visibleCommits,
+  commitGroups,
+  expandedCommitKey,
+  commitFilePreviews,
+  commitChangedFileCountByKey,
+  commitChangedFileCountLoadingByKey,
+  onCommitGroupToggle,
+  onPickSnapshotFromCommit,
   handleModuleClick,
-  loadCommit,
 }: RepoCodeWorkspaceProps) {
   const body = activeSnapshot?.snapshotBody ?? "";
 
@@ -113,7 +118,13 @@ export function PlainTextView({
                       <span style={{ width: 36, flexShrink: 0, color: "#94a3b8", textAlign: "right" }}>
                         {row.newLine ?? ""}
                       </span>
-                      <span style={{ width: 14, flexShrink: 0, color: row.type === "added" ? "#16a34a" : row.type === "removed" ? "#dc2626" : "#94a3b8" }}>
+                      <span
+                        style={{
+                          width: 14,
+                          flexShrink: 0,
+                          color: row.type === "added" ? "#16a34a" : row.type === "removed" ? "#dc2626" : "#94a3b8",
+                        }}
+                      >
                         {row.type === "added" ? "+" : row.type === "removed" ? "−" : " "}
                       </span>
                       <span>{row.content}</span>
@@ -161,48 +172,152 @@ export function PlainTextView({
             )}
           </div>
           {diffLoading && <p style={{ ...styles.muted, padding: "4px 12px" }}>Computing diff…</p>}
-          {visibleCommits.length === 0 && <p style={{ ...styles.muted, padding: "6px 12px" }}>No commits yet.</p>}
-          {visibleCommits.map((c, i) => {
-            const isActive = activeCommitId === c.id;
-            const hasDiff = isActive && diffResult;
-            const isLast = i === visibleCommits.length - 1;
-            const mod = modules.find((m) => m.sourceFile === c.sourceFile);
+          {commitGroups.length === 0 && <p style={{ ...styles.muted, padding: "6px 12px" }}>No commits yet.</p>}
+          {commitGroups.map((group, gi) => {
+            const touchesChosen =
+              !selectedModuleFile || group.snapshots.some((s) => s.sourceFile === selectedModuleFile);
+            const isActiveGroup = group.snapshots.some((s) => s.id === activeCommitId);
+            const isExpanded = expandedCommitKey === group.key;
+            const isLast = gi === commitGroups.length - 1;
+            const sha = group.gitCommitSha?.slice(0, 7);
+            const n = group.snapshots.length;
             return (
-              <button
-                key={c.id}
-                style={{ ...styles.commitBtn, ...(isActive ? styles.commitBtnActive : {}) }}
-                onClick={() => {
-                  setSelectedModuleFile(c.sourceFile);
-                  loadCommit(c.id, mod?.commits ?? [c]);
+              <div
+                key={group.key}
+                style={{
+                  opacity: touchesChosen ? 1 : 0.38,
+                  borderBottom: gi < commitGroups.length - 1 ? "1px solid #f3f4f6" : undefined,
                 }}
               >
-                <div style={styles.commitTrack}>
-                  <div style={{ ...styles.commitDot, ...(isActive ? styles.commitDotActive : {}) }} />
-                  {!isLast && <div style={styles.commitLine} />}
-                </div>
-                <div style={styles.commitInfo}>
-                  <span style={styles.commitMsg}>{c.label ?? c.sourceFile}</span>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <span style={styles.commitDate}>{new Date(c.createdAt).toLocaleDateString()}</span>
-                    {c.gitCommitSha && <span style={styles.commitSha}>{c.gitCommitSha.slice(0, 7)}</span>}
+                <button
+                  type="button"
+                  style={{
+                    ...styles.commitBtn,
+                    ...(isActiveGroup ? styles.commitBtnActive : {}),
+                    width: "100%",
+                  }}
+                  onClick={() => {
+                    void onCommitGroupToggle(group);
+                  }}
+                >
+                  <div style={styles.commitTrack}>
+                    <div style={{ ...styles.commitDot, ...(isActiveGroup ? styles.commitDotActive : {}) }} />
+                    {!isLast && <div style={styles.commitLine} />}
                   </div>
-                  {hasDiff && diffResult && isPlainTextDiff(diffResult) && (
-                    <div style={styles.commitDiffBadges}>
-                      {diffResult.summary.added > 0 && (
-                        <span style={diffBadgeStyle("#22c55e")}>+{diffResult.summary.added}</span>
-                      )}
-                      {diffResult.summary.removed > 0 && (
-                        <span style={diffBadgeStyle("#ef4444")}>−{diffResult.summary.removed}</span>
+                  <div style={styles.commitInfo}>
+                    <span style={styles.commitMsg}>{group.label ?? group.snapshots[0]?.sourceFile ?? "Commit"}</span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 2 }}>
+                      <span style={styles.commitDate}>{new Date(group.createdAt).toLocaleDateString()}</span>
+                      {sha && <span style={styles.commitSha}>{sha}</span>}
+                      {n > 1 && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            color: "#2563eb",
+                            background: "#eff6ff",
+                            borderRadius: 4,
+                            padding: "1px 6px",
+                          }}
+                        >
+                          {commitGroupFileChipLabel({
+                            pathsInCommit: n,
+                            commitKey: group.key,
+                            isExpanded,
+                            previews: isExpanded ? commitFilePreviews : null,
+                            knownChangedFileCountByKey: commitChangedFileCountByKey,
+                            knownChangedFileCountLoadingByKey: commitChangedFileCountLoadingByKey,
+                          })}{" "}
+                          {isExpanded ? "▾" : "▸"}
+                        </span>
                       )}
                     </div>
-                  )}
-                </div>
-              </button>
+                    {n === 1 && isActiveGroup && diffResult && isPlainTextDiff(diffResult) && (
+                      <div style={styles.commitDiffBadges}>
+                        {diffResult.summary.added > 0 && (
+                          <span style={diffBadgeStyle("#22c55e")}>+{diffResult.summary.added}</span>
+                        )}
+                        {diffResult.summary.removed > 0 && (
+                          <span style={diffBadgeStyle("#ef4444")}>−{diffResult.summary.removed}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </button>
+                {isExpanded && commitFilePreviews && (
+                  <div style={{ padding: "4px 8px 8px 36px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {commitFilePreviews.length === 0 ? (
+                      <div style={{ fontSize: 11, color: "#94a3b8", padding: "4px 2px 2px" }}>
+                        No per-file changes vs the previous snapshot (other files in this commit were unchanged).
+                      </div>
+                    ) : null}
+                    {commitFilePreviews.map((row) => {
+                      const snap = group.snapshots.find((s) => s.id === row.snapshotId);
+                      if (!snap) return null;
+                      const fileActive = activeCommitId === row.snapshotId;
+                      return (
+                        <button
+                          type="button"
+                          key={row.snapshotId}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "flex-start",
+                            gap: 4,
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            border: "1px solid #e5e7eb",
+                            borderRadius: 6,
+                            background: fileActive ? "#f0f9ff" : "#fafafa",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => onPickSnapshotFromCommit(snap)}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 8 }}>
+                            <span
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: "#111827",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                flex: 1,
+                              }}
+                              title={row.sourceFile}
+                            >
+                              {row.sourceFile.split("/").pop()}
+                            </span>
+                            <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>{row.handlerId}</span>
+                          </div>
+                          {row.error && <span style={{ fontSize: 10, color: "#dc2626" }}>{row.error}</span>}
+                          {!row.loading && row.stats && (
+                            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                              {row.stats.added > 0 && (
+                                <span style={diffBadgeStyle("#22c55e")}>+{row.stats.added}</span>
+                              )}
+                              {row.stats.removed > 0 && (
+                                <span style={diffBadgeStyle("#ef4444")}>−{row.stats.removed}</span>
+                              )}
+                            </div>
+                          )}
+                          {row.loading && <span style={{ fontSize: 10, color: "#94a3b8" }}>Diff…</span>}
+                          {!row.loading && !row.stats && !row.error && (
+                            <span style={{ fontSize: 10, color: "#94a3b8" }}>First version</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
         <div style={{ ...styles.rightPlaceholder, flex: 1 }}>
-          Line-level diff compares this commit to the previous snapshot for this file (same module).
+          One row per Git commit. Multi-file pushes expand to list only files that changed (+/−); pick a file to open. Line
+          diff compares to the previous snapshot for that path.
         </div>
       </aside>
     </>
