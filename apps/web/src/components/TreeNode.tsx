@@ -1,5 +1,6 @@
+import type { CSSProperties } from "react";
 import { useState } from "react";
-import type { Constraint, TreeNode as TreeNodeType } from "../types";
+import type { Constraint, DiffChangeType, TreeNode as TreeNodeType } from "../types";
 
 type Props = {
   node: TreeNodeType;
@@ -7,6 +8,14 @@ type Props = {
   selectedIds: string[];
   onSelect?: (id: string) => void;
   depth?: number;
+  diffTypeByEntityId?: Map<string, DiffChangeType> | null;
+};
+
+const DIFF_TREE_ACCENT: Record<Exclude<DiffChangeType, "unchanged">, string> = {
+  added: "#22c55e",
+  removed: "#ef4444",
+  modified: "#64748b",
+  moved: "#6366f1",
 };
 
 const KIND_ICON: Record<string, string> = {
@@ -15,12 +24,15 @@ const KIND_ICON: Record<string, string> = {
   part: "◆",
 };
 
-export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0 }: Props) {
+export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, diffTypeByEntityId }: Props) {
   const [expanded, setExpanded] = useState(depth < 2);
   const [hovered, setHovered] = useState(false);
 
   const hasChildren = node.children.length > 0;
   const isSelected = selectedIds.includes(node.id);
+  const diffType = diffTypeByEntityId?.get(node.entityId);
+  const diffAccent =
+    diffType && diffType !== "unchanged" ? DIFF_TREE_ACCENT[diffType as Exclude<DiffChangeType, "unchanged">] : undefined;
 
   const myConstraints = constraints.filter(
     (c) => c.entityAId === node.id || c.entityBId === node.id,
@@ -43,6 +55,8 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0 }
           cursor: onSelect ? "pointer" : "default",
           backgroundColor: isSelected ? "#dbeafe" : hovered ? "#f9fafb" : "transparent",
           userSelect: "none",
+          borderLeft: diffAccent ? `3px solid ${diffAccent}` : undefined,
+          marginLeft: diffAccent ? -1 : undefined,
         }}
       >
         <span
@@ -76,6 +90,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0 }
               selectedIds={selectedIds}
               onSelect={onSelect}
               depth={depth + 1}
+              diffTypeByEntityId={diffTypeByEntityId}
             />
           ))}
         </div>
@@ -84,7 +99,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0 }
   );
 }
 
-function badgeStyle(color: string): React.CSSProperties {
+function badgeStyle(color: string): CSSProperties {
   return {
     fontSize: 9, fontWeight: 700, color: "#fff",
     backgroundColor: color, borderRadius: 3,
