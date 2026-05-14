@@ -10,7 +10,7 @@ import {
 } from "@react-three/drei";
 import { Suspense, useMemo, useState } from "react";
 import * as THREE from "three";
-import type { Constraint, DiffChange, DiffChangeType, DiffEntitySnapshot, Entity } from "../types";
+import type { Constraint, DiffChange, DiffChangeType, DiffEntitySnapshot, Entity, Transform } from "../types";
 
 // ─── tree builder ────────────────────────────────────────────────────────────
 
@@ -33,6 +33,15 @@ function buildTree(entities: Entity[]): VNode[] {
 }
 
 const toRad = (d: number) => d * (Math.PI / 180);
+
+function transformsNearlyEqual(a: Transform, b: Transform, eps = 1e-3): boolean {
+  const near = (u: number[], v: number[]) => u.every((x, i) => Math.abs(x - v[i]!) < eps);
+  return (
+    near(a.position, b.position)
+    && near(a.rotationEulerDeg, b.rotationEulerDeg)
+    && near(a.scale, b.scale)
+  );
+}
 
 // ─── diff color mapping ───────────────────────────────────────────────────────
 
@@ -318,6 +327,8 @@ type Props = {
   diffMode?: boolean;
   onSelectGhost?: (entityId: string) => void;
   diffOverlayMode?: DiffOverlayMode;
+  /** When live mesh is hidden, overlay boxes call this so the part stays selectable. */
+  onPickDiffOverlay?: (entityId: string, directSelect: boolean) => void;
 };
 
 export function Viewport({
@@ -330,13 +341,14 @@ export function Viewport({
   diffMode = true,
   onSelectGhost,
   diffOverlayMode = "both",
+  onPickDiffOverlay,
 }: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
 
+  /** Hide the live mesh whenever we show before/after proxy boxes (avoids z-fighting with the "new" overlay). */
   const hideLiveEntityIds = useMemo(() => {
     const empty = new Set<string>();
     if (!diffMode || !diffChanges?.length) return empty;
-    if (diffOverlayMode !== "old" && diffOverlayMode !== "new") return empty;
     const set = new Set<string>();
     for (const c of diffChanges) {
       if ((c.type === "modified" || c.type === "moved") && c.before?.transform && c.after?.transform) {
@@ -344,7 +356,7 @@ export function Viewport({
       }
     }
     return set;
-  }, [diffMode, diffChanges, diffOverlayMode]);
+  }, [diffMode, diffChanges]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
     if (!diffChanges || !diffMode) return null;
@@ -364,16 +376,34 @@ export function Viewport({
     if (!diffMode || !diffChanges?.length) return [];
     const showBefore = diffOverlayMode === "old" || diffOverlayMode === "both";
     const showAfter = diffOverlayMode === "new" || diffOverlayMode === "both";
-    const out: Array<{ key: string; snap: DiffEntitySnapshot; color: string; label: string }> = [];
+    const out: Array<{
+      key: string;
+      snap: DiffEntitySnapshot;
+      color: string;
+      label: string;
+      localOffset: [number, number, number];
+    }> = [];
     for (const c of diffChanges) {
       if (c.type === "unchanged") continue;
       if (c.type === "modified" || c.type === "moved") {
+        const tb = c.before?.transform;
+        const ta = c.after?.transform;
+        const kind = c.before?.kind ?? c.after?.kind ?? "part";
+        const size = KIND_SIZE[kind] ?? 4;
+        let offBefore: [number, number, number] = [0, 0, 0];
+        let offAfter: [number, number, number] = [0, 0, 0];
+        if (tb && ta && transformsNearlyEqual(tb, ta)) {
+          const y = size * 0.2;
+          offBefore = [0, y, 0];
+          offAfter = [0, -y, 0];
+        }
         if (showBefore && c.before?.transform) {
           out.push({
             key: `${c.entityId}-before`,
             snap: c.before,
             color: "#ef4444",
             label: `- ${c.before.name}`,
+            localOffset: offBefore,
           });
         }
         if (showAfter && c.after?.transform) {
@@ -382,16 +412,11 @@ export function Viewport({
             snap: c.after,
             color: "#22c55e",
             label: `+ ${c.after.name}`,
+            localOffset: offAfter,
           });
         }
-      } else if (c.type === "added" && showAfter && c.after?.transform) {
-        out.push({
-          key: `${c.entityId}-after`,
-          snap: c.after,
-          color: "#22c55e",
-          label: `+ ${c.after.name}`,
-        });
       }
+      // "added" is already the live mesh in the scene — a second green proxy at the same pose z-fights.
     }
     return out;
   }, [diffMode, diffChanges, diffOverlayMode]);
@@ -435,8 +460,15 @@ export function Viewport({
           ))}
 
         {/* Before/after overlays for all changed entities (whole-scene Old / New / Both). */}
-        {beforeAfterSnaps.map(({ key, snap, color, label }) => (
-          <DiffOverlayEntity key={key} snap={snap} color={color} label={label} />
+        {beforeAfterSnaps.map(({ key, snap, color, label, localOffset }) => (
+          <DiffOverlayEntity
+            key={key}
+            snap={snap}
+            color={color}
+            label={label}
+            localOffset={localOffset}
+            onPick={onPickDiffOverlay}
+          />
         ))}
 
         <Grid
@@ -475,10 +507,14 @@ function DiffOverlayEntity({
   snap,
   color,
   label,
+  localOffset = [0, 0, 0],
+  onPick,
 }: {
   snap: DiffEntitySnapshot;
   color: string;
   label: string;
+  localOffset?: [number, number, number];
+  onPick?: (entityId: string, directSelect: boolean) => void;
 }) {
   const p = (snap.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (snap.transform ? snap.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
@@ -487,13 +523,34 @@ function DiffOverlayEntity({
 
   return (
     <group position={p} rotation={r} scale={s}>
-      <mesh>
-        <boxGeometry args={[size, size * 0.7, size]} />
-        <meshBasicMaterial color={color} transparent opacity={0.28} depthWrite={false} />
-      </mesh>
+      <group position={localOffset}>
+        <mesh
+          renderOrder={2}
+          onClick={(e) => {
+            e.stopPropagation();
+            const direct = e.nativeEvent.ctrlKey || e.nativeEvent.metaKey;
+            onPick?.(snap.entityId, direct);
+          }}
+        >
+          <boxGeometry args={[size, size * 0.7, size]} />
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={0.38}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-2}
+            polygonOffsetUnits={-2}
+          />
+        </mesh>
+      </group>
       <Html
         transform
-        position={[0, size * 0.5 + 1.5, 0]}
+        position={[
+          localOffset[0],
+          localOffset[1] + size * 0.5 + 1.5,
+          localOffset[2],
+        ]}
         center
         distanceFactor={60}
         zIndexRange={[10, 0]}

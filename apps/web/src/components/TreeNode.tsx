@@ -14,8 +14,15 @@ type Props = {
 const DIFF_TREE_ACCENT: Record<Exclude<DiffChangeType, "unchanged">, string> = {
   added: "#22c55e",
   removed: "#ef4444",
-  modified: "#64748b",
+  modified: "#ca8a04",
   moved: "#6366f1",
+};
+
+const DIFF_TREE_ICON: Record<Exclude<DiffChangeType, "unchanged">, string> = {
+  added: "+",
+  removed: "−",
+  modified: "~",
+  moved: "↔",
 };
 
 const KIND_ICON: Record<string, string> = {
@@ -55,8 +62,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
           cursor: onSelect ? "pointer" : "default",
           backgroundColor: isSelected ? "#dbeafe" : hovered ? "#f9fafb" : "transparent",
           userSelect: "none",
-          borderLeft: diffAccent ? `3px solid ${diffAccent}` : undefined,
-          marginLeft: diffAccent ? -1 : undefined,
+          boxShadow: diffAccent ? `inset 4px 0 0 0 ${diffAccent}` : undefined,
         }}
       >
         <span
@@ -74,7 +80,34 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
           {KIND_ICON[node.kind] ?? "◆"}
         </span>
 
-        <span style={{ fontSize: 13, color: "#111827", flex: 1 }}>{node.name}</span>
+        <span
+          style={{
+            fontSize: 13,
+            color: "#111827",
+            flex: 1,
+            fontWeight: diffAccent ? 600 : 400,
+          }}
+        >
+          {node.name}
+        </span>
+
+        {diffAccent && diffType && diffType !== "unchanged" && (
+          <span
+            title={`Diff: ${diffType}`}
+            style={{
+              fontSize: 9,
+              fontWeight: 800,
+              color: "#fff",
+              backgroundColor: diffAccent,
+              borderRadius: 4,
+              padding: "2px 6px",
+              lineHeight: 1.2,
+              flexShrink: 0,
+            }}
+          >
+            {DIFF_TREE_ICON[diffType as Exclude<DiffChangeType, "unchanged">]}
+          </span>
+        )}
 
         {posFixed && <span title="Position fixed" style={badgeStyle("#3b82f6")}>P</span>}
         {rotFixed && <span title="Rotation fixed" style={badgeStyle("#8b5cf6")}>R</span>}

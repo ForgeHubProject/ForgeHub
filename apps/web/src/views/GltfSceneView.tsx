@@ -210,6 +210,13 @@ export function GltfSceneView({
               setGhostSelectedId(eid);
               setSelectionPath([]);
             }}
+            onPickDiffOverlay={(entityId, directSelect) => {
+              setGhostSelectedId(null);
+              const match = activeSnapshot.entities.find((e) => e.entityId === entityId);
+              if (!match) return;
+              if (directSelect) handleTreeSelect(match.id);
+              else handleDrillSelect(match.id);
+            }}
           />
         ) : (
           <div style={styles.viewportPlaceholder}>
