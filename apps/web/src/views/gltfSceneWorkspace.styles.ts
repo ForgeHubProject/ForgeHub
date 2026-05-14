@@ -42,6 +42,33 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
   moduleCommitCount: { fontSize: 11, color: "#9ca3af", flexShrink: 0 },
 
   viewport: { flex: 1, overflow: "hidden", position: "relative" },
+  diffViewSegment: {
+    position: "absolute",
+    top: 12,
+    right: 200,
+    zIndex: 10,
+    display: "flex",
+    gap: 0,
+    borderRadius: 6,
+    overflow: "hidden",
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(15,23,42,0.75)",
+    backdropFilter: "blur(4px)",
+  },
+  diffViewBtn: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#94a3b8",
+    background: "transparent",
+    border: "none",
+    padding: "5px 10px",
+    cursor: "pointer",
+    lineHeight: 1,
+  },
+  diffViewBtnActive: {
+    color: "#f8fafc",
+    background: "rgba(255,255,255,0.12)",
+  },
   diffToggle: {
     position: "absolute",
     top: 12,

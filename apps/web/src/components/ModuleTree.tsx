@@ -1,4 +1,4 @@
-import type { Constraint, Entity, TreeNode as TreeNodeType } from "../types";
+import type { Constraint, DiffChangeType, Entity, TreeNode as TreeNodeType } from "../types";
 import { TreeNode } from "./TreeNode";
 
 function buildTree(entities: Entity[]): TreeNodeType[] {
@@ -23,9 +23,11 @@ type Props = {
   constraints: Constraint[];
   selectedIds: string[];
   onSelect?: (id: string) => void;
+  /** When diff mode is on, highlights rows whose `entityId` has a non-unchanged change. */
+  diffTypeByEntityId?: Map<string, DiffChangeType> | null;
 };
 
-export function ModuleTree({ entities, constraints, selectedIds, onSelect }: Props) {
+export function ModuleTree({ entities, constraints, selectedIds, onSelect, diffTypeByEntityId }: Props) {
   const roots = buildTree(entities);
 
   if (roots.length === 0) {
@@ -41,6 +43,7 @@ export function ModuleTree({ entities, constraints, selectedIds, onSelect }: Pro
           constraints={constraints}
           selectedIds={selectedIds}
           onSelect={onSelect}
+          diffTypeByEntityId={diffTypeByEntityId}
         />
       ))}
     </div>

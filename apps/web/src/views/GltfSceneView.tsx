@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import { commitGroupFileChipLabel } from "../lib/commitGroups";
-import type { DiffChange, Entity } from "../types";
+import type { DiffChange, DiffChangeType, DiffEntitySnapshot, Entity } from "../types";
 import { isGlTfDiff } from "../types";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
@@ -11,8 +11,8 @@ import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 const DIFF_COLOR: Record<string, string> = {
   added: "#22c55e",
   removed: "#ef4444",
-  modified: "#f59e0b",
-  moved: "#f97316",
+  modified: "#64748b",
+  moved: "#6366f1",
   unchanged: "#94a3b8",
 };
 
@@ -49,6 +49,7 @@ export function GltfSceneView({
   activeCommitId,
   handleModuleClick,
 }: RepoCodeWorkspaceProps) {
+  const [diffOverlayMode, setDiffOverlayMode] = useState<"old" | "both" | "new">("both");
   function buildParentMap(entities: Entity[]): Map<string, string | null> {
     const entityIdToDbId = new Map<string, string>();
     for (const e of entities) entityIdToDbId.set(e.entityId, e.id);
@@ -109,6 +110,39 @@ export function GltfSceneView({
     return null;
   }, [diffResult, ghostSelectedId, selectedEntity]);
 
+  const diffEntityTypeMap = useMemo(() => {
+    if (!diffMode || !diffResult || !isGlTfDiff(diffResult)) return null;
+    const m = new Map<string, DiffChangeType>();
+    for (const c of diffResult.changes) {
+      if (c.type !== "unchanged") m.set(c.entityId, c.type);
+    }
+    return m;
+  }, [diffMode, diffResult]);
+
+  const { diffSceneHasOld, diffSceneHasNew } = useMemo(() => {
+    if (!diffResult || !isGlTfDiff(diffResult)) return { diffSceneHasOld: false, diffSceneHasNew: false };
+    let diffSceneHasOld = false;
+    let diffSceneHasNew = false;
+    for (const c of diffResult.changes) {
+      if (c.type === "unchanged") continue;
+      if (c.type === "removed") diffSceneHasOld = true;
+      if (c.type === "added" && c.after?.transform) diffSceneHasNew = true;
+      if (c.type === "modified" || c.type === "moved") {
+        if (c.before?.transform) diffSceneHasOld = true;
+        if (c.after?.transform) diffSceneHasNew = true;
+      }
+    }
+    return { diffSceneHasOld, diffSceneHasNew };
+  }, [diffResult]);
+
+  useEffect(() => {
+    setDiffOverlayMode("both");
+  }, [diffResult?.targetSnapshotId, diffResult?.baseSnapshotId]);
+
+  useEffect(() => {
+    if (!diffMode) setDiffOverlayMode("both");
+  }, [diffMode]);
+
   return (
     <>
       <aside style={styles.sidebar}>
@@ -146,6 +180,7 @@ export function GltfSceneView({
                 constraints={activeSnapshot.constraints}
                 selectedIds={selectionPath}
                 onSelect={(id) => handleTreeSelect(id)}
+                diffTypeByEntityId={diffEntityTypeMap}
               />
             </div>
           </div>
@@ -170,6 +205,7 @@ export function GltfSceneView({
             }}
             diffChanges={isGlTfDiff(diffResult) ? diffResult.changes : null}
             diffMode={diffMode}
+            diffOverlayMode={diffOverlayMode}
             onSelectGhost={(eid) => {
               setGhostSelectedId(eid);
               setSelectionPath([]);
@@ -187,6 +223,26 @@ export function GltfSceneView({
           <button style={styles.diffToggle} onClick={() => setDiffMode((d) => !d)}>
             {diffMode ? "◑ Diff" : "◐ Normal"}
           </button>
+        )}
+
+        {diffMode && diffResult && isGlTfDiff(diffResult) && (
+          <div style={styles.diffViewSegment} role="group" aria-label="Diff view mode">
+            {(["old", "both", "new"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                style={{
+                  ...styles.diffViewBtn,
+                  ...(diffOverlayMode === m ? styles.diffViewBtnActive : {}),
+                  opacity: m === "old" && !diffSceneHasOld ? 0.35 : m === "new" && !diffSceneHasNew ? 0.35 : 1,
+                }}
+                disabled={(m === "old" && !diffSceneHasOld) || (m === "new" && !diffSceneHasNew)}
+                onClick={() => setDiffOverlayMode(m)}
+              >
+                {m === "old" ? "Old" : m === "both" ? "Both" : "New"}
+              </button>
+            ))}
+          </div>
         )}
 
         {diffMode && diffResult && activeSnapshot && isGlTfDiff(diffResult) && (
@@ -332,7 +388,7 @@ export function GltfSceneView({
                           <span style={diffBadgeStyle("#ef4444")}>−{diffResult.summary.removed}</span>
                         )}
                         {diffResult.summary.modified > 0 && (
-                          <span style={diffBadgeStyle("#f59e0b")}>~{diffResult.summary.modified}</span>
+                          <span style={diffBadgeStyle("#64748b")}>~{diffResult.summary.modified}</span>
                         )}
                       </div>
                     )}
@@ -397,11 +453,11 @@ export function GltfSceneView({
                                 −{row.stats.removed}
                               </span>
                               <span
-                                style={{ ...diffBadgeStyle("#f59e0b"), opacity: row.stats.modified > 0 ? 1 : 0.25 }}
+                                style={{ ...diffBadgeStyle("#64748b"), opacity: row.stats.modified > 0 ? 1 : 0.25 }}
                               >
                                 ~{row.stats.modified}
                               </span>
-                              <span style={{ ...diffBadgeStyle("#f97316"), opacity: row.stats.moved > 0 ? 1 : 0.25 }}>
+                              <span style={{ ...diffBadgeStyle("#6366f1"), opacity: row.stats.moved > 0 ? 1 : 0.25 }}>
                                 ↔{row.stats.moved}
                               </span>
                             </div>
@@ -421,7 +477,12 @@ export function GltfSceneView({
         </div>
 
         {selectedEntity || ghostSelectedId ? (
-          <EntityInspector entity={selectedEntity ?? null} change={selectedChange} diffMode={diffMode} />
+          <EntityInspector
+            entity={selectedEntity ?? null}
+            change={selectedChange}
+            diffMode={diffMode}
+            diffOverlayMode={diffOverlayMode}
+          />
         ) : (
           <div style={styles.rightPlaceholder}>
             Each row is one Git commit. Multi-file pushes expand to list only files that changed (+/−/~); pick a file to open it.
@@ -436,40 +497,90 @@ export function GltfSceneView({
 type PropKind = "normal" | "changed" | "added" | "removed";
 type PropRow = { label: string; value: string; kind: PropKind; before?: string };
 
+type DisplaySrc = {
+  name: string;
+  kind: string;
+  path: string;
+  transform: Entity["transform"];
+  attributes: Record<string, unknown>;
+};
+
+function entityToSrc(e: Entity): DisplaySrc {
+  return {
+    name: e.name,
+    kind: e.kind,
+    path: e.path,
+    transform: e.transform,
+    attributes: e.attributes ?? {},
+  };
+}
+
+function snapToSrc(s: DiffEntitySnapshot): DisplaySrc {
+  return {
+    name: s.name,
+    kind: s.kind,
+    path: s.path,
+    transform: s.transform,
+    attributes: s.attributes ?? {},
+  };
+}
+
 function EntityInspector({
   entity,
   change,
   diffMode,
+  diffOverlayMode,
 }: {
   entity: Entity | null;
   change: DiffChange | null;
   diffMode: boolean;
+  diffOverlayMode: "old" | "both" | "new";
 }) {
   const type = change?.type;
   const isRemoved = type === "removed";
   const isAdded = type === "added";
   const isModified = type === "modified" || type === "moved";
 
-  const src = entity
-    ? { name: entity.name, kind: entity.kind, path: entity.path, transform: entity.transform, attributes: entity.attributes }
-    : isRemoved
-      ? change!.before
-      : null;
+  const showFieldDiff = Boolean(diffMode && change && diffOverlayMode === "both");
 
-  if (!src) return <div style={styles.rightPlaceholder}>No data.</div>;
+  let src: DisplaySrc | null = null;
+  let emptyBanner: string | null = null;
+
+  if (!diffMode || !change) {
+    if (entity) src = entityToSrc(entity);
+  } else if (diffOverlayMode === "old") {
+    if (change.before) src = snapToSrc(change.before);
+    else emptyBanner = "No previous version for this change.";
+  } else if (diffOverlayMode === "new") {
+    if (change.after) src = snapToSrc(change.after);
+    else emptyBanner = "No new version for this change.";
+  } else {
+    if (entity) src = entityToSrc(entity);
+    else if (isRemoved && change.before) src = snapToSrc(change.before);
+    else emptyBanner = "No data.";
+  }
+
+  if (!src) {
+    return <div style={styles.rightPlaceholder}>{emptyBanner ?? "No data."}</div>;
+  }
 
   const globalKind: PropKind = !diffMode ? "normal" : isRemoved ? "removed" : isAdded ? "added" : "normal";
   const getfc = (field: string) => change?.fieldChanges.find((f) => f.field === field);
 
+  const changedPropertyCount =
+    change && diffMode && isModified && showFieldDiff
+      ? new Set(change.fieldChanges.map((f) => f.field)).size
+      : 0;
+
   const rows: PropRow[] = [];
 
   const push = (label: string, value: unknown, field?: string) => {
-    const fc = field ? getfc(field) : null;
+    const fc = showFieldDiff && field ? getfc(field) : null;
     rows.push({
       label,
       value: fmtVal(value),
       kind: !diffMode ? "normal" : fc ? "changed" : globalKind,
-      before: fc && diffMode ? fmtVal(fc.before) : undefined,
+      before: fc && showFieldDiff ? fmtVal(fc.before) : undefined,
     });
   };
 
@@ -482,40 +593,75 @@ function EntityInspector({
     push("scale", src.transform.scale, "scale");
   }
 
-  const attrFc = getfc("attributes");
+  const attrFc = showFieldDiff ? getfc("attributes") : undefined;
   const curAttrs = src.attributes ?? {};
   const prevAttrs = (attrFc?.before ?? {}) as Record<string, unknown>;
   const nextAttrs = (attrFc?.after ?? {}) as Record<string, unknown>;
-  const allAttrKeys = new Set([...Object.keys(curAttrs), ...Object.keys(prevAttrs)]);
+  const allAttrKeys = showFieldDiff
+    ? new Set([...Object.keys(curAttrs), ...Object.keys(prevAttrs)])
+    : new Set(Object.keys(curAttrs));
 
   for (const key of allAttrKeys) {
-    const inPrev = key in prevAttrs;
-    const inNext = key in nextAttrs;
-    if (diffMode && attrFc && inPrev && !inNext) {
-      rows.push({ label: key, value: fmtVal(prevAttrs[key]), kind: "removed" });
-    } else {
-      const val = curAttrs[key] ?? prevAttrs[key];
-      let kind: PropKind = globalKind;
-      let before: string | undefined;
-      if (diffMode && attrFc) {
+    if (showFieldDiff && attrFc) {
+      const inPrev = key in prevAttrs;
+      const inNext = key in nextAttrs;
+      if (diffMode && inPrev && !inNext) {
+        rows.push({ label: key, value: fmtVal(prevAttrs[key]), kind: "removed" });
+      } else {
+        const val = curAttrs[key] ?? prevAttrs[key];
+        let kind: PropKind = globalKind;
+        let before: string | undefined;
         if (!inPrev && inNext) kind = "added";
         else if (JSON.stringify(prevAttrs[key]) !== JSON.stringify(nextAttrs[key])) {
           kind = "changed";
           before = fmtVal(prevAttrs[key]);
         }
+        rows.push({ label: key, value: fmtVal(val), kind, before });
       }
-      rows.push({ label: key, value: fmtVal(val), kind, before });
+    } else {
+      const val = curAttrs[key];
+      if (val !== undefined) rows.push({ label: key, value: fmtVal(val), kind: "normal" });
     }
   }
+
+  const modeLabel =
+    diffMode && change ? (diffOverlayMode === "old" ? "Old" : diffOverlayMode === "new" ? "New" : "Both") : null;
 
   return (
     <div style={{ padding: "10px 12px", overflowY: "auto", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{src.name}</span>
-        {change && diffMode && (
-          <span style={{ fontSize: 11, fontWeight: 700, color: DIFF_COLOR[type!] }}>
-            {DIFF_ICON[type!]} {type}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {src.name}
           </span>
+          {modeLabel && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: "#64748b",
+                border: "1px solid #e2e8f0",
+                borderRadius: 4,
+                padding: "1px 6px",
+                flexShrink: 0,
+              }}
+            >
+              {modeLabel}
+            </span>
+          )}
+        </div>
+        {change && diffMode && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {isModified && showFieldDiff && (
+              <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontFamily: "monospace" }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#ef4444" }}>-{changedPropertyCount}</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#22c55e" }}>+{changedPropertyCount}</span>
+              </span>
+            )}
+            <span style={{ fontSize: 11, fontWeight: 700, color: DIFF_COLOR[type!] }}>
+              {DIFF_ICON[type!]} {type}
+            </span>
+          </div>
         )}
       </div>
       {rows.map((row, i) => (

@@ -39,8 +39,8 @@ const toRad = (d: number) => d * (Math.PI / 180);
 const DIFF_COLOR: Record<DiffChangeType, string> = {
   added:     "#22c55e",
   removed:   "#ef4444",
-  modified:  "#f59e0b",
-  moved:     "#f97316",
+  modified:  "#64748b",
+  moved:     "#6366f1",
   unchanged: "#475569",
 };
 
@@ -169,7 +169,7 @@ function EntityMesh({
   const isAncestor = selectionState === "ancestor";
   const baseColor = KIND_COLOR[node.kind] ?? "#9ca3af";
   const color = isSelected
-    ? "#f59e0b"
+    ? "#38bdf8"
     : diffType
     ? DIFF_COLOR[diffType]
     : baseColor;
@@ -181,11 +181,11 @@ function EntityMesh({
     : PartModel;
 
   const labelBg =
-    isSelected                         ? "#f59e0b"
+    isSelected                         ? "#0ea5e9"
     : isAncestor                       ? "rgba(148,163,184,0.6)"
     : diffType === "added"             ? "#22c55e"
-    : diffType === "modified"          ? "#f59e0b"
-    : diffType === "moved"             ? "#f97316"
+    : diffType === "modified"          ? "#64748b"
+    : diffType === "moved"             ? "#6366f1"
     : diffType === "unchanged"         ? "rgba(71,85,105,0.75)"
     : "rgba(255,255,255,0.92)";
 
@@ -214,11 +214,11 @@ function EntityMesh({
         </mesh>
       )}
 
-      {/* Selected ring — solid yellow */}
+      {/* Selected ring */}
       {isSelected && (
         <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[size * 0.62, size * 0.78, 32]} />
-          <meshBasicMaterial color="#f59e0b" transparent opacity={0.75} side={THREE.DoubleSide} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0.85} side={THREE.DoubleSide} />
         </mesh>
       )}
 
@@ -237,7 +237,7 @@ function EntityMesh({
             padding: "2px 8px", borderRadius: 4,
             fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
             boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
-            border: `1px solid ${isSelected ? "#d97706" : isAncestor ? "rgba(148,163,184,0.4)" : "transparent"}`,
+            border: `1px solid ${isSelected ? "#0284c7" : isAncestor ? "rgba(148,163,184,0.4)" : "transparent"}`,
             opacity: isAncestor && !hovered ? 0.7 : 1,
           }}>
             {node.name}
@@ -250,18 +250,22 @@ function EntityMesh({
 
 // ─── recursive scene node ─────────────────────────────────────────────────────
 
+type DiffOverlayMode = "old" | "both" | "new";
+
 function SceneNode({
   node,
   selectionPath,
   onSelect,
   onDirectSelect,
   diffTypeMap,
+  hideEntityIds,
 }: {
   node: VNode;
   selectionPath: string[];
   onSelect: (id: string) => void;
   onDirectSelect: (id: string) => void;
   diffTypeMap: Map<string, DiffChangeType> | null;
+  hideEntityIds: Set<string>;
 }) {
   const p = (node.transform?.position ?? [0, 0, 0]) as [number, number, number];
   const r = (node.transform ? node.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
@@ -273,9 +277,11 @@ function SceneNode({
     : selectionPath.includes(node.id) ? "ancestor"
     : "none";
 
+  const hideMesh = hideEntityIds.has(node.entityId);
+
   return (
     <group position={p} rotation={r} scale={s}>
-      {node.transform !== null && (
+      {node.transform !== null && !hideMesh && (
         <EntityMesh
           node={node}
           selectionState={selectionState}
@@ -292,6 +298,7 @@ function SceneNode({
           onSelect={onSelect}
           onDirectSelect={onDirectSelect}
           diffTypeMap={diffTypeMap}
+          hideEntityIds={hideEntityIds}
         />
       ))}
     </group>
@@ -310,10 +317,34 @@ type Props = {
   diffChanges?: DiffChange[] | null;
   diffMode?: boolean;
   onSelectGhost?: (entityId: string) => void;
+  diffOverlayMode?: DiffOverlayMode;
 };
 
-export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, onDeselect, diffChanges, diffMode = true, onSelectGhost }: Props) {
+export function Viewport({
+  entities,
+  selectionPath,
+  onSelect,
+  onDirectSelect,
+  onDeselect,
+  diffChanges,
+  diffMode = true,
+  onSelectGhost,
+  diffOverlayMode = "both",
+}: Props) {
   const roots = useMemo(() => buildTree(entities), [entities]);
+
+  const hideLiveEntityIds = useMemo(() => {
+    const empty = new Set<string>();
+    if (!diffMode || !diffChanges?.length) return empty;
+    if (diffOverlayMode !== "old" && diffOverlayMode !== "new") return empty;
+    const set = new Set<string>();
+    for (const c of diffChanges) {
+      if ((c.type === "modified" || c.type === "moved") && c.before?.transform && c.after?.transform) {
+        set.add(c.entityId);
+      }
+    }
+    return set;
+  }, [diffMode, diffChanges, diffOverlayMode]);
 
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
     if (!diffChanges || !diffMode) return null;
@@ -328,6 +359,42 @@ export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, on
       .filter((c) => c.type === "removed" && c.before?.transform)
       .map((c) => c.before!);
   }, [diffChanges]);
+
+  const beforeAfterSnaps = useMemo(() => {
+    if (!diffMode || !diffChanges?.length) return [];
+    const showBefore = diffOverlayMode === "old" || diffOverlayMode === "both";
+    const showAfter = diffOverlayMode === "new" || diffOverlayMode === "both";
+    const out: Array<{ key: string; snap: DiffEntitySnapshot; color: string; label: string }> = [];
+    for (const c of diffChanges) {
+      if (c.type === "unchanged") continue;
+      if (c.type === "modified" || c.type === "moved") {
+        if (showBefore && c.before?.transform) {
+          out.push({
+            key: `${c.entityId}-before`,
+            snap: c.before,
+            color: "#ef4444",
+            label: `- ${c.before.name}`,
+          });
+        }
+        if (showAfter && c.after?.transform) {
+          out.push({
+            key: `${c.entityId}-after`,
+            snap: c.after,
+            color: "#22c55e",
+            label: `+ ${c.after.name}`,
+          });
+        }
+      } else if (c.type === "added" && showAfter && c.after?.transform) {
+        out.push({
+          key: `${c.entityId}-after`,
+          snap: c.after,
+          color: "#22c55e",
+          label: `+ ${c.after.name}`,
+        });
+      }
+    }
+    return out;
+  }, [diffMode, diffChanges, diffOverlayMode]);
 
   return (
     <Canvas
@@ -344,7 +411,7 @@ export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, on
       <Suspense fallback={null}>
         <Environment preset="city" />
 
-        <Bounds fit clip observe damping={6} margin={1.4}>
+        <Bounds fit clip observe margin={1.4}>
           <group>
             {roots.map((root) => (
               <SceneNode
@@ -354,14 +421,22 @@ export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, on
                 onSelect={onSelect}
                 onDirectSelect={onDirectSelect ?? onSelect}
                 diffTypeMap={diffTypeMap}
+                hideEntityIds={hideLiveEntityIds}
               />
             ))}
           </group>
         </Bounds>
 
         {/* Removed entity ghosts are outside Bounds so they don't affect camera fit */}
-        {diffMode && removedSnaps.map((snap) => (
-          <GhostEntity key={snap.entityId} snap={snap} onSelect={onSelectGhost} />
+        {diffMode &&
+          diffOverlayMode !== "new" &&
+          removedSnaps.map((snap) => (
+            <GhostEntity key={snap.entityId} snap={snap} onSelect={onSelectGhost} />
+          ))}
+
+        {/* Before/after overlays for all changed entities (whole-scene Old / New / Both). */}
+        {beforeAfterSnaps.map(({ key, snap, color, label }) => (
+          <DiffOverlayEntity key={key} snap={snap} color={color} label={label} />
         ))}
 
         <Grid
@@ -393,5 +468,53 @@ export function Viewport({ entities, selectionPath, onSelect, onDirectSelect, on
         <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="white" />
       </GizmoHelper>
     </Canvas>
+  );
+}
+
+function DiffOverlayEntity({
+  snap,
+  color,
+  label,
+}: {
+  snap: DiffEntitySnapshot;
+  color: string;
+  label: string;
+}) {
+  const p = (snap.transform?.position ?? [0, 0, 0]) as [number, number, number];
+  const r = (snap.transform ? snap.transform.rotationEulerDeg.map(toRad) : [0, 0, 0]) as [number, number, number];
+  const s = (snap.transform?.scale ?? [1, 1, 1]) as [number, number, number];
+  const size = KIND_SIZE[snap.kind] ?? 4;
+
+  return (
+    <group position={p} rotation={r} scale={s}>
+      <mesh>
+        <boxGeometry args={[size, size * 0.7, size]} />
+        <meshBasicMaterial color={color} transparent opacity={0.28} depthWrite={false} />
+      </mesh>
+      <Html
+        transform
+        position={[0, size * 0.5 + 1.5, 0]}
+        center
+        distanceFactor={60}
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none" }}
+      >
+        <div
+          style={{
+            background: color,
+            color: "#fff",
+            padding: "2px 8px",
+            borderRadius: 4,
+            fontSize: 11,
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+            opacity: 0.9,
+          }}
+        >
+          {label}
+        </div>
+      </Html>
+    </group>
   );
 }
