@@ -136,7 +136,6 @@ function GhostEntity({ snap, onSelect }: { snap: DiffEntitySnapshot; onSelect?: 
         <meshBasicMaterial color="#ef4444" wireframe transparent opacity={0.55} />
       </mesh>
       <Html
-        transform
         position={[0, size * 0.5 + 1.5, 0]}
         center
         distanceFactor={60}
@@ -233,7 +232,6 @@ function EntityMesh({
 
       {(isSelected || isAncestor || hovered) && (
         <Html
-          transform
           position={[0, size * 0.55 + 1.5, 0]}
           center
           distanceFactor={60}
@@ -545,7 +543,6 @@ function DiffOverlayEntity({
         </mesh>
       </group>
       <Html
-        transform
         position={[
           localOffset[0],
           localOffset[1] + size * 0.5 + 1.5,
