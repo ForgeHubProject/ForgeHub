@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRepo, getMyRepos } from "../api";
+import { Header } from "../components/Header";
 import type { Repo, User } from "../types";
 
 type Props = {
@@ -14,6 +15,14 @@ type CreateForm = {
   description: string;
   visibility: "public" | "private";
 };
+
+function RepoIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
+      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8zM5 12.25v3.25a.25.25 0 00.4.2l1.45-1.087a.25.25 0 01.3 0L8.6 15.7a.25.25 0 00.4-.2v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25z" />
+    </svg>
+  );
+}
 
 export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -58,107 +67,195 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   }
 
   return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <span style={styles.logo}>ForgeHub</span>
-        <div style={styles.userRow}>
-          <span style={styles.handle}>@{user.handle}</span>
-          <button onClick={onLogout} style={styles.logoutBtn}>Sign out</button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gh-bg">
+      <Header user={user} onLogout={onLogout} />
 
-      <main style={styles.main}>
-        <div style={styles.headingRow}>
-          <h2 style={styles.heading}>Your repositories</h2>
-          <button onClick={openCreate} style={styles.newBtn}>+ New repository</button>
-        </div>
-
-        {loading && <p style={styles.muted}>Loading...</p>}
-        {error && <p style={styles.error}>{error}</p>}
-        {!loading && repos.length === 0 && (
-          <p style={styles.muted}>No repositories yet. Create your first one.</p>
-        )}
-
-        <div style={styles.list}>
-          {repos.map((repo) => (
-            <button
-              key={repo.id}
-              style={styles.repoCard}
-              onClick={() => onSelectRepo(repo)}
-            >
-              <div style={styles.repoName}>{repo.fullName ?? repo.name}</div>
-              {repo.description && <div style={styles.repoDesc}>{repo.description}</div>}
-              <div style={styles.repoBadge}>
-                {repo.visibility === "public" ? "Public" : "Private"}
+      <div className="max-w-[1200px] mx-auto px-4 py-8">
+        <div className="flex flex-col sm:flex-row gap-6">
+          {/* Left sidebar */}
+          <aside className="w-full sm:w-[296px] flex-shrink-0">
+            {/* User profile card */}
+            <div className="flex flex-col items-center sm:items-start">
+              <div className="w-20 h-20 sm:w-[296px] sm:h-[296px] rounded-full sm:rounded-xl bg-gh-accent flex items-center justify-center text-white text-4xl font-semibold mb-3">
+                {(user.displayName || user.handle)[0].toUpperCase()}
               </div>
-            </button>
-          ))}
+              <h2 className="text-gh-xl font-semibold text-gh-text">{user.displayName || user.handle}</h2>
+              <p className="text-gh-lg text-gh-muted">@{user.handle}</p>
+            </div>
+          </aside>
+
+          {/* Main content */}
+          <main className="flex-1 min-w-0">
+            {/* Tab bar */}
+            <div className="tab-nav mb-4">
+              <span className="tab-item-active">
+                <RepoIcon />
+                Repositories
+                <span className="counter">{repos.length}</span>
+              </span>
+            </div>
+
+            {/* Filter / create row */}
+            <div className="flex gap-2 mb-4">
+              <input
+                className="input flex-1"
+                placeholder="Find a repository…"
+                readOnly
+              />
+              <button className="btn-primary px-4 whitespace-nowrap" onClick={openCreate}>
+                New
+              </button>
+            </div>
+
+            {/* Repo list */}
+            {loading && (
+              <div className="text-gh-muted text-gh-base py-8 text-center">Loading…</div>
+            )}
+            {error && (
+              <div className="text-gh-danger text-gh-sm py-4">{error}</div>
+            )}
+            {!loading && repos.length === 0 && !error && (
+              <div className="text-center py-16 text-gh-muted">
+                <RepoIcon />
+                <p className="mt-3 text-gh-lg font-semibold text-gh-text">No repositories yet</p>
+                <p className="text-gh-sm mt-1">Create your first repository to get started.</p>
+                <button className="btn-primary mt-4 px-4 py-2" onClick={openCreate}>
+                  Create a repository
+                </button>
+              </div>
+            )}
+
+            <div className="divide-y divide-gh-border border-t border-gh-border">
+              {repos.map((repo) => (
+                <div key={repo.id} className="py-5 flex items-start gap-3">
+                  <RepoIcon />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        className="text-gh-accent font-semibold text-gh-lg hover:underline bg-transparent border-none cursor-pointer p-0 text-left"
+                        onClick={() => onSelectRepo(repo)}
+                      >
+                        {repo.fullName ?? repo.name}
+                      </button>
+                      <span className={repo.visibility === "public" ? "badge-public" : "badge-private"}>
+                        {repo.visibility === "public" ? "Public" : "Private"}
+                      </span>
+                    </div>
+                    {repo.description && (
+                      <p className="text-gh-sm text-gh-muted mt-1 line-clamp-1">{repo.description}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </main>
         </div>
-      </main>
+      </div>
 
       {/* Create repo modal */}
       {showCreate && (
-        <div style={styles.backdrop} onClick={closeCreate}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>
-              <h3 style={styles.modalTitle}>New repository</h3>
-              <button onClick={closeCreate} style={styles.closeBtn}>✕</button>
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4"
+          onClick={closeCreate}
+        >
+          <div
+            className="bg-gh-canvas border border-gh-border rounded-xl w-full max-w-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gh-border">
+              <h3 className="text-gh-lg font-semibold text-gh-text">Create a new repository</h3>
+              <button
+                className="text-gh-muted hover:text-gh-text bg-transparent border-none cursor-pointer p-1 rounded-md hover:bg-gh-bg"
+                onClick={closeCreate}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path fillRule="evenodd" d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
+                </svg>
+              </button>
             </div>
 
-            <form onSubmit={submitCreate} style={styles.modalForm}>
-              <label style={styles.label}>
-                Name <span style={styles.required}>*</span>
-              </label>
-              <input
-                style={styles.input}
-                placeholder="my-project"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                autoFocus
-                required
-              />
-              <p style={styles.hint}>Lowercase letters, numbers, hyphens and dots only.</p>
-
-              <label style={styles.label}>Description</label>
-              <textarea
-                style={styles.textarea}
-                placeholder="Optional short description"
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                rows={3}
-              />
-
-              <label style={styles.label}>Visibility</label>
-              <div style={styles.visibilityRow}>
-                {(["private", "public"] as const).map((v) => (
-                  <label key={v} style={styles.radioLabel}>
-                    <input
-                      type="radio"
-                      name="visibility"
-                      value={v}
-                      checked={form.visibility === v}
-                      onChange={() => setForm((f) => ({ ...f, visibility: v }))}
-                    />
-                    <div>
-                      <span style={styles.radioTitle}>{v === "private" ? "Private" : "Public"}</span>
-                      <span style={styles.radioSub}>
-                        {v === "private"
-                          ? "Only you and collaborators can see it"
-                          : "Anyone can see this repository"}
-                      </span>
-                    </div>
-                  </label>
-                ))}
+            <form onSubmit={submitCreate} className="px-6 py-5 flex flex-col gap-4">
+              <div className="form-group">
+                <label className="label" htmlFor="repo-name">
+                  Repository name <span className="text-gh-danger">*</span>
+                </label>
+                <input
+                  id="repo-name"
+                  className="input"
+                  placeholder="my-project"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  autoFocus
+                  required
+                />
+                <p className="text-gh-xs text-gh-muted mt-1">Lowercase letters, numbers, hyphens and dots only.</p>
               </div>
 
-              {createError && <p style={styles.createError}>{createError}</p>}
+              <div className="form-group">
+                <label className="label" htmlFor="repo-desc">
+                  Description <span className="text-gh-muted font-normal">(optional)</span>
+                </label>
+                <textarea
+                  id="repo-desc"
+                  className="input resize-none"
+                  placeholder="Short description of your project"
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={3}
+                />
+              </div>
 
-              <div style={styles.modalActions}>
-                <button type="button" onClick={closeCreate} style={styles.cancelBtn}>
+              <div className="form-group">
+                <label className="label">Visibility</label>
+                <div className="flex flex-col gap-2">
+                  {(["private", "public"] as const).map((v) => (
+                    <label
+                      key={v}
+                      className={`flex items-start gap-3 p-3 border rounded-md cursor-pointer transition-colors ${
+                        form.visibility === v
+                          ? "border-gh-accent bg-gh-accent-muted"
+                          : "border-gh-border hover:bg-gh-bg"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="visibility"
+                        value={v}
+                        checked={form.visibility === v}
+                        onChange={() => setForm((f) => ({ ...f, visibility: v }))}
+                        className="mt-0.5"
+                      />
+                      <div>
+                        <span className="block text-gh-sm font-semibold text-gh-text">
+                          {v === "private" ? "Private" : "Public"}
+                        </span>
+                        <span className="block text-gh-xs text-gh-muted mt-0.5">
+                          {v === "private"
+                            ? "Only you and collaborators can see it"
+                            : "Anyone on the internet can see this repository"}
+                        </span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {createError && (
+                <p className="text-gh-danger text-gh-sm bg-gh-danger-muted rounded-md px-3 py-2">
+                  {createError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-gh-border">
+                <button type="button" className="btn-default" onClick={closeCreate}>
                   Cancel
                 </button>
-                <button type="submit" style={styles.createBtn} disabled={creating || !form.name.trim()}>
-                  {creating ? "Creating..." : "Create repository"}
+                <button
+                  type="submit"
+                  className="btn-primary px-4"
+                  disabled={creating || !form.name.trim()}
+                >
+                  {creating ? "Creating…" : "Create repository"}
                 </button>
               </div>
             </form>
@@ -168,86 +265,3 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: { minHeight: "100vh", backgroundColor: "#f9fafb" },
-  header: {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "12px 24px", backgroundColor: "#fff",
-    borderBottom: "1px solid #e5e7eb",
-  },
-  logo: { fontSize: 18, fontWeight: 700, color: "#111827" },
-  userRow: { display: "flex", alignItems: "center", gap: 12 },
-  handle: { fontSize: 13, color: "#6b7280" },
-  logoutBtn: {
-    fontSize: 13, color: "#6b7280", background: "none", border: "1px solid #e5e7eb",
-    borderRadius: 6, padding: "4px 10px", cursor: "pointer",
-  },
-  main: { maxWidth: 720, margin: "0 auto", padding: "32px 24px" },
-  headingRow: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
-  heading: { fontSize: 20, fontWeight: 600, color: "#111827", margin: 0 },
-  newBtn: {
-    fontSize: 13, fontWeight: 600, color: "#fff", backgroundColor: "#111827",
-    border: "none", borderRadius: 6, padding: "7px 14px", cursor: "pointer",
-  },
-  muted: { color: "#6b7280", fontSize: 14 },
-  error: { color: "#ef4444", fontSize: 14 },
-  list: { display: "flex", flexDirection: "column", gap: 10 },
-  repoCard: {
-    textAlign: "left", padding: "16px 20px", backgroundColor: "#fff",
-    border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer", width: "100%",
-  },
-  repoName: { fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 4 },
-  repoDesc: { fontSize: 13, color: "#6b7280", marginBottom: 8 },
-  repoBadge: {
-    display: "inline-block", fontSize: 11, color: "#6b7280",
-    border: "1px solid #e5e7eb", borderRadius: 10, padding: "1px 8px",
-  },
-  // Modal
-  backdrop: {
-    position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.4)",
-    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
-  },
-  modal: {
-    backgroundColor: "#fff", borderRadius: 12, width: 480,
-    boxShadow: "0 20px 60px rgba(0,0,0,0.15)", overflow: "hidden",
-  },
-  modalHeader: {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "18px 24px", borderBottom: "1px solid #f3f4f6",
-  },
-  modalTitle: { fontSize: 16, fontWeight: 600, color: "#111827", margin: 0 },
-  closeBtn: {
-    fontSize: 16, color: "#9ca3af", background: "none",
-    border: "none", cursor: "pointer", lineHeight: 1,
-  },
-  modalForm: { padding: "20px 24px", display: "flex", flexDirection: "column", gap: 6 },
-  label: { fontSize: 13, fontWeight: 500, color: "#374151", marginTop: 8 },
-  required: { color: "#ef4444" },
-  input: {
-    padding: "8px 12px", fontSize: 14, border: "1px solid #d1d5db",
-    borderRadius: 6, outline: "none",
-  },
-  hint: { fontSize: 12, color: "#9ca3af", margin: 0 },
-  textarea: {
-    padding: "8px 12px", fontSize: 14, border: "1px solid #d1d5db",
-    borderRadius: 6, outline: "none", resize: "vertical", fontFamily: "inherit",
-  },
-  visibilityRow: { display: "flex", flexDirection: "column", gap: 8, marginTop: 4 },
-  radioLabel: {
-    display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px",
-    border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer",
-  },
-  radioTitle: { display: "block", fontSize: 13, fontWeight: 500, color: "#111827" },
-  radioSub: { display: "block", fontSize: 12, color: "#6b7280", marginTop: 2 },
-  createError: { fontSize: 13, color: "#ef4444", margin: 0 },
-  modalActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 },
-  cancelBtn: {
-    padding: "8px 16px", fontSize: 13, color: "#6b7280", backgroundColor: "transparent",
-    border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer",
-  },
-  createBtn: {
-    padding: "8px 16px", fontSize: 13, fontWeight: 600, color: "#fff",
-    backgroundColor: "#111827", border: "none", borderRadius: 6, cursor: "pointer",
-  },
-};

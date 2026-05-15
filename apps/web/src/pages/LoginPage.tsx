@@ -33,103 +33,122 @@ export function LoginPage({ onAuth }: Props) {
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <h1 style={styles.logo}>ForgeHub</h1>
-        <p style={styles.sub}>Hardware collaboration platform</p>
+    <div className="min-h-screen bg-gh-bg flex flex-col items-center justify-center px-4">
+      {/* Logo mark */}
+      <div className="mb-5">
+        <svg height="48" viewBox="0 0 16 16" fill="currentColor" className="text-gh-text">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+            0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+            -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+            .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+            -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27
+            .68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
+            .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
+            0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+        </svg>
+      </div>
 
-        <div style={styles.tabs}>
-          {(["login", "register"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              style={{ ...styles.tab, ...(mode === m ? styles.tabActive : {}) }}
-            >
-              {m === "login" ? "Sign in" : "Register"}
-            </button>
-          ))}
-        </div>
+      <div className="w-full max-w-sm">
+        <h1 className="text-center text-gh-xl font-semibold text-gh-text mb-4">
+          {mode === "login" ? "Sign in to ForgeHub" : "Create your account"}
+        </h1>
 
-        <form onSubmit={submit} style={styles.form}>
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            style={styles.input}
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-          {mode === "register" && (
-            <>
+        <div className="card p-6">
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            {mode === "register" && (
+              <>
+                <div className="form-group">
+                  <label className="label" htmlFor="handle">Username</label>
+                  <input
+                    id="handle"
+                    className="input"
+                    placeholder="octocat"
+                    value={handle}
+                    onChange={(e) => setHandle(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="label" htmlFor="displayName">Name <span className="text-gh-muted font-normal">(optional)</span></label>
+                  <input
+                    id="displayName"
+                    className="input"
+                    placeholder="The Octocat"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="form-group">
+              <label className="label" htmlFor="email">Email address</label>
               <input
-                style={styles.input}
-                placeholder="Username (handle)"
-                value={handle}
-                onChange={(e) => setHandle(e.target.value)}
+                id="email"
+                className="input"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus={mode === "login"}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="label" htmlFor="password">Password</label>
+              <input
+                id="password"
+                className="input"
+                type="password"
+                placeholder={mode === "login" ? "Enter your password" : "Create a password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 required
               />
-              <input
-                style={styles.input}
-                placeholder="Display name (optional)"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-              />
+            </div>
+
+            {error && (
+              <p className="text-gh-danger text-gh-sm bg-gh-danger-muted border border-gh-danger border-opacity-20 rounded-md px-3 py-2">
+                {error}
+              </p>
+            )}
+
+            <button className="btn-primary w-full py-2 text-gh-base" type="submit" disabled={loading}>
+              {loading ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+            </button>
+          </form>
+        </div>
+
+        {/* Toggle mode */}
+        <div className="card mt-4 p-4 text-center text-gh-sm text-gh-muted">
+          {mode === "login" ? (
+            <>
+              New to ForgeHub?{" "}
+              <button
+                className="text-gh-accent hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
+                onClick={() => { setMode("register"); setError(null); }}
+              >
+                Create an account
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <button
+                className="text-gh-accent hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
+                onClick={() => { setMode("login"); setError(null); }}
+              >
+                Sign in
+              </button>
             </>
           )}
-          {error && <p style={styles.error}>{error}</p>}
-          <button style={styles.btn} type="submit" disabled={loading}>
-            {loading ? "..." : mode === "login" ? "Sign in" : "Create account"}
-          </button>
-        </form>
+        </div>
       </div>
+
+      <footer className="mt-8 text-gh-xs text-gh-muted">
+        © 2025 ForgeHub
+      </footer>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#f9fafb",
-  },
-  card: {
-    backgroundColor: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    padding: "40px 36px",
-    width: 360,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-  },
-  logo: { fontSize: 24, fontWeight: 700, color: "#111827", margin: 0 },
-  sub: { fontSize: 13, color: "#6b7280", marginTop: 4, marginBottom: 24 },
-  tabs: { display: "flex", gap: 8, marginBottom: 20 },
-  tab: {
-    flex: 1, padding: "8px 0", fontSize: 13, fontWeight: 500,
-    border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer",
-    backgroundColor: "transparent", color: "#6b7280",
-  },
-  tabActive: {
-    backgroundColor: "#111827", color: "#fff", borderColor: "#111827",
-  },
-  form: { display: "flex", flexDirection: "column", gap: 10 },
-  input: {
-    padding: "9px 12px", fontSize: 14, border: "1px solid #d1d5db",
-    borderRadius: 6, outline: "none",
-  },
-  error: { fontSize: 13, color: "#ef4444", margin: 0 },
-  btn: {
-    padding: "10px 0", fontSize: 14, fontWeight: 600,
-    backgroundColor: "#111827", color: "#fff",
-    border: "none", borderRadius: 6, cursor: "pointer", marginTop: 4,
-  },
-};
