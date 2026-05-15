@@ -9,6 +9,8 @@
     "dev:api": "npm run dev -w @forgehub/api",
     "dev:web": "npm run dev -w @forgehub/web",
     "test": "npm run test -w @forgehub/api && npm run test -w @forgehub/web",
+    "test:api": "npm run test -w @forgehub/api",
+    "test:web": "npm run test -w @forgehub/web",
     "db:push": "npm run db:push -w @forgehub/api",
     "db:generate": "npm run db:generate -w @forgehub/api"
   },
