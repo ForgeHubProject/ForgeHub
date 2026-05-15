@@ -5,7 +5,7 @@ export const handleSchema = z
   .string()
   .min(1)
   .max(39)
-  .regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,37}$/);
+  .regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/);
 
 /** Repo slug: same rules, typical GitHub repo name length. */
 export const repoNameSchema = z
