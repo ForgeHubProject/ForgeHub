@@ -52,4 +52,13 @@ export type RepoCodeWorkspaceProps = {
   mergeReviewPr?: PullRequest | null;
   mergeReviewFromLoading?: boolean;
   onClearMergeReview?: () => void;
+  /** Per-file text hunk picks (hunkId → base | incoming). */
+  mergeTextHunkSides?: Record<string, "base" | "incoming">;
+  onMergeTextHunkSide?: (hunkId: string, side: "base" | "incoming") => void;
+  /** Per-entity picks for 3D merge (entityId → base | incoming). */
+  mergeGltfEntitySides?: Record<string, "base" | "incoming">;
+  onMergeGltfEntitySide?: (entityId: string, side: "base" | "incoming") => void;
+  /** Per-field picks (key `${entityId}:${field}`). */
+  mergeGltfFieldSides?: Record<string, "base" | "incoming">;
+  onMergeGltfFieldSide?: (entityId: string, field: string, side: "base" | "incoming") => void;
 };

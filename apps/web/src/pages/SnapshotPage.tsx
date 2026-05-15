@@ -1,7 +1,25 @@
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { API_BASE, closePull, compareDiff, createBranch, createPull, deleteBranch, forkRepo, getRepo, getSnapshot, getSnapshots, listBranches, listPulls, listTags, mergePull, resolveMergePr } from "../api";
+import {
+  API_BASE,
+  closePull,
+  compareDiff,
+  createBranch,
+  createPull,
+  deleteBranch,
+  forkRepo,
+  getRepo,
+  getSnapshot,
+  getSnapshots,
+  listBranches,
+  listPulls,
+  listTags,
+  mergePull,
+  resolveMergePr,
+  type MergeFileResolution,
+  type MergeSide,
+} from "../api";
 import type { BranchInfo, DiffResult, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
 import {
   buildGitCommitGroups,
@@ -10,7 +28,9 @@ import {
   predecessorSnapshotId,
   type GitCommitGroup,
 } from "../lib/commitGroups";
+import { defaultHunkSides, groupPlainTextHunks } from "../lib/textMergeHunks";
 import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "../views/constants";
+import { isGlTfDiff, isPlainTextDiff } from "../types";
 import type { CommitFilePreviewRow, RepoModule } from "../views/repoWorkspaceTypes";
 import { resolveRepoCodeWorkspace } from "../views/registry";
 
@@ -88,6 +108,8 @@ export function SnapshotPage({ token, user }: Props) {
   // Pull requests
   const [pulls, setPulls]                 = useState<PullRequest[]>([]);
   const [pullsLoading, setPullsLoading]   = useState(false);
+  /** Open PR count for the nav badge; kept in sync even when the PR list filter is not "open". */
+  const [openPullCount, setOpenPullCount] = useState(0);
   const [selectedPr, setSelectedPr]       = useState<PullRequest | null>(null);
   const [prActionLoading, setPrActionLoading] = useState(false);
   const [prError, setPrError]             = useState<string | null>(null);
@@ -95,6 +117,9 @@ export function SnapshotPage({ token, user }: Props) {
   const [mergeReviewPr, setMergeReviewPr] = useState<PullRequest | null>(null);
   const [mergeReviewFromSnapshots, setMergeReviewFromSnapshots] = useState<SnapshotSummary[]>([]);
   const [mergeReviewFromLoading, setMergeReviewFromLoading] = useState(false);
+  const [mergeTextHunkSidesByFile, setMergeTextHunkSidesByFile] = useState<Record<string, Record<string, MergeSide>>>({});
+  const [mergeGltfEntitySidesByFile, setMergeGltfEntitySidesByFile] = useState<Record<string, Record<string, MergeSide>>>({});
+  const [mergeGltfFieldSidesByFile, setMergeGltfFieldSidesByFile] = useState<Record<string, Record<string, MergeSide>>>({});
   const [showNewPr, setShowNewPr]         = useState(false);
   const [newPrTitle, setNewPrTitle]       = useState("");
   const [newPrFrom, setNewPrFrom]         = useState("");
@@ -350,18 +375,37 @@ export function SnapshotPage({ token, user }: Props) {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  async function loadPulls(filter: typeof pullsFilter = pullsFilter) {
-    setPullsLoading(true);
-    setPrError(null);
+  const refreshOpenPullCount = useCallback(async () => {
+    if (!handle || !repoName) return;
     try {
-      const r = await listPulls(token, handle, repoName, filter);
-      setPulls(r.pulls);
-    } catch (e) {
-      setPrError(e instanceof Error ? e.message : "Failed to load PRs");
-    } finally {
-      setPullsLoading(false);
+      const r = await listPulls(token, handle, repoName, "open");
+      setOpenPullCount(r.pulls.length);
+    } catch {
+      setOpenPullCount(0);
     }
-  }
+  }, [token, handle, repoName]);
+
+  const loadPulls = useCallback(
+    async (filter: typeof pullsFilter = pullsFilter) => {
+      if (!handle || !repoName) return;
+      setPullsLoading(true);
+      setPrError(null);
+      try {
+        const r = await listPulls(token, handle, repoName, filter);
+        setPulls(r.pulls);
+        if (filter === "open") setOpenPullCount(r.pulls.length);
+      } catch (e) {
+        setPrError(e instanceof Error ? e.message : "Failed to load PRs");
+      } finally {
+        setPullsLoading(false);
+      }
+    },
+    [token, handle, repoName, pullsFilter],
+  );
+
+  useEffect(() => {
+    void loadPulls();
+  }, [loadPulls]);
 
   async function handleMergePr(pr: PullRequest) {
     setPrActionLoading(true);
@@ -373,6 +417,7 @@ export function SnapshotPage({ token, user }: Props) {
       setMergeReviewPr(null);
       setMergeReviewFromSnapshots([]);
       await loadPulls();
+      if (pullsFilter !== "open") await refreshOpenPullCount();
       await refreshSnapshots();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Merge failed";
@@ -388,11 +433,12 @@ export function SnapshotPage({ token, user }: Props) {
     setPrError(null);
     setPrConflict(false);
     try {
-      await resolveMergePr(token, handle, repoName, pr.number, strategy);
+      await resolveMergePr(token, handle, repoName, pr.number, { strategy });
       setSelectedPr({ ...pr, state: "merged" });
       setMergeReviewPr(null);
       setMergeReviewFromSnapshots([]);
       await loadPulls();
+      if (pullsFilter !== "open") await refreshOpenPullCount();
       await refreshSnapshots();
     } catch (e) {
       setPrError(e instanceof Error ? e.message : "Resolution failed");
@@ -405,7 +451,131 @@ export function SnapshotPage({ token, user }: Props) {
     setMergeReviewPr(null);
     setMergeReviewFromSnapshots([]);
     setMergeReviewFromLoading(false);
+    setMergeTextHunkSidesByFile({});
+    setMergeGltfEntitySidesByFile({});
+    setMergeGltfFieldSidesByFile({});
     setDiffResult(null);
+  }
+
+  const currentTextHunkSides = selectedModuleFile ? mergeTextHunkSidesByFile[selectedModuleFile] : undefined;
+  const currentGltfEntitySides = selectedModuleFile ? mergeGltfEntitySidesByFile[selectedModuleFile] : undefined;
+  const currentGltfFieldSides = selectedModuleFile ? mergeGltfFieldSidesByFile[selectedModuleFile] : undefined;
+
+  useEffect(() => {
+    if (!mergeReviewPr || !selectedModuleFile || !diffResult) return;
+    if (isPlainTextDiff(diffResult)) {
+      const hunks = groupPlainTextHunks(diffResult.lines);
+      if (hunks.length === 0) return;
+      setMergeTextHunkSidesByFile((prev) => {
+        if (prev[selectedModuleFile]) return prev;
+        return { ...prev, [selectedModuleFile]: defaultHunkSides(hunks, "incoming") };
+      });
+    }
+    if (isGlTfDiff(diffResult)) {
+      const changed = diffResult.changes.filter((c) => c.type !== "unchanged");
+      if (changed.length === 0) return;
+      setMergeGltfEntitySidesByFile((prev) => {
+        if (prev[selectedModuleFile]) return prev;
+        const m: Record<string, MergeSide> = {};
+        for (const c of changed) {
+          m[c.entityId] = c.type === "removed" ? "base" : "incoming";
+        }
+        return { ...prev, [selectedModuleFile]: m };
+      });
+    }
+  }, [mergeReviewPr, selectedModuleFile, diffResult]);
+
+  function setTextHunkSide(hunkId: string, side: MergeSide) {
+    if (!selectedModuleFile) return;
+    setMergeTextHunkSidesByFile((prev) => ({
+      ...prev,
+      [selectedModuleFile]: { ...(prev[selectedModuleFile] ?? {}), [hunkId]: side },
+    }));
+  }
+
+  function setGltfEntitySide(entityId: string, side: MergeSide) {
+    if (!selectedModuleFile) return;
+    setMergeGltfEntitySidesByFile((prev) => ({
+      ...prev,
+      [selectedModuleFile]: { ...(prev[selectedModuleFile] ?? {}), [entityId]: side },
+    }));
+  }
+
+  function setGltfFieldSide(entityId: string, field: string, side: MergeSide) {
+    if (!selectedModuleFile) return;
+    const key = `${entityId}:${field}`;
+    setMergeGltfFieldSidesByFile((prev) => ({
+      ...prev,
+      [selectedModuleFile]: { ...(prev[selectedModuleFile] ?? {}), [key]: side },
+    }));
+  }
+
+  async function buildGranularMergeFiles(pr: PullRequest): Promise<MergeFileResolution[]> {
+    const paths = new Set<string>();
+    for (const s of snapshots) paths.add(s.sourceFile);
+    for (const s of mergeReviewFromSnapshots) paths.add(s.sourceFile);
+    const files: MergeFileResolution[] = [];
+
+    for (const sourceFile of paths) {
+      const toSnap = latestSnapshotForFile(snapshots, sourceFile);
+      const fromSnap = latestSnapshotForFile(mergeReviewFromSnapshots, sourceFile);
+      if (!toSnap || !fromSnap || toSnap.handlerId !== fromSnap.handlerId) continue;
+
+      const diff = await compareDiff(token, handle, repoName, toSnap.id, fromSnap.id);
+
+      if (isPlainTextDiff(diff)) {
+        const hunks = groupPlainTextHunks(diff.lines);
+        if (hunks.length === 0) continue;
+        const sides = mergeTextHunkSidesByFile[sourceFile] ?? defaultHunkSides(hunks, "incoming");
+        files.push({
+          sourceFile,
+          hunks: hunks.map((h) => ({ hunkId: h.id, side: sides[h.id] ?? "incoming" })),
+        });
+      } else if (isGlTfDiff(diff)) {
+        const changed = diff.changes.filter((c) => c.type !== "unchanged");
+        if (changed.length === 0) continue;
+        const entitySides = mergeGltfEntitySidesByFile[sourceFile] ?? {};
+        const fieldSides = mergeGltfFieldSidesByFile[sourceFile] ?? {};
+        const entities = changed.map((c) => ({
+          entityId: c.entityId,
+          side: entitySides[c.entityId] ?? (c.type === "removed" ? "base" : "incoming"),
+        }));
+        const fields: Array<{ entityId: string; field: string; side: MergeSide }> = [];
+        for (const c of changed) {
+          for (const fc of c.fieldChanges) {
+            const key = `${c.entityId}:${fc.field}`;
+            if (fieldSides[key]) {
+              fields.push({ entityId: c.entityId, field: fc.field, side: fieldSides[key]! });
+            }
+          }
+        }
+        files.push({ sourceFile, entities, fields: fields.length > 0 ? fields : undefined });
+      }
+    }
+    return files;
+  }
+
+  async function handleCompleteGranularMerge(pr: PullRequest) {
+    setPrActionLoading(true);
+    setPrError(null);
+    try {
+      const files = await buildGranularMergeFiles(pr);
+      if (files.length === 0) {
+        setPrError("No merge changes to apply");
+        return;
+      }
+      await resolveMergePr(token, handle, repoName, pr.number, { files });
+      setSelectedPr({ ...pr, state: "merged" });
+      handleClearMergeReview();
+      setPrConflict(false);
+      await loadPulls();
+      if (pullsFilter !== "open") await refreshOpenPullCount();
+      await refreshSnapshots();
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Granular merge failed");
+    } finally {
+      setPrActionLoading(false);
+    }
   }
 
   async function handleOpenMergeResolveEditor(pr: PullRequest) {
@@ -482,6 +652,7 @@ export function SnapshotPage({ token, user }: Props) {
       await closePull(token, handle, repoName, pr.number);
       setSelectedPr({ ...pr, state: "closed" });
       await loadPulls();
+      if (pullsFilter !== "open") await refreshOpenPullCount();
     } catch (e) {
       setPrError(e instanceof Error ? e.message : "Failed to close PR");
     } finally {
@@ -511,6 +682,7 @@ export function SnapshotPage({ token, user }: Props) {
       setShowNewPr(false);
       setNewPrTitle(""); setNewPrFrom(""); setNewPrTo(""); setNewPrDesc("");
       await loadPulls();
+      if (pullsFilter !== "open") await refreshOpenPullCount();
       setSelectedPr(pr);
     } catch (e) {
       setPrError(e instanceof Error ? e.message : "Failed to create PR");
@@ -830,8 +1002,8 @@ export function SnapshotPage({ token, user }: Props) {
             }}
           >
             ⑂ Pull Requests
-            {pulls.filter((p) => p.state === "open").length > 0 && (
-              <span style={styles.navTabBadge}>{pulls.filter((p) => p.state === "open").length}</span>
+            {openPullCount > 0 && (
+              <span style={styles.navTabBadge}>{openPullCount}</span>
             )}
           </button>
         </div>
@@ -1123,10 +1295,10 @@ export function SnapshotPage({ token, user }: Props) {
                   {prConflict && selectedPr.state === "open" && (
                     <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                       <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#b91c1c" }}>
-                        ⚠ Merge conflict — the branches have conflicting changes to the same entities.
+                        ⚠ Merge conflict — the branches have conflicting changes to the same files or entities.
                       </p>
                       <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
-                        Choose which branch&apos;s version wins for all conflicting entities, or open the diff viewer to compare <strong>{selectedPr.toBranch}</strong> (current) vs <strong>{selectedPr.fromBranch}</strong> (incoming) per file:
+                        Choose which branch&apos;s version wins for all conflicting paths, or open the diff viewer to compare <strong>{selectedPr.toBranch}</strong> (current) vs <strong>{selectedPr.fromBranch}</strong> (incoming) per file:
                       </p>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                         <button
@@ -1199,12 +1371,38 @@ export function SnapshotPage({ token, user }: Props) {
                   {" — "}
                   PR #{mergeReviewPr.number}: comparing <strong>{mergeReviewPr.toBranch}</strong> (current) with{" "}
                   <strong>{mergeReviewPr.fromBranch}</strong> (incoming). Use <strong>Diff</strong> and{" "}
-                  <strong>Old / Both / New</strong> in the viewer; switch files in the sidebar to inspect each path.
-                  {" "}
-                  Git still needs an all-or-nothing choice below—use the editor to decide, then return here and pick{" "}
-                  <em>Keep all from …</em>.
+                  <strong>Old / Both / New</strong> in the viewer (text and 3D); switch files in the sidebar to inspect each path.
+                  Pick <strong>base</strong> or <strong>incoming</strong> per change in the editor, then use <strong>Complete merge with picks</strong>.
                 </div>
-                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    style={styles.mergeReviewBannerBtn}
+                    disabled={prActionLoading}
+                    onClick={() => void handleCompleteGranularMerge(mergeReviewPr)}
+                  >
+                    {prActionLoading ? "Merging…" : "Complete merge with picks"}
+                  </button>
+                  {prConflict && (
+                    <>
+                      <button
+                        type="button"
+                        style={{ ...styles.mergeReviewBannerBtn, background: "#1e3a5f" }}
+                        disabled={prActionLoading}
+                        onClick={() => void handleResolveConflict(mergeReviewPr, "theirs")}
+                      >
+                        {prActionLoading ? "Resolving…" : `Keep all from ${mergeReviewPr.fromBranch}`}
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.mergeReviewBannerBtnSecondary}
+                        disabled={prActionLoading}
+                        onClick={() => void handleResolveConflict(mergeReviewPr, "ours")}
+                      >
+                        {prActionLoading ? "Resolving…" : `Keep all from ${mergeReviewPr.toBranch}`}
+                      </button>
+                    </>
+                  )}
                   <button type="button" style={styles.mergeReviewBannerBtn} onClick={() => { setActiveTab("pulls"); setSearchParams((p) => { p.set("tab", "pulls"); return p; }, { replace: true }); }}>
                     Back to PR
                   </button>
@@ -1245,6 +1443,12 @@ export function SnapshotPage({ token, user }: Props) {
             mergeReviewPr={mergeReviewPr}
             mergeReviewFromLoading={mergeReviewFromLoading}
             onClearMergeReview={handleClearMergeReview}
+            mergeTextHunkSides={currentTextHunkSides}
+            onMergeTextHunkSide={mergeReviewPr ? setTextHunkSide : undefined}
+            mergeGltfEntitySides={currentGltfEntitySides}
+            onMergeGltfEntitySide={mergeReviewPr ? setGltfEntitySide : undefined}
+            mergeGltfFieldSides={currentGltfFieldSides}
+            onMergeGltfFieldSide={mergeReviewPr ? setGltfFieldSide : undefined}
             />
             </div>
           </div>

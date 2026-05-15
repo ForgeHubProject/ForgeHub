@@ -1,5 +1,13 @@
 import type { CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { commitGroupFileChipLabel } from "../lib/commitGroups";
+import {
+  plainTextDiffHasNew,
+  plainTextDiffHasOld,
+  plainTextFromBase,
+  plainTextFromTarget,
+} from "../lib/plainTextDiffView";
+import { groupPlainTextHunks, materializePlainTextMerge } from "../lib/textMergeHunks";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 import { isPlainTextDiff } from "../types";
@@ -8,6 +16,70 @@ const LINE_BG = {
   added: "#dcfce7",
   removed: "#fee2e2",
   unchanged: "transparent",
+};
+
+const textPaneStyle: CSSProperties = {
+  margin: 0,
+  padding: 12,
+  fontSize: 12,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  lineHeight: 1.45,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
+const textPaneCaptionStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: "#64748b",
+  marginBottom: 8,
+  fontFamily: "system-ui, sans-serif",
+};
+
+const textDiffViewSegment: CSSProperties = {
+  position: "absolute",
+  top: 12,
+  right: 108,
+  zIndex: 10,
+  display: "flex",
+  gap: 0,
+  borderRadius: 6,
+  overflow: "hidden",
+  border: "1px solid #e5e7eb",
+  background: "#f8fafc",
+  boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+};
+
+const textDiffViewBtn: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: "#64748b",
+  background: "transparent",
+  border: "none",
+  padding: "5px 10px",
+  cursor: "pointer",
+  lineHeight: 1,
+};
+
+const textDiffViewBtnActive: CSSProperties = {
+  color: "#111827",
+  background: "#fff",
+};
+
+const textDiffToggle: CSSProperties = {
+  position: "absolute",
+  top: 12,
+  right: 12,
+  zIndex: 10,
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#374151",
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  borderRadius: 6,
+  padding: "5px 10px",
+  cursor: "pointer",
+  boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
 };
 
 function diffBadgeStyle(color: string): CSSProperties {
@@ -44,8 +116,53 @@ export function PlainTextView({
   handleModuleClick,
   mergeReviewPr = null,
   mergeReviewFromLoading = false,
+  mergeTextHunkSides,
+  onMergeTextHunkSide,
 }: RepoCodeWorkspaceProps) {
+  const [diffTextViewMode, setDiffTextViewMode] = useState<"old" | "both" | "new">("both");
   const body = activeSnapshot?.snapshotBody ?? "";
+
+  const plainDiff = diffResult && isPlainTextDiff(diffResult) ? diffResult : null;
+
+  const { diffTextHasOld, diffTextHasNew } = useMemo(() => {
+    if (!plainDiff) return { diffTextHasOld: false, diffTextHasNew: false };
+    return {
+      diffTextHasOld: plainTextDiffHasOld(plainDiff.lines),
+      diffTextHasNew: plainTextDiffHasNew(plainDiff.lines),
+    };
+  }, [plainDiff]);
+
+  useEffect(() => {
+    setDiffTextViewMode("both");
+  }, [plainDiff?.baseSnapshotId, plainDiff?.targetSnapshotId]);
+
+  useEffect(() => {
+    if (!diffMode) setDiffTextViewMode("both");
+  }, [diffMode]);
+
+  const baseBranchLabel = mergeReviewPr?.toBranch ?? "base";
+  const targetBranchLabel = mergeReviewPr?.fromBranch ?? "incoming";
+
+  const mergeHunks = useMemo(
+    () => (plainDiff && mergeReviewPr ? groupPlainTextHunks(plainDiff.lines) : []),
+    [plainDiff, mergeReviewPr],
+  );
+
+  const mergedPreview = useMemo(() => {
+    if (!plainDiff || !mergeReviewPr || !mergeTextHunkSides) return null;
+    return materializePlainTextMerge(plainDiff.lines, mergeTextHunkSides);
+  }, [plainDiff, mergeReviewPr, mergeTextHunkSides]);
+
+  const hunkPickBtn = (active: boolean): CSSProperties => ({
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "2px 8px",
+    borderRadius: 4,
+    border: active ? "1px solid #2563eb" : "1px solid #e5e7eb",
+    background: active ? "#eff6ff" : "#fff",
+    color: active ? "#1d4ed8" : "#64748b",
+    cursor: "pointer",
+  });
 
   return (
     <>
@@ -99,7 +216,73 @@ export function PlainTextView({
               <span style={{ marginLeft: 8, opacity: 0.8 }}>plain-text</span>
             </div>
             <div style={{ flex: 1, overflow: "auto", margin: 0 }}>
-              {diffMode && diffResult && isPlainTextDiff(diffResult) ? (
+              {diffMode && plainDiff && mergeReviewPr && mergeHunks.length > 0 && diffTextViewMode === "both" ? (
+                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {mergeHunks.map((hunk) => {
+                    const side = mergeTextHunkSides?.[hunk.id] ?? "incoming";
+                    return (
+                      <div
+                        key={hunk.id}
+                        style={{
+                          border: "1px solid #e5e7eb",
+                          borderRadius: 8,
+                          overflow: "hidden",
+                          background: side === "base" ? "#fff7ed" : "#f0fdf4",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 8,
+                            padding: "6px 10px",
+                            background: "#f8fafc",
+                            borderBottom: "1px solid #e5e7eb",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>Change {hunk.id}</span>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button
+                              type="button"
+                              style={hunkPickBtn(side === "base")}
+                              onClick={() => onMergeTextHunkSide?.(hunk.id, "base")}
+                            >
+                              Use {baseBranchLabel}
+                            </button>
+                            <button
+                              type="button"
+                              style={hunkPickBtn(side === "incoming")}
+                              onClick={() => onMergeTextHunkSide?.(hunk.id, "incoming")}
+                            >
+                              Use {targetBranchLabel}
+                            </button>
+                          </div>
+                        </div>
+                        <pre style={{ ...textPaneStyle, padding: "8px 10px" }}>
+                          {hunk.baseLines.map((line, i) => (
+                            <div key={`b${i}`} style={{ color: "#dc2626" }}>
+                              − {line}
+                            </div>
+                          ))}
+                          {hunk.incomingLines.map((line, i) => (
+                            <div key={`i${i}`} style={{ color: "#16a34a" }}>
+                              + {line}
+                            </div>
+                          ))}
+                        </pre>
+                      </div>
+                    );
+                  })}
+                  {mergedPreview != null && (
+                    <div style={{ borderTop: "2px solid #e5e7eb", paddingTop: 12 }}>
+                      <div style={textPaneCaptionStyle}>Merged preview</div>
+                      <pre style={textPaneStyle}>{mergedPreview || "(empty)"}</pre>
+                    </div>
+                  )}
+                </div>
+              ) : diffMode && plainDiff && diffTextViewMode === "both" ? (
                 <pre
                   style={{
                     margin: 0,
@@ -109,7 +292,7 @@ export function PlainTextView({
                     lineHeight: 1.45,
                   }}
                 >
-                  {diffResult.lines.map((row, idx) => (
+                  {plainDiff.lines.map((row, idx) => (
                     <div
                       key={idx}
                       style={{
@@ -141,20 +324,18 @@ export function PlainTextView({
                     </div>
                   ))}
                 </pre>
-              ) : (
-                <pre
-                  style={{
-                    margin: 0,
-                    padding: 12,
-                    fontSize: 12,
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                    lineHeight: 1.45,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {body || "(empty file)"}
+              ) : diffMode && plainDiff && diffTextViewMode === "old" ? (
+                <pre style={textPaneStyle}>
+                  <div style={textPaneCaptionStyle}>{baseBranchLabel} (current / base)</div>
+                  {plainTextFromBase(plainDiff.lines) || "(empty file)"}
                 </pre>
+              ) : diffMode && plainDiff && diffTextViewMode === "new" ? (
+                <pre style={textPaneStyle}>
+                  <div style={textPaneCaptionStyle}>{targetBranchLabel} (incoming)</div>
+                  {plainTextFromTarget(plainDiff.lines) || "(empty file)"}
+                </pre>
+              ) : (
+                <pre style={textPaneStyle}>{body || "(empty file)"}</pre>
               )}
             </div>
           </div>
@@ -166,10 +347,41 @@ export function PlainTextView({
           </div>
         )}
 
-        {activeSnapshot && diffResult && isPlainTextDiff(diffResult) && (
-          <button style={styles.diffToggle} onClick={() => setDiffMode((d) => !d)}>
+        {activeSnapshot && plainDiff && (
+          <button
+            type="button"
+            style={textDiffToggle}
+            onClick={() => setDiffMode((d) => !d)}
+          >
             {diffMode ? "◑ Line diff" : "◐ Normal"}
           </button>
+        )}
+
+        {diffMode && plainDiff && (
+          <div style={textDiffViewSegment} role="group" aria-label="Text diff view mode">
+            {(["old", "both", "new"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                style={{
+                  ...textDiffViewBtn,
+                  ...(diffTextViewMode === m ? textDiffViewBtnActive : {}),
+                  opacity: m === "old" && !diffTextHasOld ? 0.35 : m === "new" && !diffTextHasNew ? 0.35 : 1,
+                }}
+                disabled={(m === "old" && !diffTextHasOld) || (m === "new" && !diffTextHasNew)}
+                onClick={() => setDiffTextViewMode(m)}
+                title={
+                  m === "old"
+                    ? `Show ${baseBranchLabel} only`
+                    : m === "new"
+                      ? `Show ${targetBranchLabel} only`
+                      : "Unified line diff"
+                }
+              >
+                {m === "old" ? "Old" : m === "both" ? "Both" : "New"}
+              </button>
+            ))}
+          </div>
         )}
       </main>
 

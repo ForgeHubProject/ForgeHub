@@ -281,17 +281,37 @@ export async function mergePull(
   });
 }
 
+export type MergeSide = "base" | "incoming";
+
+export type TextFileMergeResolution = {
+  sourceFile: string;
+  hunks: Array<{ hunkId: string; side: MergeSide }>;
+};
+
+export type GltfFileMergeResolution = {
+  sourceFile: string;
+  entities?: Array<{ entityId: string; side: MergeSide }>;
+  fields?: Array<{ entityId: string; field: string; side: MergeSide }>;
+};
+
+export type MergeFileResolution = TextFileMergeResolution | GltfFileMergeResolution;
+
 export async function resolveMergePr(
   token: string,
   handle: string,
   repoName: string,
   number: number,
-  strategy: "ours" | "theirs",
+  options: { strategy: "ours" | "theirs" } | { files: MergeFileResolution[] },
+  commitMessage?: string,
 ): Promise<{ merged: boolean; sha: string }> {
+  const body =
+    "strategy" in options
+      ? { strategy: options.strategy, commitMessage }
+      : { files: options.files, commitMessage };
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge-resolve`, {
     method: "POST",
     token,
-    body: JSON.stringify({ strategy }),
+    body: JSON.stringify(body),
   });
 }
 

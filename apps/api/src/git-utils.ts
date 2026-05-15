@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -187,4 +187,98 @@ export async function resolveBranchSha(storageKey: string, branch: string): Prom
   try {
     return await git(storageKey, ["rev-parse", `refs/heads/${branch}`]);
   } catch { return null; }
+}
+
+/** Read a UTF-8 file at the tip of a branch (null if missing). */
+export async function readFileAtBranch(
+  storageKey: string,
+  branch: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    return await git(storageKey, ["show", `${branch}:${filePath}`]);
+  } catch {
+    return null;
+  }
+}
+
+/** Paths changed between two branch tips (merge-base..from, plus to-only). */
+export async function listFilesDifferingBetweenBranches(
+  storageKey: string,
+  toBranch: string,
+  fromBranch: string,
+): Promise<string[]> {
+  try {
+    const out = await git(storageKey, ["diff", "--name-only", toBranch, fromBranch]);
+    return out.split("\n").map((p) => p.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io"] as const;
+
+/**
+ * Merge fromBranch into toBranch, writing resolved file contents for given paths,
+ * then commit and push. Works when merge stops with conflicts (overwrites those paths).
+ */
+export async function performMergeWithResolvedFiles(
+  storageKey: string,
+  fromBranch: string,
+  toBranch: string,
+  message: string,
+  resolvedFiles: Record<string, string>,
+): Promise<MergeResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-merge-resolve-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], {
+        cwd: tmpDir,
+        maxBuffer: MAX,
+      });
+      return { ok: false, alreadyMerged: true };
+    } catch {
+      /* not merged yet */
+    }
+
+    try {
+      await execFile(
+        "git",
+        [...MERGE_IDENTITY, "merge", "--no-ff", "--no-commit", `origin/${fromBranch}`],
+        { cwd: tmpDir, maxBuffer: MAX },
+      );
+    } catch {
+      /* conflicts expected — continue with resolved file writes */
+    }
+
+    for (const [relPath, content] of Object.entries(resolvedFiles)) {
+      const full = path.join(tmpDir, relPath);
+      await mkdir(path.dirname(full), { recursive: true });
+      await writeFile(full, content, "utf8");
+    }
+
+    await execFile("git", ["add", "-A"], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", [...MERGE_IDENTITY, "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }

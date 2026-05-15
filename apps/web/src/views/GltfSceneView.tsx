@@ -50,6 +50,10 @@ export function GltfSceneView({
   handleModuleClick,
   mergeReviewPr = null,
   mergeReviewFromLoading = false,
+  mergeGltfEntitySides,
+  onMergeGltfEntitySide,
+  mergeGltfFieldSides,
+  onMergeGltfFieldSide,
 }: RepoCodeWorkspaceProps) {
   const [diffOverlayMode, setDiffOverlayMode] = useState<"old" | "both" | "new">("both");
   function buildParentMap(entities: Entity[]): Map<string, string | null> {
@@ -283,6 +287,9 @@ export function GltfSceneView({
               .filter((c) => c.type !== "unchanged")
               .map((c) => {
                 const isSelected = ghostSelectedId === c.entityId || selectedEntity?.entityId === c.entityId;
+                const entitySide = mergeGltfEntitySides?.[c.entityId] ?? (c.type === "removed" ? "base" : "incoming");
+                const baseLabel = mergeReviewPr?.toBranch ?? "base";
+                const incLabel = mergeReviewPr?.fromBranch ?? "incoming";
                 return (
                   <div
                     key={c.entityId}
@@ -305,6 +312,42 @@ export function GltfSceneView({
                     </span>
                     <span style={styles.overlayName}>{c.name}</span>
                     <span style={styles.overlayKind}>{c.kind}</span>
+                    {mergeReviewPr && onMergeGltfEntitySide && (
+                      <div style={{ display: "flex", gap: 4, marginLeft: "auto", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 600,
+                            padding: "1px 5px",
+                            borderRadius: 3,
+                            border: entitySide === "base" ? "1px solid #2563eb" : "1px solid #64748b",
+                            background: entitySide === "base" ? "#eff6ff" : "transparent",
+                            color: entitySide === "base" ? "#1d4ed8" : "#94a3b8",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => onMergeGltfEntitySide(c.entityId, "base")}
+                        >
+                          {baseLabel}
+                        </button>
+                        <button
+                          type="button"
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 600,
+                            padding: "1px 5px",
+                            borderRadius: 3,
+                            border: entitySide === "incoming" ? "1px solid #2563eb" : "1px solid #64748b",
+                            background: entitySide === "incoming" ? "#eff6ff" : "transparent",
+                            color: entitySide === "incoming" ? "#1d4ed8" : "#94a3b8",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => onMergeGltfEntitySide(c.entityId, "incoming")}
+                        >
+                          {incLabel}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -497,6 +540,9 @@ export function GltfSceneView({
             change={selectedChange}
             diffMode={diffMode}
             diffOverlayMode={diffOverlayMode}
+            mergeReviewPr={mergeReviewPr}
+            mergeGltfFieldSides={mergeGltfFieldSides}
+            onMergeGltfFieldSide={onMergeGltfFieldSide}
           />
         ) : (
           <div style={styles.rightPlaceholder}>
@@ -545,11 +591,17 @@ function EntityInspector({
   change,
   diffMode,
   diffOverlayMode,
+  mergeReviewPr,
+  mergeGltfFieldSides,
+  onMergeGltfFieldSide,
 }: {
   entity: Entity | null;
   change: DiffChange | null;
   diffMode: boolean;
   diffOverlayMode: "old" | "both" | "new";
+  mergeReviewPr?: import("../types").PullRequest | null;
+  mergeGltfFieldSides?: Record<string, "base" | "incoming">;
+  onMergeGltfFieldSide?: (entityId: string, field: string, side: "base" | "incoming") => void;
 }) {
   const type = change?.type;
   const isRemoved = type === "removed";
@@ -679,15 +731,58 @@ function EntityInspector({
           </div>
         )}
       </div>
-      {rows.map((row, i) => (
-        <div key={i} style={propRowStyle(row.kind)}>
-          <span style={styles.paramKey}>{row.label}</span>
-          <span style={styles.paramValue}>{row.value}</span>
-          {row.before !== undefined && (
-            <span style={{ fontSize: 10, color: DIFF_COLOR.removed, fontFamily: "monospace" }}>was: {row.before}</span>
-          )}
-        </div>
-      ))}
+      {rows.map((row, i) => {
+        const fc = change?.fieldChanges.find((f) => f.field === row.label);
+        const fieldKey = change && fc ? `${change.entityId}:${fc.field}` : null;
+        const fieldSide = fieldKey && mergeGltfFieldSides?.[fieldKey];
+        const showFieldPick =
+          mergeReviewPr && onMergeGltfFieldSide && change && fc && diffMode && diffOverlayMode === "both";
+        return (
+          <div key={i} style={propRowStyle(row.kind)}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+              <span style={styles.paramKey}>{row.label}</span>
+              {showFieldPick && (
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "1px 5px",
+                      borderRadius: 3,
+                      border: fieldSide === "base" ? "1px solid #2563eb" : "1px solid #94a3b8",
+                      background: fieldSide === "base" ? "#eff6ff" : "transparent",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => onMergeGltfFieldSide(change.entityId, fc.field, "base")}
+                  >
+                    {mergeReviewPr.toBranch}
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "1px 5px",
+                      borderRadius: 3,
+                      border: fieldSide === "incoming" ? "1px solid #2563eb" : "1px solid #94a3b8",
+                      background: fieldSide === "incoming" ? "#eff6ff" : "transparent",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => onMergeGltfFieldSide(change.entityId, fc.field, "incoming")}
+                  >
+                    {mergeReviewPr.fromBranch}
+                  </button>
+                </div>
+              )}
+            </div>
+            <span style={styles.paramValue}>{row.value}</span>
+            {row.before !== undefined && (
+              <span style={{ fontSize: 10, color: DIFF_COLOR.removed, fontFamily: "monospace" }}>was: {row.before}</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
