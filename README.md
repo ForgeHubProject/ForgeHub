@@ -12,158 +12,207 @@ Hardware teams still lose time in manual review loops:
 - review feedback is fragmented across chats, docs, and calls
 - "what changed, why, and who approved it?" is difficult to answer quickly
 
-ForgeHub aims to solve this by treating hardware artifacts as first-class, versioned assets with collaborative review tooling.
+ForgeHub solves this by treating hardware artifacts as first-class, versioned assets with collaborative review tooling backed by real Git storage.
 
 ## Product direction
 
-ForgeHub is inspired by the best parts of GitHub workflows:
-- commit-style snapshots with metadata
-- visual diff views between revisions
+ForgeHub is inspired by GitHub-style workflows:
+- commit-level snapshots with full metadata
+- semantic visual diff views between revisions (entity-level for 3D, line-level for text)
 - comment and review cycles on proposed changes
-- status checks and approvals before merge
+- pull requests, merge strategies, and conflict resolution
 - full history and auditability
 
-But it is adapted for hardware artifacts (CAD, blueprints, and other 2D/3D deliverables), where geometry-aware visualization is critical.
-
-## MVP scope
-
-The initial MVP focuses on proving three core outcomes:
-1. A hardware design can be snapshotted and versioned reliably.
-2. A reviewer can understand changes quickly using visual diffs.
-3. Teams can make remote decisions with clear review records.
-
-Detailed requirements and rollout phases are in `docs/mvp-spec.md`.
-Recommended implementation stack is in `docs/tech-stack.md`.
+But it is adapted for hardware artifacts (CAD, blueprints, and other 2D/3D deliverables), where geometry-aware visualization and tolerance-aware diffing are critical.
 
 ## Data and diff philosophy
 
-ForgeHub will store hardware artifacts in a canonical JSON intermediate representation (IR), then drive both visual rendering and review diffs from that same model.
+Artifacts are stored in a canonical JSON intermediate representation (IR) and a bare Git repository. Diffs are computed at the **semantic** level:
 
-This enables:
-- semantic, entity-level diffs (added/removed/modified/moved components)
-- visual highlights in 2D/3D surfaces
-- optional raw JSON/line-level inspection for advanced debugging
-- stable review behavior across nested modules/submodules
+- **glTF scenes** → entity-level diff: added / removed / modified / moved components, with field-level change tracking
+- **Plain text** → line-level LCS diff, same model as Git
+- New formats plug in via the **handler registry** without touching core logic
 
-Diff noise from exporter jitter or irrelevant metadata is controlled by:
-- `.hwignore` rules for paths/fields to ignore
-- tolerance thresholds for numeric changes (for example small transform drift)
+Diff noise (exporter jitter, irrelevant metadata) is designed to be controlled by `.hwignore` rules and configurable numeric tolerances — groundwork for this is laid in `docs/contracts/`.
 
-## Current implementation status
+## Current implementation
 
-Product specs and contracts live under `docs/`. The first running code path is **`apps/api`**: accounts (register, login, JWT session) and **repositories** owned by a user (`handle/repo-name`, GitHub-style naming) with **public or private** visibility. Hardware snapshot and diff APIs from the spec are not wired yet; they can build on this foundation.
+The API is fully functional end-to-end. Below is a summary of what is running.
 
-**Storage (same mental model as Git):** *Metadata* (users, repo rows, visibility, collaborators later) lives in the **database** (SQLite in dev; PostgreSQL in production). *Large blobs* (future bare Git objects, packfiles, ForgeHub snapshot payloads) will live **beside** the DB on disk or in object storage—like `origin` holding the server-side objects while your **laptop** keeps a local clone. This repo’s API is the **hosted** side; a second “server” in daily use is your **local machine** + Git client, not a second ForgeHub process.
+### Accounts and authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/auth/register` | Create account (`email`, `password`, `handle`, optional `displayName`) |
+| `POST` | `/auth/login` | Returns a Bearer JWT |
+| `GET` | `/auth/me` | Current user from token |
+
+### Repositories
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/repos` | Create a repo (`name`, `visibility`: `public`\|`private`, optional `description`) |
+| `GET` | `/repos/mine` | All repos owned by the caller |
+| `GET` | `/users/:handle/repos` | Public repos for any user; all repos if the token is that user |
+| `GET` | `/repos/:handle/:name` | Repo metadata; private repos return 404 for non-members |
+| `PATCH` | `/repos/:name` | Update `description` or `visibility` |
+| `PATCH` | `/repos/:name/rename` | Rename repo and move bare storage path |
+| `DELETE` | `/repos/:name` | Delete repo and remove Git storage |
+| `GET` | `/repos/:name/collaborators` | List collaborators (owner only) |
+| `POST` | `/repos/:name/collaborators` | Add/update collaborator role (`reader` or `writer`) |
+| `DELETE` | `/repos/:name/collaborators/:handle` | Remove collaborator |
+| `GET` | `/repos/:handle/:name/storage` | Debug: storage key, path, bare-repo status |
+
+### Snapshots and artifact ingestion
+
+Snapshots are immutable point-in-time captures of an artifact file. They are created automatically on `git push` and can also be uploaded directly.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/repos/:handle/:name/snapshots` | Upload an artifact directly (`multipart/form-data`) |
+| `GET` | `/repos/:handle/:name/snapshots` | List snapshots (filterable by `branch`, `tag`, `commitSha`) |
+| `GET` | `/repos/:handle/:name/snapshots/:id` | Load snapshot with entities and constraints |
+
+### Semantic diff (compare)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/compare?base=X&target=Y` | Handler-specific diff between two snapshots. Returns entity-level changes (glTF) or line-level changes (text) |
+
+### Branches and tags
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/branches` | List branches with SHA and default flag |
+| `POST` | `/repos/:handle/:name/branches` | Create a branch |
+| `DELETE` | `/repos/:handle/:name/branches/:branch` | Delete a branch |
+| `GET` | `/repos/:handle/:name/tags` | List tags |
+| `POST` | `/repos/:handle/:name/tags` | Create a tag |
+| `DELETE` | `/repos/:handle/:name/tags/:tag` | Delete a tag |
+
+### Pull requests and merge
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/pulls` | List PRs (filter by `state`: `open`\|`closed`\|`merged`\|`all`) |
+| `POST` | `/repos/:handle/:name/pulls` | Open a PR (`title`, `fromBranch`, optional `toBranch`, `description`) |
+| `GET` | `/repos/:handle/:name/pulls/:number` | PR detail with `mergeable` status |
+| `PATCH` | `/repos/:handle/:name/pulls/:number` | Close or reopen a PR |
+| `POST` | `/repos/:handle/:name/pulls/:number/merge` | Auto-merge; returns `{ merged, sha }` or 409 on conflict |
+| `POST` | `/repos/:handle/:name/pulls/:number/merge-resolve` | Resolve conflicts manually — per-hunk for text, per-entity/field for glTF |
+
+### Forks
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/repos/:handle/:name/forks` | Fork a repo into the caller's namespace |
+| `GET` | `/repos/:handle/:name/forks` | List forks |
+
+### Git over HTTPS
+
+Bare repositories are served over standard Git HTTPS transport so any Git client works out of the box.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /git/:handle/:repo/info/refs?service=git-upload-pack` | Clone/fetch capability advertisement |
+| `POST /git/:handle/:repo/git-upload-pack` | Clone/fetch pack transfer |
+| `GET /git/:handle/:repo/info/refs?service=git-receive-pack` | Push capability advertisement |
+| `POST /git/:handle/:repo/git-receive-pack` | Push pack transfer (triggers auto-ingest) |
+
+Auth on Git endpoints accepts either `Authorization: Bearer <jwt>` or `Authorization: Basic base64(x:<jwt>)`. Public repos are readable anonymously; write requires owner or `writer` collaborator.
 
 ## Local development
 
+**Prerequisites:** Node 20+, Git 2.x.
+
 ```bash
+# 1. Install dependencies
 npm install
-cd apps/api && cp .env.example .env   # set JWT_SECRET to a long random string
-npm run db:push --workspace @forgehub/api
+
+# 2. Set environment variables
+cp apps/api/.env.example apps/api/.env
+# Edit .env — set JWT_SECRET to a random string ≥ 16 characters
+# DATABASE_URL defaults to file:./prisma/dev.db
+
+# 3. Push the schema to SQLite
+npm run db:push
+
+# 4. Start the API
 npm run dev:api
+# Listens on http://localhost:3001
+
+# 5. (Optional) Start the web app in a second terminal
+npm run dev:web
 ```
 
-The API listens on `PORT` (default **3001**).
-
-## Monorepo layout
-
-- `apps/api` — Fastify + Prisma (SQLite in dev) — auth and repos today
-- `apps/web`, `packages/*`, `workers/*` — not scaffolded yet (see `docs/tech-stack.md`)
-
-### Artifact handlers and UI views
-
-Snapshots are tagged with a **`handlerId`** string (default **`gltf-scene`**) that selects which backend parser/ingest path produced the row and which compare semantics apply. Cross-handler compare returns HTTP 400.
-
-- **Backend handlers** live under [`apps/api/src/handlers/`](apps/api/src/handlers/). Each handler registers with [`apps/api/src/handlers/registry.ts`](apps/api/src/handlers/registry.ts). Git post-receive ingest walks changed paths and calls the first handler whose `matchesPath()` accepts the file.
-  - **`gltf-scene`** — `*.gltf` → scene graph → `Entity` rows.
-  - **`plain-text`** — common text paths (e.g. `.txt`, `.md`, `.json`, `.yml`, `.env`, `Dockerfile`, `LICENSE`, …) → UTF-8 body stored in `snapshotBody` (max **512 KiB** per file).
-- **Frontend workspaces** mirror this under [`apps/web/src/views/`](apps/web/src/views/). [`registry.tsx`](apps/web/src/views/registry.tsx) maps `handlerId` to a workspace component (with a fallback panel for unknown IDs). You can register additional UI at runtime via `registerRepoWorkspaceView(handlerId, Component)` if you split bundles later.
-
-To add a new open format: implement `ArtifactHandler` on the API (ingest + compare when applicable), register it in [`handlers/index.ts`](apps/api/src/handlers/index.ts), add a Prisma strategy if it is not scene-graph shaped, and add a matching view plus `registry.set` / `registerRepoWorkspaceView` on the web app.
-
-### Accounts and repos (implemented)
-
-- `GET /health`
-- `POST /auth/register` — body: `email`, `password`, `handle`, optional `displayName`
-- `POST /auth/login` — body: `email`, `password` → returns `token` (Bearer JWT)
-- `GET /auth/me` — header: `Authorization: Bearer <token>`
-- `POST /repos` — create repo — body: `name`, optional `description`, optional `visibility` (`"public"` \| `"private"`); defaults to **`private`**
-- `GET /repos/mine` — list your repos (all visibilities)
-- `GET /users/:handle/repos` — lists **public** repos; if you call it with `Authorization: Bearer` **and** the token is that user, you get **all** repos (for “my profile” style clients)
-- `GET /repos/:handle/:name` — repo metadata; **private** repos return 404 unless the Bearer token is the **owner** (no leak that a private name exists)
-- `PATCH /repos/:name` — owner only: optional `description`, optional `visibility`
-- `PATCH /repos/:name/rename` — owner only: rename repository and move bare storage path
-- `DELETE /repos/:name` — owner only: deletes repo metadata and bare Git storage
-- `GET /repos/:name/collaborators` — owner only: list collaborators
-- `POST /repos/:name/collaborators` — owner only: add/update collaborator role (`reader` or `writer`)
-- `DELETE /repos/:name/collaborators/:handle` — owner only: remove collaborator
-- `GET /repos/:handle/:name/storage` — owner-only debug endpoint with `storageKey`, absolute path, and bare-repo status
-
-### Minimal Git over HTTPS endpoints (implemented)
-
-- `GET /git/:handle/:repo/info/refs?service=git-upload-pack` — read capability advertisement
-- `POST /git/:handle/:repo/git-upload-pack` — fetch/clone pack transfer
-- `GET /git/:handle/:repo/info/refs?service=git-receive-pack` — write capability advertisement
-- `POST /git/:handle/:repo/git-receive-pack` — push pack transfer
-
-Auth behavior:
-- Read (`upload-pack`): public repos are readable anonymously; private repos require owner auth.
-- Write (`receive-pack`): owner or collaborator with `writer` role.
-- Auth header accepts:
-  - `Authorization: Bearer <jwt>`
-  - `Authorization: Basic base64(<any-username>:<jwt>)`
-
-### HTTPS clone/push walkthrough (current behavior)
+### Running tests
 
 ```bash
-# 0) Start API (from repo root)
-npm run dev:api
+# From repo root or apps/api
+npm test
 
-# 1) Register and login to get JWT
-curl -sS -X POST http://localhost:3001/auth/register \
+# Watch mode
+npm run test:watch -w @forgehub/api
+```
+
+Tests run against mocked Prisma and Git I/O — no real database or Git storage needed.
+
+## Clone / push walkthrough
+
+```bash
+# Register and get a token
+TOKEN=$(curl -sS -X POST http://localhost:3001/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"your-secure-password","handle":"your-handle"}'
+  -d '{"email":"you@example.com","password":"your-secure-password","handle":"you"}' \
+  | jq -r .token)
 
-# or login:
-# curl -sS -X POST http://localhost:3001/auth/login ...
-#
-# Save returned token as TOKEN:
-TOKEN="<jwt-from-register-or-login>"
-
-# 2) Create a repository (public or private)
+# Create a repo
 curl -sS -X POST http://localhost:3001/repos \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"demo","visibility":"private"}'
 
-# 3) Clone over HTTP using Basic auth (password = JWT)
-git -c http.extraHeader="Authorization: Basic $(printf 'x:%s' "$TOKEN" | base64 -w 0)" \
-  clone http://localhost:3001/git/your-handle/demo.git
+# Clone (Basic auth: username=x, password=JWT)
+git clone "http://x:$TOKEN@localhost:3001/git/you/demo.git"
 
-# 4) Push over HTTP using the same auth header
+# Push — ingest runs automatically on the server
 cd demo
 echo "hello" > README.md
-git add README.md
-git commit -m "init"
-git -c http.extraHeader="Authorization: Basic $(printf 'x:%s' "$TOKEN" | base64 -w 0)" \
-  push origin HEAD
+git add README.md && git commit -m "init"
+git push origin HEAD
 ```
 
-Notes:
-- Public repos can be cloned without auth.
-- Private repos require auth for clone/fetch.
-- Push is owner-only.
+## Monorepo layout
 
-Example register:
-
-```json
-{
-  "email": "you@example.com",
-  "password": "your-secure-password",
-  "handle": "your-handle"
-}
 ```
+ForgeHub/
+├── apps/
+│   ├── api/                  # Fastify 5 + Prisma 6 (SQLite dev / PostgreSQL prod)
+│   │   ├── src/
+│   │   │   ├── handlers/     # Artifact handlers (gltf-scene, plain-text)
+│   │   │   ├── merge/        # Merge resolution (text hunks, glTF entity picks)
+│   │   │   ├── routes/       # All HTTP routes
+│   │   │   └── __tests__/    # Vitest test suite (188+ tests)
+│   │   └── prisma/
+│   │       └── schema.prisma # 9 models
+│   └── web/                  # React 19 + Three.js (Vite)
+│       └── src/
+│           ├── views/        # Handler-specific workspaces (GltfScene, PlainText)
+│           └── pages/        # Login, RepoList, Snapshot
+├── docs/
+│   ├── mvp-spec.md
+│   ├── tech-stack.md
+│   └── contracts/            # Entity schema, diff schema, hwignore spec
+└── test-data/                # Sample glTF and text files
+```
+
+### Adding a new artifact format
+
+1. Implement `ArtifactHandler` in `apps/api/src/handlers/your-format/`
+2. Register it in `apps/api/src/handlers/index.ts`
+3. Add a Prisma migration if the format needs a new storage shape
+4. Add a matching view component and register it in `apps/web/src/views/registry.tsx`
 
 ## License
 

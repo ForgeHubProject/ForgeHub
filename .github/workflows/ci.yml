@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**", "feature/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: API tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate -w @forgehub/api
+
+      - name: Run tests
+        run: npm test
+        env:
+          JWT_SECRET: ci-test-secret-at-least-16-chars
+          DATABASE_URL: file:./ci-test.db
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate -w @forgehub/api
+
+      - name: Type check API
+        run: npx tsc --noEmit
+        working-directory: apps/api
+
+      - name: Type check web
+        run: npx tsc --noEmit
+        working-directory: apps/web
