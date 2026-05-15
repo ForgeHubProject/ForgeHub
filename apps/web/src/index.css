@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-gh-bg text-gh-text font-sans;
+    margin: 0;
+  }
+
+  a {
+    @apply text-gh-accent no-underline;
+  }
+
+  a:hover {
+    @apply underline text-gh-accent-hover;
+  }
+
+  :focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-gh-sm font-medium rounded-md border cursor-pointer transition-colors duration-100 select-none;
+    line-height: 20px;
+  }
+
+  .btn-primary {
+    @apply btn bg-gh-success text-white border-transparent hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .btn-default {
+    @apply btn bg-gh-canvas text-gh-text border-gh-border hover:bg-gh-bg disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply btn bg-gh-canvas text-gh-danger border-gh-border hover:bg-gh-danger hover:text-white disabled:opacity-60;
+  }
+
+  .input {
+    @apply w-full px-3 py-1.5 text-gh-base bg-gh-canvas border border-gh-border rounded-md outline-none transition-shadow duration-100 placeholder-gh-muted;
+  }
+
+  .input:focus {
+    border-color: #0969da;
+    box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.3);
+  }
+
+  .label {
+    @apply block text-gh-sm font-semibold text-gh-text mb-1.5;
+  }
+
+  .form-group {
+    @apply flex flex-col;
+  }
+
+  .card {
+    @apply bg-gh-canvas border border-gh-border rounded-md;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 text-gh-xs font-medium rounded-full border;
+  }
+
+  .badge-public {
+    @apply badge bg-gh-success-muted text-gh-success border-transparent;
+  }
+
+  .badge-private {
+    @apply badge bg-gh-warning-muted text-gh-warning border-transparent;
+  }
+
+  .counter {
+    @apply inline-flex items-center justify-center px-1.5 py-0.5 text-gh-xs font-semibold bg-gray-100 text-gh-muted rounded-full border border-gh-border min-w-[20px];
+  }
+
+  .tab-nav {
+    @apply flex border-b border-gh-border;
+  }
+
+  .tab-item {
+    @apply flex items-center gap-1.5 px-4 py-2 text-gh-sm text-gh-muted border-b-2 border-transparent cursor-pointer hover:text-gh-text hover:border-gh-border transition-colors duration-100;
+  }
+
+  .tab-item-active {
+    @apply tab-item text-gh-text font-semibold border-gh-accent;
+  }
+
+  .avatar {
+    @apply inline-block rounded-full bg-gray-200 overflow-hidden flex-shrink-0;
+  }
+}
