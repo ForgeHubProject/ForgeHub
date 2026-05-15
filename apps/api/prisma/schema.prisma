@@ -28,6 +28,9 @@ model User {
   repos          Repo[]
   collaborations RepoCollaborator[]
   pullRequests   PullRequest[]
+  authoredIssues   Issue[]        @relation("IssueAuthor")
+  assignedIssues   Issue[]        @relation("IssueAssignee")
+  issueComments    IssueComment[] @relation("IssueCommentAuthor")
 }
 
 model Repo {
@@ -44,6 +47,8 @@ model Repo {
   snapshots         Snapshot[]
   pullRequests      PullRequest[]
   protectedBranches ProtectedBranch[]
+  issues  Issue[]
+  labels  Label[]
 
   @@unique([ownerId, name])
 }
@@ -155,4 +160,67 @@ model Constraint {
   entityB  Entity   @relation("ConstraintEntityB", fields: [entityBId], references: [id], onDelete: Cascade)
 
   @@unique([snapshotId, entityAId, entityBId])
+}
+
+enum IssueState {
+  OPEN
+  CLOSED
+}
+
+model Label {
+  id          String      @id @default(cuid())
+  repoId      String
+  name        String
+  color       String
+  description String?
+  createdAt   DateTime    @default(now())
+
+  repo   Repo        @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  issues IssueLabel[]
+
+  @@unique([repoId, name])
+}
+
+model Issue {
+  id         String     @id @default(cuid())
+  repoId     String
+  number     Int
+  title      String
+  body       String?
+  state      IssueState @default(OPEN)
+  authorId   String
+  assigneeId String?
+  closedAt   DateTime?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
+  assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  labels   IssueLabel[]
+  comments IssueComment[]
+
+  @@unique([repoId, number])
+}
+
+model IssueLabel {
+  issueId String
+  labelId String
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, labelId])
+}
+
+model IssueComment {
+  id        String   @id @default(cuid())
+  issueId   String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
 }
