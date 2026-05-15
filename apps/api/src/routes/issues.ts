@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { notifySubscribers, notifyUser } from "../notifications-service.js";
 
 function formatIssue(issue: {
   id: string;
@@ -123,6 +124,12 @@ export async function issueRoutes(app: FastifyInstance) {
         include: issueInclude,
       });
     });
+
+    // Fan out notifications (fire-and-forget — don't block the response)
+    void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "SUBSCRIBED" });
+    if (issue.assigneeId) {
+      void notifyUser(issue.assigneeId, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "ASSIGNED" });
+    }
 
     return reply.status(201).send(formatIssue(issue));
   });
@@ -252,6 +259,12 @@ export async function issueRoutes(app: FastifyInstance) {
       },
       include: { author: { select: { handle: true } } },
     });
+
+    // Notify issue participants (author + assignee, not self)
+    const participants = new Set([issue.authorId, issue.assigneeId].filter(Boolean) as string[]);
+    for (const uid of participants) {
+      void notifyUser(uid, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "COMMENT" });
+    }
 
     return reply.status(201).send(formatComment(comment));
   });

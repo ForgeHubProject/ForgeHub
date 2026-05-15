@@ -31,6 +31,11 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+vi.mock("../notifications-service.js", () => ({
+  notifySubscribers: vi.fn().mockResolvedValue(undefined),
+  notifyUser: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../git-storage.js", () => ({
   buildStorageKey: vi.fn().mockReturnValue("alice/my-repo.git"),
   createBareRepo: vi.fn().mockResolvedValue("/tmp/repo"),
