@@ -203,6 +203,112 @@ export async function readFileAtBranch(
   }
 }
 
+// ─── commits ─────────────────────────────────────────────────────────────────
+
+export type CommitInfo = {
+  sha: string;
+  shortSha: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  date: string;
+  parentShas: string[];
+};
+
+export async function listCommits(
+  storageKey: string,
+  ref: string,
+  options: { page?: number; perPage?: number } = {},
+): Promise<CommitInfo[]> {
+  const page = Math.max(1, options.page ?? 1);
+  const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
+  const skip = (page - 1) * perPage;
+  try {
+    // \x1f (unit separator) won't appear in git metadata fields
+    const out = await git(storageKey, [
+      "log", ref,
+      `--skip=${skip}`, `-n`, String(perPage),
+      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+    ]);
+    if (!out) return [];
+    return out.split("\n").filter(Boolean).map((line) => {
+      const [sha, message, authorName, authorEmail, date, parents] = line.split("\x1f");
+      return {
+        sha: sha ?? "",
+        shortSha: (sha ?? "").slice(0, 7),
+        message: message ?? "",
+        authorName: authorName ?? "",
+        authorEmail: authorEmail ?? "",
+        date: date ?? "",
+        parentShas: parents?.trim() ? parents.trim().split(" ") : [],
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function getCommit(
+  storageKey: string,
+  sha: string,
+): Promise<(CommitInfo & { changedFiles: string[] }) | null> {
+  try {
+    const meta = await git(storageKey, [
+      "show", "--no-patch", "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P", sha,
+    ]);
+    const [fullSha, message, authorName, authorEmail, date, parents] = meta.split("\x1f");
+    const filesOut = await git(storageKey, ["diff-tree", "--no-commit-id", "-r", "--name-only", sha]);
+    return {
+      sha: fullSha ?? "",
+      shortSha: (fullSha ?? "").slice(0, 7),
+      message: message ?? "",
+      authorName: authorName ?? "",
+      authorEmail: authorEmail ?? "",
+      date: date ?? "",
+      parentShas: parents?.trim() ? parents.trim().split(" ") : [],
+      changedFiles: filesOut.split("\n").filter(Boolean),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── file tree ───────────────────────────────────────────────────────────────
+
+export type TreeEntry = {
+  mode: string;
+  type: "blob" | "tree";
+  sha: string;
+  path: string;
+  name: string;
+};
+
+export async function listTree(
+  storageKey: string,
+  ref: string,
+  treePath: string,
+): Promise<TreeEntry[]> {
+  try {
+    // trailing slash lists directory contents; no arg lists root
+    const args = treePath
+      ? ["ls-tree", ref, "--", treePath.replace(/\/$/, "") + "/"]
+      : ["ls-tree", ref];
+    const out = await git(storageKey, args);
+    if (!out) return [];
+    const prefix = treePath ? treePath.replace(/\/$/, "") + "/" : "";
+    return out.split("\n").filter(Boolean).map((line) => {
+      const tab = line.indexOf("\t");
+      const [mode, type, sha] = line.slice(0, tab).split(" ");
+      // git ls-tree always returns the full path from repo root
+      const fullPath = line.slice(tab + 1);
+      const name = prefix ? fullPath.slice(prefix.length) : fullPath;
+      return { mode: mode ?? "", type: (type ?? "blob") as "blob" | "tree", sha: sha ?? "", path: fullPath, name };
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Paths changed between two branch tips (merge-base..from, plus to-only). */
 export async function listFilesDifferingBetweenBranches(
   storageKey: string,
