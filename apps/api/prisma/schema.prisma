@@ -28,9 +28,12 @@ model User {
   repos          Repo[]
   collaborations RepoCollaborator[]
   pullRequests   PullRequest[]
-  authoredIssues   Issue[]        @relation("IssueAuthor")
-  assignedIssues   Issue[]        @relation("IssueAssignee")
-  issueComments    IssueComment[] @relation("IssueCommentAuthor")
+  authoredIssues   Issue[]                    @relation("IssueAuthor")
+  assignedIssues   Issue[]                    @relation("IssueAssignee")
+  issueComments    IssueComment[]             @relation("IssueCommentAuthor")
+  prComments       PullRequestComment[]       @relation("PRCommentAuthor")
+  prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
+  prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
 }
 
 model Repo {
@@ -130,8 +133,11 @@ model PullRequest {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  repo   Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  author User @relation(fields: [authorId], references: [id])
+  repo           Repo                       @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  author         User                       @relation(fields: [authorId], references: [id])
+  comments       PullRequestComment[]
+  reviews        PullRequestReview[]
+  reviewComments PullRequestReviewComment[]
 
   @@unique([repoId, number])
 }
@@ -160,6 +166,13 @@ model Constraint {
   entityB  Entity   @relation("ConstraintEntityB", fields: [entityBId], references: [id], onDelete: Cascade)
 
   @@unique([snapshotId, entityAId, entityBId])
+}
+
+enum ReviewState {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  COMMENTED
 }
 
 enum IssueState {
@@ -223,4 +236,47 @@ model IssueComment {
 
   issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
+}
+
+model PullRequestComment {
+  id            String      @id @default(cuid())
+  pullRequestId String
+  authorId      String
+  body          String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  pullRequest   PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  author        User        @relation("PRCommentAuthor", fields: [authorId], references: [id])
+}
+
+model PullRequestReview {
+  id            String      @id @default(cuid())
+  pullRequestId String
+  authorId      String
+  state         ReviewState @default(PENDING)
+  body          String?
+  submittedAt   DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  pullRequest   PullRequest              @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  author        User                     @relation("PRReviewAuthor", fields: [authorId], references: [id])
+  comments      PullRequestReviewComment[]
+}
+
+model PullRequestReviewComment {
+  id            String            @id @default(cuid())
+  reviewId      String
+  pullRequestId String
+  authorId      String
+  body          String
+  filePath      String
+  position      String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  review        PullRequestReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  pullRequest   PullRequest       @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  author        User              @relation("PRReviewCommentAuthor", fields: [authorId], references: [id])
 }
