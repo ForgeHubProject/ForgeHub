@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, performMerge, resolveBranchSha, type MergeStrategy } from "../git-utils.js";
+import { branchExists, defaultBranch, performMerge, resolveBranchSha } from "../git-utils.js";
+import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 
@@ -208,22 +209,51 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
 
-    const { strategy, commitMessage } = request.body as { strategy?: string; commitMessage?: string };
-    if (strategy !== "ours" && strategy !== "theirs") {
-      return reply.status(400).send({ error: "strategy must be 'ours' or 'theirs'" });
+    const body = request.body as {
+      strategy?: string;
+      commitMessage?: string;
+      files?: MergeFileResolution[];
+    };
+
+    const hasFiles = Array.isArray(body.files) && body.files.length > 0;
+    const strategy = body.strategy;
+    if (!hasFiles && strategy !== "ours" && strategy !== "theirs") {
+      return reply.status(400).send({
+        error: "Provide strategy ('ours' | 'theirs') or a non-empty files resolution list",
+      });
     }
 
-    const message = commitMessage?.trim()
-      || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number}) [resolved: ${strategy}]`;
+    const message =
+      body.commitMessage?.trim()
+      || (hasFiles
+        ? `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number}) [granular]`
+        : `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number}) [resolved: ${strategy}]`);
 
     const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
 
-    let result: Awaited<ReturnType<typeof performMerge>>;
+    let result: Awaited<ReturnType<typeof resolvePullRequestMerge>>;
     try {
-      result = await performMerge(repo.storageKey, pr.fromBranch, pr.toBranch, message, strategy as MergeStrategy);
+      result = hasFiles
+        ? await resolvePullRequestMerge(
+            repo.storageKey,
+            repo.id,
+            pr.toBranch,
+            pr.fromBranch,
+            message,
+            { files: body.files! },
+          )
+        : await resolvePullRequestMerge(
+            repo.storageKey,
+            repo.id,
+            pr.toBranch,
+            pr.fromBranch,
+            message,
+            { strategy: strategy as "ours" | "theirs" },
+          );
     } catch (err) {
-      app.log.error({ err }, "merge-resolve: performMerge threw unexpectedly");
-      return reply.status(500).send({ error: "Merge failed due to a server error" });
+      const msg = err instanceof Error ? err.message : "Merge failed";
+      app.log.error({ err }, "merge-resolve failed");
+      return reply.status(400).send({ error: msg });
     }
 
     if (!result.ok) {
