@@ -19,6 +19,18 @@ type Props = {
   user: User;
 };
 
+/** Newest snapshot for a path within a branch-filtered snapshot list. */
+function latestSnapshotForFile(list: SnapshotSummary[], sourceFile: string): SnapshotSummary | null {
+  const rows = list.filter((s) => s.sourceFile === sourceFile);
+  if (rows.length === 0) return null;
+  return rows.reduce((a, b) => {
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    if (ta !== tb) return ta > tb ? a : b;
+    return a.id.localeCompare(b.id) >= 0 ? a : b;
+  });
+}
+
 export function SnapshotPage({ token, user }: Props) {
   const { handle = "", repoName = "" } = useParams<{ handle: string; repoName: string }>();
   const navigate = useNavigate();
@@ -80,6 +92,9 @@ export function SnapshotPage({ token, user }: Props) {
   const [prActionLoading, setPrActionLoading] = useState(false);
   const [prError, setPrError]             = useState<string | null>(null);
   const [prConflict, setPrConflict]       = useState(false);
+  const [mergeReviewPr, setMergeReviewPr] = useState<PullRequest | null>(null);
+  const [mergeReviewFromSnapshots, setMergeReviewFromSnapshots] = useState<SnapshotSummary[]>([]);
+  const [mergeReviewFromLoading, setMergeReviewFromLoading] = useState(false);
   const [showNewPr, setShowNewPr]         = useState(false);
   const [newPrTitle, setNewPrTitle]       = useState("");
   const [newPrFrom, setNewPrFrom]         = useState("");
@@ -355,6 +370,8 @@ export function SnapshotPage({ token, user }: Props) {
     try {
       await mergePull(token, handle, repoName, pr.number);
       setSelectedPr({ ...pr, state: "merged" });
+      setMergeReviewPr(null);
+      setMergeReviewFromSnapshots([]);
       await loadPulls();
       await refreshSnapshots();
     } catch (e) {
@@ -373,6 +390,8 @@ export function SnapshotPage({ token, user }: Props) {
     try {
       await resolveMergePr(token, handle, repoName, pr.number, strategy);
       setSelectedPr({ ...pr, state: "merged" });
+      setMergeReviewPr(null);
+      setMergeReviewFromSnapshots([]);
       await loadPulls();
       await refreshSnapshots();
     } catch (e) {
@@ -381,6 +400,80 @@ export function SnapshotPage({ token, user }: Props) {
       setPrActionLoading(false);
     }
   }
+
+  function handleClearMergeReview() {
+    setMergeReviewPr(null);
+    setMergeReviewFromSnapshots([]);
+    setMergeReviewFromLoading(false);
+    setDiffResult(null);
+  }
+
+  async function handleOpenMergeResolveEditor(pr: PullRequest) {
+    setPrError(null);
+    setMergeReviewFromLoading(true);
+    try {
+      const fromR = await getSnapshots(token, handle, repoName, pr.fromBranch);
+      setMergeReviewFromSnapshots(fromR.snapshots);
+      setMergeReviewPr(pr);
+      setPrConflict(false);
+      setDiffMode(true);
+      setActiveTab("code");
+      setSearchParams((prev) => {
+        prev.delete("tab");
+        return prev;
+      }, { replace: true });
+      handleBranchChange(pr.toBranch);
+    } catch (e) {
+      setPrError(e instanceof Error ? e.message : "Failed to load incoming branch");
+      setMergeReviewFromSnapshots([]);
+      setMergeReviewPr(null);
+    } finally {
+      setMergeReviewFromLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!mergeReviewPr || activeTab !== "code" || !selectedModuleFile || !handle || !repoName) return;
+    if (selectedBranch !== mergeReviewPr.toBranch) return;
+    if (loadingSnap) return;
+    const fromSnap = latestSnapshotForFile(mergeReviewFromSnapshots, selectedModuleFile);
+    const toSnap = latestSnapshotForFile(snapshots, selectedModuleFile);
+    if (!fromSnap || !toSnap) {
+      setDiffResult(null);
+      return;
+    }
+    let cancelled = false;
+    setDiffLoading(true);
+    setDiffResult(null);
+    void (async () => {
+      try {
+        const snap = await getSnapshot(token, handle, repoName, toSnap.id);
+        if (cancelled) return;
+        setActiveSnapshot(snap);
+        setActiveCommitId(toSnap.id);
+        const diff = await compareDiff(token, handle, repoName, toSnap.id, fromSnap.id);
+        if (!cancelled) setDiffResult(diff);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Merge review diff failed");
+      } finally {
+        if (!cancelled) setDiffLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    mergeReviewPr,
+    activeTab,
+    selectedModuleFile,
+    snapshots,
+    mergeReviewFromSnapshots,
+    token,
+    handle,
+    repoName,
+    selectedBranch,
+    loadingSnap,
+  ]);
 
   async function handleClosePr(pr: PullRequest) {
     setPrActionLoading(true);
@@ -489,6 +582,8 @@ export function SnapshotPage({ token, user }: Props) {
   }, [token, handle, repoName, selectedBranch]);
 
   async function loadCommit(commitId: string, moduleCommits: SnapshotSummary[]) {
+    setMergeReviewPr(null);
+    setMergeReviewFromSnapshots([]);
     setLoadingSnap(true);
     setError(null);
     setDiffResult(null);
@@ -1031,16 +1126,24 @@ export function SnapshotPage({ token, user }: Props) {
                         ⚠ Merge conflict — the branches have conflicting changes to the same entities.
                       </p>
                       <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
-                        Choose which branch's version wins for all conflicting entities:
+                        Choose which branch&apos;s version wins for all conflicting entities, or open the diff viewer to compare <strong>{selectedPr.toBranch}</strong> (current) vs <strong>{selectedPr.fromBranch}</strong> (incoming) per file:
                       </p>
-                      <div style={{ display: "flex", gap: 8 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        <button
+                          type="button"
+                          style={{ ...styles.mergeBtn, fontSize: 12 }}
+                          disabled={prActionLoading || mergeReviewFromLoading}
+                          onClick={() => void handleOpenMergeResolveEditor(selectedPr)}
+                        >
+                          {mergeReviewFromLoading ? "Loading…" : "Resolve in editor"}
+                        </button>
                         <button
                           style={{ ...styles.closeBtn, background: "#1e3a5f", color: "#fff", fontSize: 12 }}
                           disabled={prActionLoading}
                           onClick={() => handleResolveConflict(selectedPr, "theirs")}
                           title={`Keep ${selectedPr.fromBranch}'s version of conflicting entities`}
                         >
-                          {prActionLoading ? "Resolving…" : `Keep ${selectedPr.fromBranch}`}
+                          {prActionLoading ? "Resolving…" : `Keep all from ${selectedPr.fromBranch}`}
                         </button>
                         <button
                           style={{ ...styles.closeBtn, fontSize: 12 }}
@@ -1048,7 +1151,7 @@ export function SnapshotPage({ token, user }: Props) {
                           onClick={() => handleResolveConflict(selectedPr, "ours")}
                           title={`Keep ${selectedPr.toBranch}'s version of conflicting entities`}
                         >
-                          {prActionLoading ? "Resolving…" : `Keep ${selectedPr.toBranch}`}
+                          {prActionLoading ? "Resolving…" : `Keep all from ${selectedPr.toBranch}`}
                         </button>
                       </div>
                     </div>
@@ -1088,7 +1191,31 @@ export function SnapshotPage({ token, user }: Props) {
         )}
 
         {activeTab === "code" && (
-          <CodeWorkspace
+          <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }}>
+            {mergeReviewPr && (
+              <div style={styles.mergeReviewBanner}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <strong>Merge review</strong>
+                  {" — "}
+                  PR #{mergeReviewPr.number}: comparing <strong>{mergeReviewPr.toBranch}</strong> (current) with{" "}
+                  <strong>{mergeReviewPr.fromBranch}</strong> (incoming). Use <strong>Diff</strong> and{" "}
+                  <strong>Old / Both / New</strong> in the viewer; switch files in the sidebar to inspect each path.
+                  {" "}
+                  Git still needs an all-or-nothing choice below—use the editor to decide, then return here and pick{" "}
+                  <em>Keep all from …</em>.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button type="button" style={styles.mergeReviewBannerBtn} onClick={() => { setActiveTab("pulls"); setSearchParams((p) => { p.set("tab", "pulls"); return p; }, { replace: true }); }}>
+                    Back to PR
+                  </button>
+                  <button type="button" style={styles.mergeReviewBannerBtnSecondary} onClick={handleClearMergeReview}>
+                    Exit merge review
+                  </button>
+                </div>
+              </div>
+            )}
+            <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "row" }}>
+            <CodeWorkspace
             workspaceHandlerId={workspaceHandlerId}
             loadingSnap={loadingSnap}
             diffLoading={diffLoading}
@@ -1115,7 +1242,12 @@ export function SnapshotPage({ token, user }: Props) {
             onPickSnapshotFromCommit={onPickSnapshotFromCommit}
             handleModuleClick={handleModuleClick}
             loadCommit={loadCommit}
-          />
+            mergeReviewPr={mergeReviewPr}
+            mergeReviewFromLoading={mergeReviewFromLoading}
+            onClearMergeReview={handleClearMergeReview}
+            />
+            </div>
+          </div>
         )}
       </div>
 
@@ -1178,6 +1310,40 @@ const styles: Record<string, CSSProperties> = {
   copyBtn:    { fontSize: 14, color: "#64748b", background: "none", border: "none", cursor: "pointer", padding: "0 2px", lineHeight: 1 },
 
   body: { display: "flex", flex: 1, overflow: "hidden" },
+  mergeReviewBanner: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 12,
+    flexShrink: 0,
+    padding: "10px 16px",
+    fontSize: 13,
+    lineHeight: 1.45,
+    color: "#78350f",
+    background: "#fffbeb",
+    borderBottom: "1px solid #fcd34d",
+  },
+  mergeReviewBannerBtn: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#fff",
+    background: "#b45309",
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 12px",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
+  mergeReviewBannerBtnSecondary: {
+    fontSize: 12,
+    fontWeight: 500,
+    color: "#78350f",
+    background: "#fff",
+    border: "1px solid #d97706",
+    borderRadius: 6,
+    padding: "6px 12px",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
 
   muted: { fontSize: 12, color: "#9ca3af", margin: 0 },
 

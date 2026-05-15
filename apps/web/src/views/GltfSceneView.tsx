@@ -48,6 +48,8 @@ export function GltfSceneView({
   onPickSnapshotFromCommit,
   activeCommitId,
   handleModuleClick,
+  mergeReviewPr = null,
+  mergeReviewFromLoading = false,
 }: RepoCodeWorkspaceProps) {
   const [diffOverlayMode, setDiffOverlayMode] = useState<"old" | "both" | "new">("both");
   function buildParentMap(entities: Entity[]): Map<string, string | null> {
@@ -151,6 +153,12 @@ export function GltfSceneView({
             <span>Files</span>
             <span style={styles.muted}>{modules.length}</span>
           </div>
+          {mergeReviewPr && (
+            <div style={{ fontSize: 11, color: "#92400e", padding: "6px 12px", background: "#fffbeb", borderBottom: "1px solid #fde68a" }}>
+              Merge review: <strong>{mergeReviewPr.toBranch}</strong> vs incoming <strong>{mergeReviewPr.fromBranch}</strong>
+              {mergeReviewFromLoading ? " — loading…" : ""}
+            </div>
+          )}
           {modules.length === 0 && <p style={{ ...styles.muted, padding: "6px 12px" }}>No modules found.</p>}
           {modules.map((mod) => {
             const isSelected = selectedModuleFile === mod.sourceFile;
