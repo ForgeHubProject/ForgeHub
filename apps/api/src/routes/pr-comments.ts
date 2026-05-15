@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, resolveRepo } from "../repo-access.js";
+import { notifyUser } from "../notifications-service.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -311,6 +312,11 @@ export async function prCommentRoutes(app: FastifyInstance) {
           _count: { select: { comments: true } },
         },
       });
+
+      // Notify PR author when a review is actually submitted (not left as PENDING)
+      if (submittedAt) {
+        void notifyUser(ctx.pr.authorId, { actorId: userId, repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectId: ctx.pr.id, subjectTitle: ctx.pr.title, reason: "COMMENT" });
+      }
 
       return reply.status(201).send(formatReview(review));
     },

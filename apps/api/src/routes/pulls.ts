@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, defaultBranch, performMerge, resolveBranchSha } from "../git-utils.js";
+import { notifySubscribers } from "../notifications-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
@@ -88,6 +89,8 @@ export async function pullRoutes(app: FastifyInstance) {
       },
       include: { author: { select: { handle: true } } },
     });
+
+    void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: pr.id, subjectTitle: pr.title, reason: "SUBSCRIBED" });
 
     return reply.status(201).send({
       id: pr.id,

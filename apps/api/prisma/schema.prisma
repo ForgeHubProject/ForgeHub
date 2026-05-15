@@ -35,6 +35,7 @@ model User {
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
   releases         Release[]                  @relation("ReleaseAuthor")
+  notifications    Notification[]
 }
 
 model Repo {
@@ -54,6 +55,7 @@ model Repo {
   issues   Issue[]
   labels   Label[]
   releases Release[]
+  notifications Notification[]
 
   @@unique([ownerId, name])
 }
@@ -238,6 +240,38 @@ model IssueComment {
 
   issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
+}
+
+enum NotificationReason {
+  ASSIGNED
+  COMMENT
+  REVIEW_REQUESTED
+  SUBSCRIBED
+}
+
+enum NotificationSubjectType {
+  ISSUE
+  PULL_REQUEST
+  RELEASE
+}
+
+model Notification {
+  id           String                  @id @default(cuid())
+  userId       String
+  repoId       String
+  subjectType  NotificationSubjectType
+  subjectId    String
+  subjectTitle String
+  reason       NotificationReason
+  read         Boolean                 @default(false)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+  @@index([userId, read])
 }
 
 model Release {

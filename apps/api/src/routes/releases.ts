@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { createTag, tagExists } from "../git-utils.js";
+import { notifySubscribers } from "../notifications-service.js";
 
 const releaseInclude = { author: { select: { handle: true } } } as const;
 
@@ -137,6 +138,10 @@ export async function releaseRoutes(app: FastifyInstance) {
       },
       include: releaseInclude,
     });
+
+    if (!isDraft) {
+      void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "RELEASE", subjectId: release.id, subjectTitle: release.name, reason: "SUBSCRIBED" });
+    }
 
     return reply.status(201).send(formatRelease(release));
   });
