@@ -151,6 +151,7 @@ export async function performMerge(
       await execFile("git", [
         "-c", "user.name=ForgeHub",
         "-c", "user.email=merge@forgehub.io",
+        "-c", "commit.gpgsign=false",
         "merge", "--no-ff", "-m", message, ...strategyArgs, `origin/${fromBranch}`,
       ], { cwd: tmpDir, maxBuffer: MAX });
     } catch {
@@ -216,7 +217,7 @@ export async function listFilesDifferingBetweenBranches(
   }
 }
 
-const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io"] as const;
+const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
 
 /**
  * Merge fromBranch into toBranch, writing resolved file contents for given paths,
