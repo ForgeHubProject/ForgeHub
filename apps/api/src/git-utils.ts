@@ -102,6 +102,13 @@ export async function listTags(storageKey: string): Promise<TagInfo[]> {
   } catch { return []; }
 }
 
+export async function tagExists(storageKey: string, name: string): Promise<boolean> {
+  try {
+    await git(storageKey, ["rev-parse", "--verify", `refs/tags/${name}`]);
+    return true;
+  } catch { return false; }
+}
+
 export async function createTag(storageKey: string, name: string, sha: string, message?: string): Promise<void> {
   if (message) {
     await git(storageKey, ["tag", "-a", name, sha, "-m", message]);
