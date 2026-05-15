@@ -62,6 +62,8 @@ export function SnapshotPage({ token, user }: Props) {
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branchFilter, setBranchFilter]     = useState("");
   const [newBranchName, setNewBranchName]   = useState("");
+  /** Tip ref for `POST /branches` `from` — any existing branch, not only the one you're viewing. */
+  const [branchCreateFrom, setBranchCreateFrom] = useState("");
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [branchError, setBranchError]       = useState<string | null>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
@@ -81,6 +83,8 @@ export function SnapshotPage({ token, user }: Props) {
   const [showNewPr, setShowNewPr]         = useState(false);
   const [newPrTitle, setNewPrTitle]       = useState("");
   const [newPrFrom, setNewPrFrom]         = useState("");
+  /** Base branch (GitHub "into" / compare base). */
+  const [newPrTo, setNewPrTo]             = useState("");
   const [newPrDesc, setNewPrDesc]         = useState("");
   const [pullsFilter, setPullsFilter]     = useState<"open" | "merged" | "closed" | "all">("open");
 
@@ -118,6 +122,12 @@ export function SnapshotPage({ token, user }: Props) {
   }, [snapshots]);
 
   const commitGroups = useMemo(() => buildGitCommitGroups(snapshots), [snapshots]);
+
+  /** Sidebar: when a module is selected, list only commits that touch that file (same idea as GitHub file history). */
+  const workspaceCommitGroups = useMemo(() => {
+    if (!selectedModuleFile) return commitGroups;
+    return commitGroups.filter((g) => g.snapshots.some((s) => s.sourceFile === selectedModuleFile));
+  }, [commitGroups, selectedModuleFile]);
 
   const snapshotListIdentity = useMemo(
     () => snapshots.map((s) => `${s.id}:${s.gitCommitSha ?? ""}`).join("|"),
@@ -286,7 +296,12 @@ export function SnapshotPage({ token, user }: Props) {
     setCreatingBranch(true);
     setBranchError(null);
     try {
-      await createBranch(token, handle, repoName, newBranchName.trim(), selectedBranch ?? (defaultBranchName || "HEAD"));
+      const fromRef =
+        (branchCreateFrom && branches.some((b) => b.name === branchCreateFrom) ? branchCreateFrom : null)
+        ?? selectedBranch
+        ?? defaultBranchName
+        ?? "HEAD";
+      await createBranch(token, handle, repoName, newBranchName.trim(), fromRef);
       setNewBranchName("");
       await loadBranches();
       handleBranchChange(newBranchName.trim());
@@ -395,13 +410,13 @@ export function SnapshotPage({ token, user }: Props) {
   }
 
   async function handleCreatePr() {
-    if (!newPrTitle.trim() || !newPrFrom) return;
+    if (!newPrTitle.trim() || !newPrFrom || !newPrTo || newPrFrom === newPrTo) return;
     setPrActionLoading(true);
     setPrError(null);
     try {
-      const pr = await createPull(token, handle, repoName, newPrTitle.trim(), newPrFrom, defaultBranchName || undefined, newPrDesc || undefined);
+      const pr = await createPull(token, handle, repoName, newPrTitle.trim(), newPrFrom, newPrTo, newPrDesc || undefined);
       setShowNewPr(false);
-      setNewPrTitle(""); setNewPrFrom(""); setNewPrDesc("");
+      setNewPrTitle(""); setNewPrFrom(""); setNewPrTo(""); setNewPrDesc("");
       await loadPulls();
       setSelectedPr(pr);
     } catch (e) {
@@ -410,6 +425,32 @@ export function SnapshotPage({ token, user }: Props) {
       setPrActionLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (branches.length === 0) return;
+    setBranchCreateFrom((p) => {
+      if (p && branches.some((b) => b.name === p)) return p;
+      return selectedBranch ?? defaultBranchName ?? branches[0]!.name;
+    });
+  }, [branches, selectedBranch, defaultBranchName]);
+
+  useEffect(() => {
+    if (!showNewPr || branches.length === 0) return;
+    setNewPrTo((t) => {
+      if (t && branches.some((b) => b.name === t)) return t;
+      if (defaultBranchName && branches.some((b) => b.name === defaultBranchName)) return defaultBranchName;
+      return branches[0]!.name;
+    });
+  }, [showNewPr, branches, defaultBranchName]);
+
+  useEffect(() => {
+    if (!showNewPr || branches.length === 0 || !newPrTo) return;
+    setNewPrFrom((f) => {
+      if (f && f !== newPrTo && branches.some((b) => b.name === f)) return f;
+      const alt = branches.find((b) => b.name !== newPrTo);
+      return alt?.name ?? "";
+    });
+  }, [showNewPr, branches, newPrTo]);
 
   // Auto-load latest snapshot + branches on mount
   useEffect(() => {
@@ -420,13 +461,20 @@ export function SnapshotPage({ token, user }: Props) {
     let cancelled = false;
     setLoadingSnap(true);
     setError(null);
+    setExpandedCommitKey(null);
+    setCommitFilePreviews(null);
 
-    getSnapshots(token, handle, repoName)
+    getSnapshots(token, handle, repoName, selectedBranch ?? undefined)
       .then(async (r) => {
         if (cancelled) return;
         setSnapshots(r.snapshots);
         const latest = r.snapshots[0];
-        if (!latest) { setActiveSnapshot(null); return; }
+        if (!latest) {
+          setActiveSnapshot(null);
+          setActiveCommitId(null);
+          setSelectedModuleFile(null);
+          return;
+        }
         const snap = await getSnapshot(token, handle, repoName, latest.id);
         if (!cancelled) {
           setActiveSnapshot(snap);
@@ -438,7 +486,7 @@ export function SnapshotPage({ token, user }: Props) {
       .finally(() => { if (!cancelled) setLoadingSnap(false); });
 
     return () => { cancelled = true; };
-  }, [token, handle, repoName]);
+  }, [token, handle, repoName, selectedBranch]);
 
   async function loadCommit(commitId: string, moduleCommits: SnapshotSummary[]) {
     setLoadingSnap(true);
@@ -479,7 +527,7 @@ export function SnapshotPage({ token, user }: Props) {
     }
   }
 
-  async function handleBranchChange(branch: string) {
+  function handleBranchChange(branch: string) {
     const b = branch === "__all__" ? null : branch;
     setSelectedBranch(b);
     setSearchParams((prev) => {
@@ -492,23 +540,6 @@ export function SnapshotPage({ token, user }: Props) {
     setSelectionPath([]);
     setExpandedCommitKey(null);
     setCommitFilePreviews(null);
-    setLoadingSnap(true);
-    setError(null);
-    try {
-      const r = await getSnapshots(token, handle, repoName, b ?? undefined);
-      setSnapshots(r.snapshots);
-      const latest = r.snapshots[0];
-      if (latest) {
-        const snap = await getSnapshot(token, handle, repoName, latest.id);
-        setActiveSnapshot(snap);
-        setActiveCommitId(latest.id);
-        setSelectedModuleFile(latest.sourceFile);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed");
-    } finally {
-      setLoadingSnap(false);
-    }
   }
 
   function handleModuleClick(sourceFile: string) {
@@ -786,7 +817,24 @@ export function SnapshotPage({ token, user }: Props) {
                   {/* New branch — only when repo has commits */}
                   {isOwner && branches.length > 0 && (
                     <div style={styles.branchMenuCreate}>
-                      <div style={styles.branchMenuGroupLabel}>New branch from <strong>{activeBranchLabel}</strong></div>
+                      <label style={{ ...styles.branchMenuGroupLabel, display: "block", marginBottom: 6 }}>
+                        New branch from
+                        <select
+                          value={
+                            branchCreateFrom && branches.some((b) => b.name === branchCreateFrom)
+                              ? branchCreateFrom
+                              : (selectedBranch ?? defaultBranchName ?? branches[0]!.name)
+                          }
+                          onChange={(e) => setBranchCreateFrom(e.target.value)}
+                          style={{ ...styles.branchMenuInput, width: "100%", marginTop: 4, boxSizing: "border-box" }}
+                        >
+                          {branches.map((b) => (
+                            <option key={b.name} value={b.name}>
+                              {b.name}{b.isDefault ? " (default)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <div style={{ display: "flex", gap: 6, padding: "6px 10px" }}>
                         <input
                           placeholder="branch-name"
@@ -842,7 +890,7 @@ export function SnapshotPage({ token, user }: Props) {
             <div style={styles.prList}>
               <div style={styles.prListHeader}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>Pull Requests</span>
-                <button style={styles.newPrBtn} onClick={() => setShowNewPr(true)}>+ New</button>
+                <button style={styles.newPrBtn} onClick={() => { setPrError(null); setShowNewPr(true); }}>+ New</button>
               </div>
               <div style={{ display: "flex", gap: 4, padding: "6px 12px", borderBottom: "1px solid #f3f4f6" }}>
                 {(["open", "merged", "closed", "all"] as const).map((f) => (
@@ -891,14 +939,28 @@ export function SnapshotPage({ token, user }: Props) {
                       style={styles.prFormInput}
                     >
                       <option value="">— select —</option>
-                      {branches.filter((b) => !b.isDefault).map((b) => (
-                        <option key={b.name} value={b.name}>{b.name}</option>
-                      ))}
+                      {branches
+                        .filter((b) => b.name !== newPrTo)
+                        .map((b) => (
+                          <option key={b.name} value={b.name}>
+                            {b.name}{b.isDefault ? " (default)" : ""}
+                          </option>
+                        ))}
                     </select>
                   </label>
                   <label style={styles.prFormLabel}>
                     Into
-                    <input readOnly value={defaultBranchName || "(default)"} style={{ ...styles.prFormInput, opacity: 0.6 }} />
+                    <select
+                      value={newPrTo}
+                      onChange={(e) => setNewPrTo(e.target.value)}
+                      style={styles.prFormInput}
+                    >
+                      {branches.map((b) => (
+                        <option key={b.name} value={b.name}>
+                          {b.name}{b.isDefault ? " (default)" : ""}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label style={styles.prFormLabel}>
                     Title
@@ -919,16 +981,28 @@ export function SnapshotPage({ token, user }: Props) {
                       style={{ ...styles.prFormInput, resize: "vertical" }}
                     />
                   </label>
+                  {branches.length < 2 && (
+                    <p style={{ color: "#9ca3af", fontSize: 12, margin: 0 }}>
+                      You need at least two branches to open a pull request.
+                    </p>
+                  )}
                   {prError && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>}
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       style={styles.mergeBtn}
-                      disabled={prActionLoading || !newPrTitle.trim() || !newPrFrom}
+                      disabled={
+                        prActionLoading
+                        || !newPrTitle.trim()
+                        || !newPrFrom
+                        || !newPrTo
+                        || newPrFrom === newPrTo
+                        || branches.length < 2
+                      }
                       onClick={handleCreatePr}
                     >
                       {prActionLoading ? "Creating…" : "Create PR"}
                     </button>
-                    <button style={styles.closeBtn} onClick={() => setShowNewPr(false)}>Cancel</button>
+                    <button style={styles.closeBtn} onClick={() => { setShowNewPr(false); setNewPrTo(""); }}>Cancel</button>
                   </div>
                 </div>
               ) : selectedPr ? (
@@ -1030,7 +1104,7 @@ export function SnapshotPage({ token, user }: Props) {
             setDiffMode={setDiffMode}
             ghostSelectedId={ghostSelectedId}
             setGhostSelectedId={setGhostSelectedId}
-            commitGroups={commitGroups}
+            commitGroups={workspaceCommitGroups}
             expandedCommitKey={expandedCommitKey}
             commitFilePreviews={commitFilePreviews}
             commitChangedFileCountByKey={commitChangedFileCountByKey}
