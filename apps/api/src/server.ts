@@ -12,6 +12,8 @@ import { devUiRoutes } from "./routes/dev-ui.js";
 import { entityRoutes } from "./routes/entities.js";
 import { forkRoutes } from "./routes/forks.js";
 import { gitHttpRoutes } from "./routes/git-http.js";
+import { issueRoutes } from "./routes/issues.js";
+import { labelRoutes } from "./routes/labels.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { repoRoutes } from "./routes/repos.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
@@ -63,6 +65,8 @@ export async function buildServer() {
   await app.register(tagRoutes);
   await app.register(forkRoutes);
   await app.register(pullRoutes);
+  await app.register(issueRoutes);
+  await app.register(labelRoutes);
   await app.register(gitHttpRoutes);
 
   return app;
