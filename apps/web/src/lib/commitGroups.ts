@@ -16,7 +16,7 @@ export type GitCommitGroup = {
   snapshots: SnapshotSummary[];
 };
 
-function snapshotSortKey(s: SnapshotSummary): number {
+function snapshotSortKey(s: { createdAt: string }): number {
   const t = new Date(s.createdAt).getTime();
   return Number.isFinite(t) ? t : 0;
 }
