@@ -2,6 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { defaultBranch, getCommit, listCommits, listTree, readFileAtBranch } from "../git-utils.js";
 
+// Checked in priority order: prefer .md > .txt > .rst > .adoc > bare README
+const README_NAMES = ["readme.md", "readme.txt", "readme.rst", "readme.adoc", "readme"];
+
+function findReadmeEntry(entries: Array<{ name: string; path: string; type: string }>) {
+  for (const target of README_NAMES) {
+    const entry = entries.find((e) => e.type === "blob" && e.name.toLowerCase() === target);
+    if (entry) return entry;
+  }
+  return null;
+}
+
 export async function commitRoutes(app: FastifyInstance) {
   // GET /repos/:handle/:name/commits?branch=X&page=N&per_page=N
   app.get("/repos/:handle/:name/commits", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
@@ -61,6 +72,29 @@ export async function commitRoutes(app: FastifyInstance) {
     const entries = await listTree(repo.storageKey, ref, treePath);
     if (entries.length === 0) return reply.status(404).send({ error: "Path not found or empty directory" });
     return { ref, path: treePath, entries };
+  });
+
+  // GET /repos/:handle/:name/readme?ref=X&path=Y
+  // Scans the directory at `path` (default: root) for a README file and returns its content.
+  app.get("/repos/:handle/:name/readme", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name } = request.params as { handle: string; name: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(404).send({ error: "No git storage" });
+
+    const { ref: refQ, path: pathQ } = request.query as { ref?: string; path?: string };
+    const ref = refQ ?? await defaultBranch(repo.storageKey);
+    const dirPath = pathQ ?? "";
+
+    const entries = await listTree(repo.storageKey, ref, dirPath);
+    const readmeEntry = findReadmeEntry(entries);
+    if (!readmeEntry) return reply.status(404).send({ error: "No README found" });
+
+    const content = await readFileAtBranch(repo.storageKey, ref, readmeEntry.path);
+    if (content === null) return reply.status(404).send({ error: "README could not be read" });
+
+    return { path: readmeEntry.path, name: readmeEntry.name, ref, content };
   });
 
   // GET /repos/:handle/:name/blob/:ref/*  (raw file content)
