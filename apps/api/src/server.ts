@@ -17,6 +17,7 @@ import { issueRoutes } from "./routes/issues.js";
 import { labelRoutes } from "./routes/labels.js";
 import { prCommentRoutes } from "./routes/pr-comments.js";
 import { pullRoutes } from "./routes/pulls.js";
+import { releaseRoutes } from "./routes/releases.js";
 import { repoRoutes } from "./routes/repos.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { tagRoutes } from "./routes/tags.js";
@@ -68,6 +69,7 @@ export async function buildServer() {
   await app.register(tagRoutes);
   await app.register(forkRoutes);
   await app.register(pullRoutes);
+  await app.register(releaseRoutes);
   await app.register(prCommentRoutes);
   await app.register(issueRoutes);
   await app.register(labelRoutes);

@@ -34,6 +34,7 @@ model User {
   prComments       PullRequestComment[]       @relation("PRCommentAuthor")
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
+  releases         Release[]                  @relation("ReleaseAuthor")
 }
 
 model Repo {
@@ -50,8 +51,9 @@ model Repo {
   snapshots         Snapshot[]
   pullRequests      PullRequest[]
   protectedBranches ProtectedBranch[]
-  issues  Issue[]
-  labels  Label[]
+  issues   Issue[]
+  labels   Label[]
+  releases Release[]
 
   @@unique([ownerId, name])
 }
@@ -236,6 +238,24 @@ model IssueComment {
 
   issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
+}
+
+model Release {
+  id           String   @id @default(cuid())
+  repoId       String
+  tagName      String
+  name         String
+  body         String?
+  isDraft      Boolean  @default(false)
+  isPrerelease Boolean  @default(false)
+  authorId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  repo   Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  author User @relation("ReleaseAuthor", fields: [authorId], references: [id])
+
+  @@unique([repoId, tagName])
 }
 
 model PullRequestComment {
