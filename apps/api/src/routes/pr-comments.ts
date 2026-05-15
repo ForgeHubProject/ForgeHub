@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 
@@ -112,7 +112,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
     name: string,
     number: string,
     userId: string | undefined,
-    reply: Parameters<typeof app.get>[2] extends (req: unknown, rep: infer R) => unknown ? R : never,
+    reply: FastifyReply,
   ) {
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) {
