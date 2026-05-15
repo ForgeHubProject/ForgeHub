@@ -1,4 +1,5 @@
 import "./handlers/index.js";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
@@ -16,7 +17,7 @@ import { repoRoutes } from "./routes/repos.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { tagRoutes } from "./routes/tags.js";
 
-async function buildServer() {
+export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
   if (!secret || secret.length < 16) {
     throw new Error("JWT_SECRET must be set to a string at least 16 characters long");
@@ -67,15 +68,16 @@ async function buildServer() {
   return app;
 }
 
-const port = Number(process.env["PORT"] ?? 3001);
-
-buildServer()
-  .then((app) =>
-    app.listen({ port, host: "0.0.0.0" }).then(() => {
-      app.log.info(`Listening on http://localhost:${port}`);
-    }),
-  )
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const port = Number(process.env["PORT"] ?? 3001);
+  buildServer()
+    .then((app) =>
+      app.listen({ port, host: "0.0.0.0" }).then(() => {
+        app.log.info(`Listening on http://localhost:${port}`);
+      }),
+    )
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+}

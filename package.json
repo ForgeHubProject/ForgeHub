@@ -8,6 +8,7 @@
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev -w @forgehub/api",
     "dev:web": "npm run dev -w @forgehub/web",
+    "test": "npm run test -w @forgehub/api",
     "db:push": "npm run db:push -w @forgehub/api",
     "db:generate": "npm run db:generate -w @forgehub/api"
   },
