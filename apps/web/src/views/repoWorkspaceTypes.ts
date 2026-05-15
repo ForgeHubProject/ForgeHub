@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { DiffResult, Snapshot, SnapshotSummary } from "../types";
+import type { DiffResult, PullRequest, Snapshot, SnapshotSummary } from "../types";
 import type { GitCommitGroup } from "../lib/commitGroups";
 
 export type RepoModule = {
@@ -48,4 +48,8 @@ export type RepoCodeWorkspaceProps = {
   onPickSnapshotFromCommit: (snap: SnapshotSummary) => void;
   handleModuleClick: (sourceFile: string) => void;
   loadCommit: (commitId: string, moduleCommits: SnapshotSummary[]) => Promise<void>;
+  /** When set, workspace may show PR merge-review hints (base vs incoming). */
+  mergeReviewPr?: PullRequest | null;
+  mergeReviewFromLoading?: boolean;
+  onClearMergeReview?: () => void;
 };
