@@ -158,7 +158,7 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
 
-    const { commitMessage } = request.body as { commitMessage?: string };
+    const { commitMessage } = (request.body ?? {}) as { commitMessage?: string };
     const message = commitMessage?.trim() || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number})`;
 
     // Capture the toBranch SHA before merge for ingestion range
