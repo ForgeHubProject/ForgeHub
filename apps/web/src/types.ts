@@ -150,3 +150,81 @@ export type PullRequest = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type CommitInfo = {
+  sha: string;
+  shortSha: string;
+  message: string;
+  subject: string;
+  authorName: string;
+  authorEmail: string;
+  date: string;
+  parents: string[];
+};
+
+export type CommitDetail = CommitInfo & {
+  changedFiles: string[];
+};
+
+export type TreeEntry = {
+  mode: string;
+  type: "blob" | "tree";
+  sha: string;
+  name: string;
+  path: string;
+};
+
+export type Label = {
+  id: string;
+  name: string;
+  color: string;
+  description: string | null;
+};
+
+export type Issue = {
+  id: string;
+  number: number;
+  title: string;
+  body: string | null;
+  state: "open" | "closed";
+  authorId: string;
+  authorHandle: string;
+  assigneeId: string | null;
+  assigneeHandle: string | null;
+  labels: Label[];
+  commentCount: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+};
+
+export type IssueComment = {
+  id: string;
+  body: string;
+  authorHandle: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Release = {
+  id: string;
+  tagName: string;
+  name: string;
+  body: string | null;
+  isDraft: boolean;
+  isPrerelease: boolean;
+  authorHandle: string;
+  createdAt: string;
+  publishedAt: string | null;
+};
+
+export type Notification = {
+  id: string;
+  subjectType: "issue" | "pull_request" | "release";
+  subjectId: string;
+  subjectTitle: string;
+  reason: "assigned" | "comment" | "review_requested" | "subscribed";
+  read: boolean;
+  repo: string;
+  updatedAt: string;
+};
