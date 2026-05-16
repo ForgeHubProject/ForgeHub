@@ -430,7 +430,7 @@ export async function listIssues(
   handle: string,
   repoName: string,
   state: "open" | "closed" | "all" = "open",
-): Promise<{ issues: Issue[]; total: number }> {
+): Promise<{ issues: Issue[] }> {
   return req(`/repos/${handle}/${repoName}/issues?state=${state}`, { token: token ?? undefined });
 }
 

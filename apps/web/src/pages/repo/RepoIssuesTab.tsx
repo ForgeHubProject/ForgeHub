@@ -124,7 +124,6 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
 export function RepoIssuesTab({ token, handle, repoName, user }: Props) {
   const [state, setState] = useState<"open" | "closed">("open");
   const [issues, setIssues] = useState<Issue[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -133,7 +132,7 @@ export function RepoIssuesTab({ token, handle, repoName, user }: Props) {
     setLoading(true);
     setError(null);
     listIssues(token, handle, repoName, s)
-      .then((d) => { setIssues(d.issues); setTotal(d.total); })
+      .then((d) => setIssues(d.issues))
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }
@@ -143,7 +142,6 @@ export function RepoIssuesTab({ token, handle, repoName, user }: Props) {
   function handleCreated(issue: Issue) {
     setShowNew(false);
     setIssues((prev) => [issue, ...prev]);
-    setTotal((t) => t + 1);
   }
 
   return (
@@ -223,8 +221,8 @@ export function RepoIssuesTab({ token, handle, repoName, user }: Props) {
                     ))}
                   </p>
                   <p className="text-gh-xs text-gh-muted mt-0.5">
-                    #{issue.number} opened {timeAgo(issue.createdAt)} by {issue.authorHandle}
-                    {issue.assigneeHandle && ` · assigned to ${issue.assigneeHandle}`}
+                    #{issue.number} opened {timeAgo(issue.createdAt)} by {issue.author}
+                    {issue.assignee && ` · assigned to ${issue.assignee}`}
                   </p>
                 </div>
                 {issue.commentCount > 0 && (

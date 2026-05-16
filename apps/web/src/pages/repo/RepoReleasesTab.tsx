@@ -90,11 +90,9 @@ export function RepoReleasesTab({ token, handle, repoName, user }: Props) {
                 <TagIcon />
                 <code className="font-mono text-gh-sm text-gh-muted">{release.tagName}</code>
                 <span className="text-gh-muted text-gh-xs">
-                  {release.publishedAt
-                    ? `Published ${new Date(release.publishedAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
-                    : `Created ${new Date(release.createdAt).toLocaleDateString()}`}
+                  {`Published ${new Date(release.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`}
                   {" by "}
-                  <span className="font-medium text-gh-text">{release.authorHandle}</span>
+                  <span className="font-medium text-gh-text">{release.author}</span>
                 </span>
               </div>
 

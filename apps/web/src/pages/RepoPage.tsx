@@ -132,7 +132,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .finally(() => setLoading(false));
 
     listIssues(token, h, r, "open")
-      .then((d) => setOpenIssueCount(d.total))
+      .then((d) => setOpenIssueCount(d.issues.length))
       .catch(() => {});
 
     listPulls(token, h, r, "open")
