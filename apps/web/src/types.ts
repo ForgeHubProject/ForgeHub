@@ -187,10 +187,8 @@ export type Issue = {
   title: string;
   body: string | null;
   state: "open" | "closed";
-  authorId: string;
-  authorHandle: string;
-  assigneeId: string | null;
-  assigneeHandle: string | null;
+  author: string;
+  assignee: string | null;
   labels: Label[];
   commentCount: number;
   createdAt: string;
@@ -201,7 +199,7 @@ export type Issue = {
 export type IssueComment = {
   id: string;
   body: string;
-  authorHandle: string;
+  author: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -213,9 +211,9 @@ export type Release = {
   body: string | null;
   isDraft: boolean;
   isPrerelease: boolean;
-  authorHandle: string;
+  author: string;
   createdAt: string;
-  publishedAt: string | null;
+  updatedAt: string;
 };
 
 export type Notification = {
