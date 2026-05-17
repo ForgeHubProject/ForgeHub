@@ -1,39 +1,57 @@
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { listNotifications } from "../api";
 import type { User } from "../types";
 
 type Props = {
   user: User;
   onLogout: () => void;
+  token?: string;
 };
 
-function BellIcon() {
-  return (
+const OctocatLogo = () => (
+  <svg height="28" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+      0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+      -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+      .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+      -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27
+      .68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
+      .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
+      0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+  </svg>
+);
+
+const PlusDropIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+    <path fillRule="evenodd" d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 110 1.5H8.5v4.25a.75.75 0 11-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z" />
+    <path fillRule="evenodd" d="M4.427 9.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 9H4.604a.25.25 0 00-.177.427z" transform="translate(0,-6)" />
+  </svg>
+);
+
+const ChevronDown = () => (
+  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+    <path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" />
+  </svg>
+);
+
+const BellIcon = ({ count }: { count: number }) => (
+  <span className="relative inline-flex items-center">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path d="M8 16a2 2 0 001.985-1.75c.017-.137-.097-.25-.235-.25h-3.5c-.138 0-.252.113-.235.25A2 2 0 008 16z" />
       <path fillRule="evenodd" d="M8 1.5A3.5 3.5 0 004.5 5v2.947c0 .346-.102.683-.294.97l-1.703 2.556a.018.018 0 00-.003.01l.001.006c0 .01.004.02.01.03a.265.265 0 00.189.097l.013.001h10.582l.013-.001a.265.265 0 00.189-.097.051.051 0 00.01-.03l.001-.006a.018.018 0 00-.003-.01l-1.703-2.557a1.75 1.75 0 01-.294-.97V5A3.5 3.5 0 008 1.5zM3 5a5 5 0 0110 0v2.947c0 .05.015.098.042.139l1.703 2.555A1.518 1.518 0 0113.482 13H2.518a1.518 1.518 0 01-1.263-2.359l1.703-2.555A.25.25 0 003 7.947V5z" />
     </svg>
-  );
-}
+    {count > 0 && (
+      <span className="absolute -top-1 -right-1.5 flex items-center justify-center h-3.5 min-w-[14px] px-0.5 text-[9px] font-bold bg-gh-accent text-white rounded-full leading-none">
+        {count > 9 ? "9+" : count}
+      </span>
+    )}
+  </span>
+);
 
-function PlusIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path fillRule="evenodd" d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 110 1.5H8.5v4.25a.75.75 0 11-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z" />
-    </svg>
-  );
-}
-
-function ChevronDown() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" />
-    </svg>
-  );
-}
-
-export function Header({ user, onLogout }: Props) {
+export function Header({ user, onLogout, token }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
@@ -47,89 +65,126 @@ export function Header({ user, onLogout }: Props) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  useEffect(() => {
+    if (!token) return;
+    listNotifications(token, false)
+      .then((d) => setUnreadCount(d.notifications.length))
+      .catch(() => {});
+  }, [token]);
+
   const initial = (user.displayName || user.handle)[0].toUpperCase();
 
   return (
-    <header className="bg-gh-header text-gh-header-text h-[60px] flex items-center px-4 gap-4 z-50 relative">
+    <header
+      className="flex items-center gap-3 px-4 h-14 relative z-50"
+      style={{ backgroundColor: "#24292f" }}
+    >
       {/* Logo */}
-      <Link to="/" className="flex items-center text-gh-header-text hover:text-white no-underline flex-shrink-0">
-        <svg height="32" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
-            0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
-            -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
-            .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
-            -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27
-            .68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
-            .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
-            0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-        </svg>
-        <span className="ml-2 font-semibold text-sm hidden sm:inline">ForgeHub</span>
+      <Link
+        to="/"
+        className="flex items-center text-white hover:opacity-75 transition-opacity flex-shrink-0"
+        style={{ textDecoration: "none" }}
+      >
+        <OctocatLogo />
       </Link>
 
-      {/* Spacer */}
+      {/* Breadcrumb / nav — hidden on small screens */}
+      <nav className="hidden md:flex items-center gap-1 ml-2">
+        <Link
+          to="/"
+          className="text-sm font-semibold px-2 py-1 rounded-md transition-colors"
+          style={{ color: "rgba(240,246,252,0.9)", textDecoration: "none" }}
+          onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)")}
+          onMouseLeave={e => (e.currentTarget.style.backgroundColor = "")}
+        >
+          {user.handle}
+        </Link>
+      </nav>
+
       <div className="flex-1" />
 
-      {/* Right side actions */}
-      <div className="flex items-center gap-2">
-        {/* Create new */}
+      {/* Actions */}
+      <div className="flex items-center gap-1">
+        {/* New button */}
         <button
-          className="flex items-center gap-1 text-gh-header-muted hover:text-white text-sm px-2 py-1 rounded-md hover:bg-white/10 transition-colors"
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-sm transition-colors flex-shrink-0"
+          style={{ color: "rgba(240,246,252,0.75)" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,1)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,0.75)"; }}
           onClick={() => navigate("/")}
-          title="Create new"
+          title="Create new…"
         >
-          <PlusIcon />
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path fillRule="evenodd" d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 110 1.5H8.5v4.25a.75.75 0 11-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z" />
+          </svg>
           <ChevronDown />
         </button>
 
         {/* Notifications */}
         <Link
           to="/notifications"
-          className="text-gh-header-muted hover:text-white px-2 py-1 rounded-md hover:bg-white/10 transition-colors no-underline"
+          className="flex items-center px-2 py-1 rounded-md transition-colors"
+          style={{ color: "rgba(240,246,252,0.75)", textDecoration: "none" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,1)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,0.75)"; }}
           title="Notifications"
         >
-          <BellIcon />
+          <BellIcon count={unreadCount} />
         </Link>
 
-        {/* User menu */}
-        <div className="relative" ref={menuRef}>
+        {/* Avatar / user menu */}
+        <div className="relative ml-1" ref={menuRef}>
           <button
-            className="flex items-center gap-1 rounded-full hover:opacity-80 transition-opacity"
+            className="flex items-center gap-1 rounded-full transition-opacity hover:opacity-80 cursor-pointer p-0 border-none bg-transparent"
             onClick={() => setMenuOpen((o) => !o)}
-            aria-label="Open user menu"
+            aria-label="User menu"
           >
-            <div className="avatar w-8 h-8 flex items-center justify-center bg-gh-accent text-white text-xs font-semibold">
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
+              style={{ backgroundColor: "#0969da" }}
+            >
               {initial}
             </div>
-            <ChevronDown />
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 top-full mt-1 w-52 bg-gh-canvas border border-gh-border rounded-md shadow-lg z-50 py-1 text-gh-text">
-              <div className="px-4 py-2 border-b border-gh-border">
-                <p className="text-gh-sm font-semibold">{user.displayName || user.handle}</p>
-                <p className="text-gh-xs text-gh-muted">@{user.handle}</p>
+            <div
+              className="absolute right-0 top-[calc(100%+8px)] w-56 rounded-lg shadow-xl z-50 py-1 text-sm overflow-hidden"
+              style={{
+                backgroundColor: "#ffffff",
+                border: "1px solid #d0d7de",
+                boxShadow: "0 8px 24px rgba(140,149,159,0.2)",
+              }}
+            >
+              {/* User info */}
+              <div className="px-4 py-3 border-b" style={{ borderColor: "#eaeef2" }}>
+                <p className="font-semibold text-gh-text text-sm">{user.displayName || user.handle}</p>
+                <p className="text-xs text-gh-muted mt-0.5">@{user.handle}</p>
               </div>
 
               <div className="py-1">
                 <Link
                   to="/"
-                  className="block px-4 py-1.5 text-gh-sm text-gh-text hover:bg-gh-accent hover:text-white no-underline"
+                  className="flex items-center px-4 py-1.5 text-sm text-gh-text hover:bg-gh-accent hover:text-white no-underline"
                   onClick={() => setMenuOpen(false)}
                 >
                   Your repositories
                 </Link>
                 <Link
                   to="/notifications"
-                  className="block px-4 py-1.5 text-gh-sm text-gh-text hover:bg-gh-accent hover:text-white no-underline"
+                  className="flex items-center px-4 py-1.5 text-sm text-gh-text hover:bg-gh-accent hover:text-white no-underline"
                   onClick={() => setMenuOpen(false)}
                 >
                   Notifications
+                  {unreadCount > 0 && (
+                    <span className="ml-auto counter">{unreadCount}</span>
+                  )}
                 </Link>
               </div>
 
-              <div className="border-t border-gh-border py-1">
+              <div className="border-t py-1" style={{ borderColor: "#eaeef2" }}>
                 <button
-                  className="w-full text-left px-4 py-1.5 text-gh-sm text-gh-text hover:bg-gh-accent hover:text-white bg-transparent border-none cursor-pointer"
+                  className="w-full text-left px-4 py-1.5 text-sm text-gh-text hover:bg-gh-accent hover:text-white bg-transparent border-none cursor-pointer"
                   onClick={() => { setMenuOpen(false); onLogout(); }}
                 >
                   Sign out

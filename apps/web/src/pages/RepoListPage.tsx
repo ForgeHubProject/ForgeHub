@@ -68,7 +68,7 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
 
   return (
     <div className="min-h-screen bg-gh-bg">
-      <Header user={user} onLogout={onLogout} />
+      <Header user={user} onLogout={onLogout} token={token} />
 
       <div className="max-w-[1200px] mx-auto px-4 py-8">
         <div className="flex flex-col sm:flex-row gap-6">
