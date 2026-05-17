@@ -574,3 +574,73 @@ export async function markNotificationRead(token: string, id: string): Promise<v
 export async function deleteNotification(token: string, id: string): Promise<void> {
   return req(`/notifications/${id}`, { method: "DELETE", token });
 }
+
+// ─── labels ──────────────────────────────────────────────────────────────────
+
+export async function createLabel(
+  token: string,
+  handle: string,
+  repoName: string,
+  name: string,
+  color: string,
+  description?: string,
+): Promise<Label> {
+  return req(`/repos/${handle}/${repoName}/labels`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ name, color, description }),
+  });
+}
+
+export async function updateLabel(
+  token: string,
+  handle: string,
+  repoName: string,
+  labelId: string,
+  patch: { name?: string; color?: string; description?: string },
+): Promise<Label> {
+  return req(`/repos/${handle}/${repoName}/labels/${labelId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteLabel(
+  token: string,
+  handle: string,
+  repoName: string,
+  labelId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/labels/${labelId}`, { method: "DELETE", token });
+}
+
+// ─── collaborators ────────────────────────────────────────────────────────────
+
+export type Collaborator = {
+  id: string;
+  role: "reader" | "writer" | "admin";
+  createdAt: string;
+  user: { id: string; handle: string; email: string; displayName: string | null };
+};
+
+export async function listCollaborators(token: string, repoName: string): Promise<{ collaborators: Collaborator[] }> {
+  return req(`/repos/${repoName}/collaborators`, { token });
+}
+
+export async function addCollaborator(
+  token: string,
+  repoName: string,
+  handle: string,
+  role: "reader" | "writer" | "admin" = "writer",
+): Promise<Collaborator> {
+  return req(`/repos/${repoName}/collaborators`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ handle, role }),
+  });
+}
+
+export async function removeCollaborator(token: string, repoName: string, handle: string): Promise<void> {
+  return req(`/repos/${repoName}/collaborators/${handle}`, { method: "DELETE", token });
+}
