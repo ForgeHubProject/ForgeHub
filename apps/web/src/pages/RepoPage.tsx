@@ -247,6 +247,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             defaultBranch={defaultBranch}
+            splat={splat}
           />
         )}
         {activeTab === "issues" && (
@@ -255,6 +256,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            splat={splat}
           />
         )}
         {activeTab === "pulls" && (
@@ -263,6 +265,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            splat={splat}
           />
         )}
         {activeTab === "releases" && (
