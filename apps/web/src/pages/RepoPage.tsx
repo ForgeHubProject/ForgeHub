@@ -8,6 +8,7 @@ import { RepoCommitsTab } from "./repo/RepoCommitsTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
+import { RepoSettingsTab } from "./repo/RepoSettingsTab";
 
 type Props = {
   token: string;
@@ -15,13 +16,14 @@ type Props = {
   onLogout: () => void;
 };
 
-type Tab = "code" | "issues" | "pulls" | "commits" | "releases";
+type Tab = "code" | "issues" | "pulls" | "commits" | "releases" | "settings";
 
 function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("issues")) return "issues";
   if (subpath.startsWith("pulls")) return "pulls";
   if (subpath.startsWith("commits")) return "commits";
   if (subpath.startsWith("releases")) return "releases";
+  if (subpath.startsWith("settings")) return "settings";
   return "code";
 }
 
@@ -62,6 +64,14 @@ function TagIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path fillRule="evenodd" d="M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25 6.25a.25.25 0 010 .354l-5.025 5.025a.25.25 0 01-.354 0l-6.25-6.25a.25.25 0 01-.073-.177zm-1.5 0V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 010 2.474l-5.026 5.026a1.75 1.75 0 01-2.474 0l-6.25-6.25A1.75 1.75 0 011 7.775zM6 5a1 1 0 100 2 1 1 0 000-2z" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <path fillRule="evenodd" d="M7.429 1.525a6.593 6.593 0 011.142 0c.036.003.108.036.137.146l.289 1.105c.147.56.55.967.997 1.189.174.086.341.183.501.29.417.278.97.423 1.53.27l1.102-.303c.11-.03.175.016.195.046.219.31.41.641.573.989.014.03.023.109-.063.17l-.948.709c-.447.334-.629.847-.57 1.343.018.148.028.298.028.45s-.01.302-.028.45c-.059.496.123 1.01.57 1.344l.948.708c.086.061.077.14.063.17a6.38 6.38 0 01-.573.99c-.02.029-.086.075-.195.045l-1.103-.303c-.559-.153-1.112-.008-1.529.27-.16.107-.327.204-.5.29-.449.222-.851.628-.998 1.189l-.289 1.105c-.029.11-.101.143-.137.146a6.593 6.593 0 01-1.142 0c-.036-.003-.108-.036-.137-.146l-.289-1.105c-.147-.56-.55-.967-.997-1.189a4.502 4.502 0 01-.501-.29c-.417-.278-.97-.423-1.53-.27l-1.102.303c-.11.03-.175-.016-.195-.046a6.381 6.381 0 01-.573-.989c-.014-.03-.023-.109.063-.17l.948-.709c.447-.334.629-.847.57-1.343A4.502 4.502 0 012 8c0-.152.01-.302.028-.45.059-.496-.123-1.01-.57-1.344l-.948-.708c-.086-.061-.077-.14-.063-.17a6.38 6.38 0 01.573-.99c.02-.029.086-.075.195-.045l1.103.303c.559.153 1.112.008 1.529-.27.16-.107.327-.204.5-.29.449-.222.851-.628.998-1.189l.289-1.105c.029-.11.101-.143.137-.146zM8 0c-.236 0-.47.01-.701.03-.743.065-1.29.615-1.458 1.261l-.29 1.106c-.017.066-.078.158-.211.224a5.001 5.001 0 00-.498.29c-.12.079-.247.112-.37.08L3.37 2.687c-.648-.178-1.32.03-1.711.567a7.9 7.9 0 00-.71 1.227c-.285.632-.109 1.355.353 1.824l.95.71c.056.043.128.147.128.285a4.5 4.5 0 000 .9c0 .138-.072.242-.129.285l-.95.71c-.461.469-.637 1.192-.352 1.824.2.446.437.87.71 1.227.39.537 1.063.745 1.711.567l1.103-.303c.123-.032.25 0 .37.08.16.107.327.204.497.29.134.066.195.158.212.224l.29 1.106c.167.646.715 1.196 1.457 1.26a8.094 8.094 0 001.402 0c.743-.064 1.29-.614 1.458-1.26l.29-1.106c.017-.066.078-.158.211-.224a5 5 0 00.498-.29c.12-.079.247-.112.37-.08l1.103.303c.648.178 1.32-.03 1.711-.567.273-.357.51-.781.71-1.227.285-.632.109-1.355-.353-1.824l-.95-.71c-.056-.043-.128-.147-.128-.285a4.5 4.5 0 000-.9c0-.138.072-.242.129-.285l.95-.71c.461-.469.637-1.192.352-1.824a7.9 7.9 0 00-.71-1.227c-.39-.537-1.063-.745-1.711-.567l-1.103.303c-.123.032-.25 0-.37-.08a5 5 0 00-.497-.29c-.134-.066-.195-.158-.212-.224L9.16 1.29C8.992.644 8.444.094 7.701.03A8.094 8.094 0 008 0zM6.5 8a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zM8 5a3 3 0 100 6 3 3 0 000-6z" />
     </svg>
   );
 }
@@ -222,6 +232,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
             <TabLink tab="pulls" icon={<PRIcon />} label="Pull requests" count={openPrCount} />
             <TabLink tab="commits" icon={<CommitIcon />} label="Commits" />
             <TabLink tab="releases" icon={<TagIcon />} label="Releases" />
+            {user.handle === h && (
+              <TabLink tab="settings" icon={<SettingsIcon />} label="Settings" />
+            )}
           </div>
         </div>
       </div>
@@ -247,6 +260,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             defaultBranch={defaultBranch}
+            splat={splat}
           />
         )}
         {activeTab === "issues" && (
@@ -255,6 +269,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            splat={splat}
           />
         )}
         {activeTab === "pulls" && (
@@ -263,6 +278,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            splat={splat}
           />
         )}
         {activeTab === "releases" && (
@@ -272,6 +288,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
             repoName={r}
             user={user}
           />
+        )}
+        {activeTab === "settings" && user.handle === h && (
+          <RepoSettingsTab token={token} handle={h} repoName={r} user={user} />
         )}
       </div>
     </div>
