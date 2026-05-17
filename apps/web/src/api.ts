@@ -1,4 +1,7 @@
-import type { BranchInfo, Constraint, DiffResult, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "./types";
+import type {
+  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, Issue, IssueComment,
+  Label, Notification, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+} from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const BASE = API_BASE;
@@ -349,4 +352,225 @@ export async function forkRepo(
   repoName: string,
 ): Promise<Repo> {
   return req(`/repos/${handle}/${repoName}/fork`, { method: "POST", token });
+}
+
+// ─── commits ──────────────────────────────────────────────────────────────────
+
+export async function listCommits(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+  path?: string,
+  limit?: number,
+): Promise<{ commits: CommitInfo[] }> {
+  const qs = new URLSearchParams();
+  if (ref) qs.set("ref", ref);
+  if (path) qs.set("path", path);
+  if (limit) qs.set("limit", String(limit));
+  const q = qs.toString() ? `?${qs}` : "";
+  return req(`/repos/${handle}/${repoName}/commits${q}`, { token: token ?? undefined });
+}
+
+export async function getCommit(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  sha: string,
+): Promise<CommitDetail> {
+  return req(`/repos/${handle}/${repoName}/commits/${sha}`, { token: token ?? undefined });
+}
+
+// ─── tree / blob ──────────────────────────────────────────────────────────────
+
+export async function listTree(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+  path?: string,
+): Promise<{ entries: TreeEntry[]; readme: { path: string; content: string } | null }> {
+  const qs = new URLSearchParams();
+  if (ref) qs.set("ref", ref);
+  if (path) qs.set("path", path);
+  const q = qs.toString() ? `?${qs}` : "";
+  return req(`/repos/${handle}/${repoName}/tree${q}`, { token: token ?? undefined });
+}
+
+export async function getBlob(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  path: string,
+  ref?: string,
+): Promise<{ path: string; content: string; encoding: string }> {
+  const qs = new URLSearchParams({ path });
+  if (ref) qs.set("ref", ref);
+  return req(`/repos/${handle}/${repoName}/blob?${qs}`, { token: token ?? undefined });
+}
+
+export async function getReadme(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+  path?: string,
+): Promise<{ path: string; content: string }> {
+  const qs = new URLSearchParams();
+  if (ref) qs.set("ref", ref);
+  if (path) qs.set("path", path);
+  const q = qs.toString() ? `?${qs}` : "";
+  return req(`/repos/${handle}/${repoName}/readme${q}`, { token: token ?? undefined });
+}
+
+// ─── issues ───────────────────────────────────────────────────────────────────
+
+export async function listIssues(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  state: "open" | "closed" | "all" = "open",
+): Promise<{ issues: Issue[] }> {
+  return req(`/repos/${handle}/${repoName}/issues?state=${state}`, { token: token ?? undefined });
+}
+
+export async function getIssue(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}`, { token: token ?? undefined });
+}
+
+export async function createIssue(
+  token: string,
+  handle: string,
+  repoName: string,
+  title: string,
+  body?: string,
+  labelIds?: string[],
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ title, body, labelIds }),
+  });
+}
+
+export async function updateIssue(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  patch: { state?: "open" | "closed"; title?: string; body?: string },
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function listIssueComments(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ comments: IssueComment[] }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, { token: token ?? undefined });
+}
+
+export async function createIssueComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<IssueComment> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+// ─── labels ───────────────────────────────────────────────────────────────────
+
+export async function listLabels(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ labels: Label[] }> {
+  return req(`/repos/${handle}/${repoName}/labels`, { token: token ?? undefined });
+}
+
+// ─── releases ─────────────────────────────────────────────────────────────────
+
+export async function listReleases(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ releases: Release[] }> {
+  return req(`/repos/${handle}/${repoName}/releases`, { token: token ?? undefined });
+}
+
+export async function getRelease(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  tagName: string,
+): Promise<Release> {
+  return req(`/repos/${handle}/${repoName}/releases/${encodeURIComponent(tagName)}`, { token: token ?? undefined });
+}
+
+export async function createRelease(
+  token: string,
+  handle: string,
+  repoName: string,
+  tagName: string,
+  releaseName: string,
+  body?: string,
+  isDraft?: boolean,
+  isPrerelease?: boolean,
+  targetCommitish?: string,
+): Promise<Release> {
+  return req(`/repos/${handle}/${repoName}/releases`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ tagName, name: releaseName, body, isDraft, isPrerelease, targetCommitish }),
+  });
+}
+
+export async function deleteRelease(
+  token: string,
+  handle: string,
+  repoName: string,
+  tagName: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/releases/${encodeURIComponent(tagName)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+// ─── notifications ────────────────────────────────────────────────────────────
+
+export async function listNotifications(
+  token: string,
+  all = false,
+): Promise<{ notifications: Notification[] }> {
+  return req(`/notifications${all ? "?all=true" : ""}`, { token });
+}
+
+export async function markAllNotificationsRead(token: string): Promise<void> {
+  return req("/notifications", { method: "PATCH", token });
+}
+
+export async function markNotificationRead(token: string, id: string): Promise<void> {
+  return req(`/notifications/${id}`, { method: "PATCH", token });
+}
+
+export async function deleteNotification(token: string, id: string): Promise<void> {
+  return req(`/notifications/${id}`, { method: "DELETE", token });
 }

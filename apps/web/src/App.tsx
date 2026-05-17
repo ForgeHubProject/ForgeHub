@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { RepoListPage } from "./pages/RepoListPage";
-import { SnapshotPage } from "./pages/SnapshotPage";
+import { RepoPage } from "./pages/RepoPage";
 import type { User } from "./types";
 
 function AppRoutes() {
@@ -55,10 +56,20 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/notifications"
+        element={
+          authed ? (
+            <NotificationsPage token={token!} user={user!} onLogout={handleLogout} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
         path="/:handle/:repoName/*"
         element={
           authed ? (
-            <SnapshotPage token={token!} user={user!} />
+            <RepoPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
             <Navigate to="/login" replace />
           )
