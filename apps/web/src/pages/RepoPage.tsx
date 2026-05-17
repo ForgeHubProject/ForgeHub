@@ -147,15 +147,18 @@ export function RepoPage({ token, user, onLogout }: Props) {
     return (
       <Link
         to={tab === "code" ? base : `${base}/${tab}`}
-        className={`flex items-center gap-1.5 px-3 py-2 text-gh-sm border-b-2 transition-colors whitespace-nowrap no-underline ${
-          isActive
-            ? "border-gh-accent text-gh-text font-semibold"
-            : "border-transparent text-gh-muted hover:text-gh-text hover:border-gh-border"
-        }`}
+        className="flex items-center gap-1.5 px-4 py-3 text-sm border-b-2 transition-colors whitespace-nowrap no-underline"
+        style={{
+          borderBottomColor: isActive ? "#fd8c73" : "transparent",
+          color: isActive ? "#1f2328" : "#656d76",
+          fontWeight: isActive ? 600 : 400,
+        }}
+        onMouseEnter={(e) => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = "#1f2328"; (e.currentTarget as HTMLElement).style.borderBottomColor = "#d0d7de"; } }}
+        onMouseLeave={(e) => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = "#656d76"; (e.currentTarget as HTMLElement).style.borderBottomColor = "transparent"; } }}
       >
         {icon}
         {label}
-        {count != null && (
+        {count != null && count > 0 && (
           <span className="counter ml-0.5">{count}</span>
         )}
       </Link>
@@ -165,7 +168,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
   if (loading) {
     return (
       <div className="min-h-screen bg-gh-bg">
-        <Header user={user} onLogout={onLogout} />
+        <Header user={user} onLogout={onLogout} token={token} />
         <div className="flex items-center justify-center py-32 text-gh-muted">Loading…</div>
       </div>
     );
@@ -174,7 +177,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
   if (error || !repo) {
     return (
       <div className="min-h-screen bg-gh-bg">
-        <Header user={user} onLogout={onLogout} />
+        <Header user={user} onLogout={onLogout} token={token} />
         <div className="max-w-4xl mx-auto px-4 py-16 text-center">
           <p className="text-gh-xl font-semibold text-gh-text">Repository not found</p>
           <p className="text-gh-muted mt-2">{error ?? "This repository does not exist or you do not have access."}</p>
@@ -186,29 +189,34 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
   return (
     <div className="min-h-screen bg-gh-bg">
-      <Header user={user} onLogout={onLogout} />
+      <Header user={user} onLogout={onLogout} token={token} />
 
       {/* Repo header */}
-      <div className="border-b border-gh-border bg-gh-canvas">
-        <div className="max-w-[1280px] mx-auto px-4">
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-1 py-3 text-gh-lg flex-wrap">
-            <Link to="/" className="text-gh-accent font-semibold hover:underline no-underline">
+      <div className="bg-gh-canvas border-b border-gh-border">
+        <div className="max-w-[1280px] mx-auto px-4 pt-4">
+          {/* Breadcrumb row */}
+          <div className="flex items-center gap-1.5 flex-wrap mb-1">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
+              <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+            </svg>
+            <Link to="/" className="text-base font-semibold text-gh-accent hover:underline">
               {user.handle}
             </Link>
-            <span className="text-gh-muted">/</span>
-            <Link to={base} className="text-gh-accent font-semibold hover:underline no-underline">
+            <span className="text-gh-muted text-base font-light">/</span>
+            <Link to={base} className="text-base font-semibold text-gh-accent hover:underline">
               {repo.name}
             </Link>
-            {repo.visibility === "private" && (
-              <span className="badge border-gh-border text-gh-muted ml-1 flex items-center gap-1">
-                <LockIcon /> Private
-              </span>
-            )}
+            <span className={`badge ml-0.5 ${repo.visibility === "private" ? "border-gh-border text-gh-muted" : "border-gh-border text-gh-muted"}`}>
+              {repo.visibility === "private" ? <><LockIcon />&nbsp;Private</> : "Public"}
+            </span>
           </div>
 
+          {repo.description && (
+            <p className="text-sm text-gh-muted mb-3">{repo.description}</p>
+          )}
+
           {/* Tab bar */}
-          <div className="flex items-center gap-1 -mb-px overflow-x-auto">
+          <div className="flex items-stretch -mb-px overflow-x-auto gap-0">
             <TabLink tab="code" icon={<CodeIcon />} label="Code" />
             <TabLink tab="issues" icon={<IssueIcon />} label="Issues" count={openIssueCount} />
             <TabLink tab="pulls" icon={<PRIcon />} label="Pull requests" count={openPrCount} />
