@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  createIssue, createIssueComment, getIssue,
-  listIssueComments, listIssues, updateIssue
+  addIssueLabel, createIssue, createIssueComment, getIssue,
+  listIssueComments, listIssues, listLabels, removeIssueLabel, updateIssue,
 } from "../../api";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
-import type { Issue, IssueComment, User } from "../../types";
+import { UserSearchInput } from "../../components/UserSearchInput";
+import type { Issue, IssueComment, Label, SearchUserResult, User } from "../../types";
 
 type Props = {
   token: string;
@@ -28,6 +29,20 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
+function LabelChip({ label, onRemove }: { label: Label; onRemove?: () => void }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full font-medium"
+      style={{ backgroundColor: `#${label.color}22`, color: `#${label.color}`, border: `1px solid #${label.color}44` }}
+    >
+      {label.name}
+      {onRemove && (
+        <button type="button" onClick={onRemove} className="hover:opacity-70 ml-0.5 leading-none">×</button>
+      )}
+    </span>
+  );
+}
+
 function OpenIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-success">
@@ -43,6 +58,167 @@ function ClosedIcon() {
       <path d="M11.28 6.78a.75.75 0 00-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 00-1.06 1.06l2 2a.75.75 0 001.06 0l3.5-3.5z" />
       <path fillRule="evenodd" d="M16 8A8 8 0 110 8a8 8 0 0116 0zm-1.5 0a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
     </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
+      <path fillRule="evenodd" d="M7.429 1.525a6.593 6.593 0 011.142 0c.036.003.108.036.137.146l.289 1.105c.147.56.55.967.997 1.189.174.086.341.183.501.29.455.3.964.39 1.486.23l1.11-.319c.11-.031.175.016.195.046.219.31.41.641.567.987.063.14.025.21-.007.245l-.793.827c-.397.414-.528.975-.43 1.52.023.127.035.257.035.388s-.012.261-.035.388c-.098.546.033 1.107.43 1.52l.793.827c.032.035.07.105.007.245a6.08 6.08 0 01-.567.987c-.02.03-.085.077-.195.046l-1.11-.32c-.522-.158-1.031-.068-1.486.23-.16.108-.327.205-.501.29-.447.222-.85.629-.997 1.189l-.289 1.105c-.029.11-.1.143-.137.146a6.613 6.613 0 01-1.142 0c-.036-.003-.108-.036-.137-.146l-.289-1.105c-.147-.56-.55-.967-.997-1.189a4.502 4.502 0 01-.501-.29c-.455-.299-.964-.39-1.486-.23l-1.11.32c-.11.031-.175-.016-.195-.046a6.08 6.08 0 01-.567-.987c-.063-.14-.025-.21.007-.245l.793-.827c.397-.413.528-.974.43-1.52A3.999 3.999 0 014 8c0-.131.012-.261.035-.388.098-.546-.033-1.106-.43-1.52l-.793-.827c-.032-.034-.07-.104-.007-.244.157-.346.348-.677.567-.987.02-.03.085-.077.195-.046l1.11.319c.522.158 1.031.068 1.486-.23.16-.107.327-.204.501-.29.447-.222.85-.629.997-1.189l.289-1.105c.029-.11.1-.143.137-.146zM8 6a2 2 0 100 4 2 2 0 000-4z" />
+    </svg>
+  );
+}
+
+// ─── Sidebar label picker ──────────────────────────────────────────────────────
+
+function LabelPicker({ token, handle, repoName, issue, canEdit, onUpdate }: {
+  token: string; handle: string; repoName: string;
+  issue: Issue; canEdit: boolean; onUpdate: (updated: Issue) => void;
+}) {
+  const [allLabels, setAllLabels] = useState<Label[]>([]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
+  }, [token, handle, repoName]);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  async function toggle(label: Label) {
+    const has = issue.labels.some((l) => l.id === label.id);
+    try {
+      if (has) {
+        await removeIssueLabel(token, handle, repoName, issue.number, label.id);
+        onUpdate({ ...issue, labels: issue.labels.filter((l) => l.id !== label.id) });
+      } else {
+        await addIssueLabel(token, handle, repoName, issue.number, label.id);
+        onUpdate({ ...issue, labels: [...issue.labels, label] });
+      }
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="mb-4" ref={ref}>
+      <div className="flex items-center justify-between mb-2 pb-2 border-b border-gh-border">
+        <p className="text-xs font-semibold text-gh-text uppercase tracking-wide">Labels</p>
+        {canEdit && (
+          <button type="button" onClick={() => setOpen((o) => !o)} className="text-gh-muted hover:text-gh-text">
+            <GearIcon />
+          </button>
+        )}
+      </div>
+
+      {open && allLabels.length > 0 && (
+        <div className="absolute z-50 mt-1 w-56 bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden">
+          {allLabels.map((lbl) => {
+            const checked = issue.labels.some((l) => l.id === lbl.id);
+            return (
+              <button
+                key={lbl.id}
+                type="button"
+                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gh-bg text-left"
+                onClick={() => toggle(lbl)}
+              >
+                <span className="w-4 h-4 flex items-center justify-center border border-gh-border rounded flex-shrink-0" style={{ backgroundColor: checked ? `#${lbl.color}` : undefined }}>
+                  {checked && <svg width="10" height="10" viewBox="0 0 16 16" fill="white"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+                </span>
+                <LabelChip label={lbl} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {open && allLabels.length === 0 && (
+        <div className="absolute z-50 mt-1 w-56 bg-gh-canvas border border-gh-border rounded-lg shadow-xl px-3 py-2 text-sm text-gh-muted">
+          No labels yet. Create them in Settings.
+        </div>
+      )}
+
+      {issue.labels.length === 0 ? (
+        <p className="text-xs text-gh-muted">None yet</p>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {issue.labels.map((lbl) => (
+            <LabelChip key={lbl.id} label={lbl} onRemove={canEdit ? () => toggle(lbl) : undefined} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sidebar assignee picker ───────────────────────────────────────────────────
+
+function AssigneePicker({ token, handle, repoName, issue, canEdit, onUpdate }: {
+  token: string; handle: string; repoName: string;
+  issue: Issue; canEdit: boolean; onUpdate: (updated: Issue) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  async function assign(u: SearchUserResult | null) {
+    setOpen(false);
+    try {
+      const updated = await updateIssue(token, handle, repoName, issue.number, {
+        assigneeId: u?.id ?? null,
+      });
+      onUpdate(updated);
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="mb-4" ref={ref}>
+      <div className="flex items-center justify-between mb-2 pb-2 border-b border-gh-border">
+        <p className="text-xs font-semibold text-gh-text uppercase tracking-wide">Assignee</p>
+        {canEdit && (
+          <button type="button" onClick={() => setOpen((o) => !o)} className="text-gh-muted hover:text-gh-text">
+            <GearIcon />
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-64 bg-gh-canvas border border-gh-border rounded-lg shadow-xl p-2">
+          <UserSearchInput token={token} onSelect={(u) => assign(u)} placeholder="Search users…" />
+          {issue.assignee && (
+            <button
+              type="button"
+              className="mt-2 w-full text-left text-xs text-gh-danger hover:underline px-1"
+              onClick={() => assign(null)}
+            >
+              Clear assignee
+            </button>
+          )}
+        </div>
+      )}
+
+      {issue.assignee ? (
+        <div className="flex items-center gap-2">
+          <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+            {issue.assignee[0]?.toUpperCase()}
+          </div>
+          <span className="text-xs text-gh-text">{issue.assignee}</span>
+        </div>
+      ) : (
+        <p className="text-xs text-gh-muted">No one assigned</p>
+      )}
+    </div>
   );
 }
 
@@ -125,11 +301,10 @@ function IssueDetail({ token, handle, repoName, user, number }: {
   }
 
   const isOpen = issue.state === "open";
-  const isAuthor = issue.author === user.handle;
+  const canEdit = issue.author === user.handle || handle === user.handle;
 
   return (
     <div>
-      {/* Back link */}
       <Link to={`${base}/issues`} className="inline-flex items-center gap-1.5 text-sm text-gh-muted hover:text-gh-accent mb-4 no-underline">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
           <path fillRule="evenodd" d="M9.78 12.78a.75.75 0 01-1.06 0L4.47 8.53a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 1.06L6.06 8l3.72 3.72a.75.75 0 010 1.06z" />
@@ -137,7 +312,6 @@ function IssueDetail({ token, handle, repoName, user, number }: {
         Issues
       </Link>
 
-      {/* Title */}
       <div className="flex items-start gap-3 mb-4">
         <h1 className="text-2xl font-semibold text-gh-text flex-1 leading-tight">
           {issue.title}
@@ -145,7 +319,6 @@ function IssueDetail({ token, handle, repoName, user, number }: {
         </h1>
       </div>
 
-      {/* Status bar */}
       <div className="flex items-center gap-3 mb-6 flex-wrap">
         <span
           className="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-full text-white"
@@ -163,16 +336,11 @@ function IssueDetail({ token, handle, repoName, user, number }: {
         </span>
       </div>
 
-      {/* Two-column layout */}
       <div className="flex gap-6">
         {/* Main content */}
         <div className="flex-1 min-w-0 space-y-4">
-          {/* Opening post */}
           <div className="card overflow-hidden">
-            <div
-              className="flex items-center gap-3 px-4 py-2 border-b border-gh-border text-sm"
-              style={{ backgroundColor: "#ddf4ff" }}
-            >
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border text-sm" style={{ backgroundColor: "#ddf4ff" }}>
               <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
                 {issue.author[0]?.toUpperCase()}
               </div>
@@ -188,7 +356,6 @@ function IssueDetail({ token, handle, repoName, user, number }: {
             </div>
           </div>
 
-          {/* Comments */}
           {comments.map((c) => (
             <div key={c.id} className="card overflow-hidden">
               <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border bg-gh-bg text-sm">
@@ -204,8 +371,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
             </div>
           ))}
 
-          {/* Close/reopen divider */}
-          {(isAuthor) && (
+          {canEdit && (
             <div className="flex items-center gap-3 pt-2">
               <div className="flex-1 h-px bg-gh-border" />
               <button
@@ -218,7 +384,6 @@ function IssueDetail({ token, handle, repoName, user, number }: {
             </div>
           )}
 
-          {/* New comment */}
           <form onSubmit={submitComment} className="card overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border bg-gh-bg text-sm">
               <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
@@ -235,11 +400,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
               />
               {error && <p className="text-gh-danger text-sm mt-2">{error}</p>}
               <div className="flex justify-end mt-3">
-                <button
-                  type="submit"
-                  className="btn-primary px-4"
-                  disabled={submitting || !commentBody.trim()}
-                >
+                <button type="submit" className="btn-primary px-4" disabled={submitting || !commentBody.trim()}>
                   {submitting ? "Posting…" : "Comment"}
                 </button>
               </div>
@@ -248,37 +409,15 @@ function IssueDetail({ token, handle, repoName, user, number }: {
         </div>
 
         {/* Sidebar */}
-        <aside className="w-56 flex-shrink-0 hidden lg:block">
-          <div className="text-sm">
-            <p className="font-semibold text-gh-text mb-2 pb-2 border-b border-gh-border">Labels</p>
-            {issue.labels.length === 0 ? (
-              <p className="text-gh-muted text-xs">None yet</p>
-            ) : (
-              <div className="flex flex-wrap gap-1">
-                {issue.labels.map((lbl) => (
-                  <span
-                    key={lbl.id}
-                    className="inline-flex items-center px-2 py-0.5 text-xs rounded-full font-medium"
-                    style={{ backgroundColor: `#${lbl.color}22`, color: `#${lbl.color}`, border: `1px solid #${lbl.color}44` }}
-                  >
-                    {lbl.name}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {issue.assignee && (
-              <>
-                <p className="font-semibold text-gh-text mb-2 pb-2 border-b border-gh-border mt-4">Assignee</p>
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-gray-400 flex items-center justify-center text-white text-xs font-bold">
-                    {issue.assignee[0]?.toUpperCase()}
-                  </div>
-                  <span className="text-sm">{issue.assignee}</span>
-                </div>
-              </>
-            )}
-          </div>
+        <aside className="w-56 flex-shrink-0 hidden lg:block relative text-sm">
+          <LabelPicker
+            token={token} handle={handle} repoName={repoName}
+            issue={issue} canEdit={canEdit} onUpdate={setIssue}
+          />
+          <AssigneePicker
+            token={token} handle={handle} repoName={repoName}
+            issue={issue} canEdit={canEdit} onUpdate={setIssue}
+          />
         </aside>
       </div>
     </div>
@@ -293,15 +432,27 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [allLabels, setAllLabels] = useState<Label[]>([]);
+  const [selectedLabels, setSelectedLabels] = useState<Label[]>([]);
+  const [assignee, setAssignee] = useState<SearchUserResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
+  }, [token, handle, repoName]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      const issue = await createIssue(token, handle, repoName, title.trim(), body.trim() || undefined);
+      const issue = await createIssue(
+        token, handle, repoName,
+        title.trim(),
+        body.trim() || undefined,
+        selectedLabels.map((l) => l.id),
+      );
       onCreated(issue);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
@@ -310,8 +461,14 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
     }
   }
 
+  function toggleLabel(lbl: Label) {
+    setSelectedLabels((prev) =>
+      prev.some((l) => l.id === lbl.id) ? prev.filter((l) => l.id !== lbl.id) : [...prev, lbl],
+    );
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16">
+    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 px-4 pt-16" onClick={onClose}>
       <div className="bg-gh-canvas border border-gh-border rounded-xl w-full max-w-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gh-border">
           <h2 className="text-base font-semibold">New issue</h2>
@@ -328,8 +485,46 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
           </div>
           <div>
             <label className="label" htmlFor="issue-body">Description</label>
-            <textarea id="issue-body" className="input resize-none font-mono" placeholder="Leave a comment (supports Markdown)" value={body} onChange={(e) => setBody(e.target.value)} rows={8} />
+            <textarea id="issue-body" className="input resize-none font-mono" placeholder="Leave a comment (supports Markdown)" value={body} onChange={(e) => setBody(e.target.value)} rows={6} />
           </div>
+
+          {allLabels.length > 0 && (
+            <div>
+              <label className="label">Labels</label>
+              <div className="flex flex-wrap gap-1.5">
+                {allLabels.map((lbl) => {
+                  const active = selectedLabels.some((l) => l.id === lbl.id);
+                  return (
+                    <button
+                      key={lbl.id}
+                      type="button"
+                      onClick={() => toggleLabel(lbl)}
+                      className={`transition-opacity ${active ? "opacity-100 ring-2 ring-offset-1" : "opacity-60 hover:opacity-100"}`}
+                      style={{ ["--tw-ring-color" as string]: `#${lbl.color}` }}
+                    >
+                      <LabelChip label={lbl} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="label">Assignee</label>
+            {assignee ? (
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
+                  {(assignee.displayName || assignee.handle)[0].toUpperCase()}
+                </div>
+                <span className="text-sm text-gh-text">{assignee.displayName || assignee.handle}</span>
+                <button type="button" className="text-xs text-gh-muted hover:text-gh-danger" onClick={() => setAssignee(null)}>×</button>
+              </div>
+            ) : (
+              <UserSearchInput token={token} onSelect={setAssignee} placeholder="Search collaborators…" />
+            )}
+          </div>
+
           {error && <p className="text-gh-danger text-sm bg-gh-danger-muted rounded-md px-3 py-2">{error}</p>}
           <div className="flex justify-end gap-2 pt-2 border-t border-gh-border">
             <button type="button" className="btn-default" onClick={onClose}>Cancel</button>
@@ -349,19 +544,35 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
   const [stateFilter, setStateFilter] = useState<"open" | "closed">("open");
+  const [labelFilter, setLabelFilter] = useState<{ id: string; name: string } | null>(null);
+  const [allLabels, setAllLabels] = useState<Label[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [labelDropdown, setLabelDropdown] = useState(false);
+  const labelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
+  }, [token, handle, repoName]);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (labelRef.current && !labelRef.current.contains(e.target as Node)) setLabelDropdown(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listIssues(token, handle, repoName, stateFilter)
+    listIssues(token, handle, repoName, stateFilter, labelFilter?.name)
       .then((d) => setIssues(d.issues))
       .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
-  }, [token, handle, repoName, stateFilter]);
+  }, [token, handle, repoName, stateFilter, labelFilter]);
 
   return (
     <div>
@@ -380,6 +591,31 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
               {s === "open" ? "Open" : "Closed"}
             </button>
           ))}
+
+          {allLabels.length > 0 && (
+            <div className="relative ml-2" ref={labelRef}>
+              <button
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border transition-colors ${labelFilter ? "border-gh-accent text-gh-accent bg-gh-accent-muted" : "border-gh-border text-gh-muted hover:text-gh-text"}`}
+                onClick={() => setLabelDropdown((o) => !o)}
+              >
+                Label{labelFilter ? `: ${labelFilter.name}` : ""}
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" /></svg>
+              </button>
+              {labelDropdown && (
+                <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-48 bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden">
+                  <button className="w-full text-left px-3 py-2 text-sm hover:bg-gh-bg text-gh-muted" onClick={() => { setLabelFilter(null); setLabelDropdown(false); }}>
+                    All labels
+                  </button>
+                  {allLabels.map((lbl) => (
+                    <button key={lbl.id} className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gh-bg" onClick={() => { setLabelFilter({ id: lbl.id, name: lbl.name }); setLabelDropdown(false); }}>
+                      <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: `#${lbl.color}` }} />
+                      {lbl.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <button className="btn-primary px-3" onClick={() => setShowNew(true)}>New issue</button>
       </div>
@@ -399,7 +635,9 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
         ) : issues.length === 0 ? (
           <div className="p-16 text-center">
             <p className="text-lg font-semibold text-gh-text">{stateFilter === "open" ? "No open issues" : "No closed issues"}</p>
-            {stateFilter === "open" && <p className="text-gh-muted text-sm mt-1">Open a new issue to start tracking work.</p>}
+            {stateFilter === "open" && !labelFilter && (
+              <p className="text-gh-muted text-sm mt-1">Open a new issue to start tracking work.</p>
+            )}
           </div>
         ) : (
           <div className="divide-y divide-gh-border">
@@ -409,7 +647,7 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
                 className="w-full text-left flex items-start gap-3 px-4 py-3 hover:bg-gh-bg transition-colors"
                 onClick={() => navigate(`${base}/issues/${issue.number}`)}
               >
-                {issue.state === "open" ? <OpenIcon /> : <ClosedIcon />}
+                <span className="mt-0.5 flex-shrink-0">{issue.state === "open" ? <OpenIcon /> : <ClosedIcon />}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gh-text">
                     {issue.title}
@@ -421,7 +659,7 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
                   </p>
                   <p className="text-xs text-gh-muted mt-0.5">
                     #{issue.number} {stateFilter === "open" ? "opened" : "closed"} {timeAgo(issue.createdAt)} by {issue.author}
-                    {issue.assignee && ` · assigned to ${issue.assignee}`}
+                    {issue.assignee && ` · ${issue.assignee}`}
                   </p>
                 </div>
                 {issue.commentCount > 0 && (
