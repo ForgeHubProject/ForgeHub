@@ -51,6 +51,7 @@ function RepoRow({ repo, onSelect, collab }: { repo: Repo; onSelect: (r: Repo) =
 export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [collabRepos, setCollabRepos] = useState<Repo[]>([]);
+  const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -128,7 +129,8 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
               <input
                 className="input flex-1"
                 placeholder="Find a repository…"
-                readOnly
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
               />
               <button className="btn-primary px-4 whitespace-nowrap" onClick={openCreate}>
                 New
@@ -142,7 +144,29 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
             {error && (
               <div className="text-gh-danger text-gh-sm py-4">{error}</div>
             )}
-            {!loading && repos.length === 0 && collabRepos.length === 0 && !error && (
+            {(() => {
+              const q = filter.toLowerCase();
+              const filteredOwn = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+              const filteredCollab = q ? collabRepos.filter((r) => r.name.toLowerCase().includes(q) || r.ownerHandle?.toLowerCase().includes(q)) : collabRepos;
+              return (
+                <>
+                  {filteredOwn.map((repo) => <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} />)}
+                  {filteredCollab.length > 0 && (
+                    <>
+                      <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mt-6 mb-1 px-0.5">Collaborating on</p>
+                      <div className="divide-y divide-gh-border border-t border-gh-border">
+                        {filteredCollab.map((repo) => <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} collab />)}
+                      </div>
+                    </>
+                  )}
+                  {filteredOwn.length === 0 && filteredCollab.length === 0 && filter && (
+                    <p className="text-sm text-gh-muted py-8 text-center">No repositories match "{filter}"</p>
+                  )}
+                </>
+              );
+            })()}
+
+            {!loading && repos.length === 0 && collabRepos.length === 0 && !filter && !error && (
               <div className="text-center py-16 text-gh-muted">
                 <RepoIcon />
                 <p className="mt-3 text-gh-lg font-semibold text-gh-text">No repositories yet</p>
@@ -153,24 +177,6 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
               </div>
             )}
 
-            <div className="divide-y divide-gh-border border-t border-gh-border">
-              {repos.map((repo) => (
-                <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} />
-              ))}
-            </div>
-
-            {collabRepos.length > 0 && (
-              <>
-                <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mt-6 mb-1 px-0.5">
-                  Collaborating on
-                </p>
-                <div className="divide-y divide-gh-border border-t border-gh-border">
-                  {collabRepos.map((repo) => (
-                    <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} collab />
-                  ))}
-                </div>
-              </>
-            )}
           </main>
         </div>
       </div>
