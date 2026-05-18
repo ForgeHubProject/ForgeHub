@@ -133,7 +133,7 @@ export async function commitRoutes(app: FastifyInstance) {
     return { path: filePath, ref, content, encoding: "utf-8" };
   });
 
-  // GET /repos/:handle/:name/blob/:ref/*  (path-param variant, kept for diff viewer links)
+  // GET /repos/:handle/:name/blob/:ref/*  (path-param variant, returns raw text/plain)
   app.get("/repos/:handle/:name/blob/:ref/*", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name, ref } = request.params as { handle: string; name: string; ref: string };
     const filePath = (request.params as Record<string, string>)["*"] ?? "";
@@ -144,6 +144,6 @@ export async function commitRoutes(app: FastifyInstance) {
 
     const content = await readFileAtBranch(repo.storageKey, ref, filePath);
     if (content === null) return reply.status(404).send({ error: "File not found" });
-    return { path: filePath, ref, content, encoding: "utf-8" };
+    return reply.type("text/plain").send(content);
   });
 }
