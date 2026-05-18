@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getBlob } from "../api";
-import { highlightCode, langForFilename } from "../lib/highlight";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { resolveFileViewer } from "../views/fileViewerRegistry";
 
 type Props = {
   token: string;
@@ -10,7 +9,6 @@ type Props = {
   repoName: string;
   ref: string;
   path: string;
-  /** e.g. "/:handle/:repoName" */
   repoBase: string;
 };
 
@@ -23,62 +21,6 @@ function CopyIcon() {
   );
 }
 
-function RawContent({ code, lang }: { code: string; lang: string }) {
-  const lines = code.split("\n");
-  const highlighted = highlightCode(code, lang);
-  const highlightedLines = splitHighlightedLines(highlighted);
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-xs font-mono" style={{ lineHeight: "20px" }}>
-        <tbody>
-          {lines.map((_, i) => (
-            <tr key={i} className="hover:bg-blue-50 group">
-              <td
-                className="select-none text-right text-gh-muted pr-4 pl-3 w-[1%] whitespace-nowrap border-r border-gh-border"
-                style={{ userSelect: "none", minWidth: 40 }}
-              >
-                {i + 1}
-              </td>
-              <td className="pl-4 pr-4 whitespace-pre">
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: highlightedLines[i] ?? "",
-                  }}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function splitHighlightedLines(highlighted: string): string[] {
-  const result: string[] = [];
-  let currentLine = "";
-  let depth = 0;
-
-  const parts = highlighted.split("\n");
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    currentLine += (i > 0 ? "\n" : "") + part;
-
-    const openTags = (part.match(/<span[^>]*>/g) ?? []).length;
-    const closeTags = (part.match(/<\/span>/g) ?? []).length;
-    depth += openTags - closeTags;
-
-    if (depth <= 0) {
-      result.push(currentLine);
-      currentLine = "";
-      depth = 0;
-    }
-  }
-  if (currentLine) result.push(currentLine);
-  return result;
-}
-
 export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Props) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,12 +28,10 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
   const [copied, setCopied] = useState(false);
 
   const filename = path.split("/").pop() ?? path;
-  const lang = langForFilename(filename);
-  const isMarkdown = ["md", "markdown"].includes(filename.split(".").pop()?.toLowerCase() ?? "");
-  const [renderMode, setRenderMode] = useState<"preview" | "raw">(isMarkdown ? "preview" : "raw");
-
   const pathParts = path.split("/");
   const lineCount = content?.split("\n").length ?? 0;
+
+  const Viewer = resolveFileViewer(filename);
 
   useEffect(() => {
     setLoading(true);
@@ -110,11 +50,10 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     });
   }
 
-  // Breadcrumb
   const breadcrumb = (
     <div className="flex items-center gap-1 text-sm flex-wrap mb-3">
       <Link to={repoBase} className="text-gh-accent hover:underline font-medium">
-        {repoName}
+        {repoBase.split("/").pop()}
       </Link>
       {pathParts.map((part, i) => {
         const partPath = pathParts.slice(0, i + 1).join("/");
@@ -124,10 +63,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
             {i === pathParts.length - 1 ? (
               <span className="font-semibold text-gh-text">{part}</span>
             ) : (
-              <Link
-                to={`${repoBase}/tree/${ref}/${partPath}`}
-                className="text-gh-accent hover:underline"
-              >
+              <Link to={`${repoBase}/tree/${ref}/${partPath}`} className="text-gh-accent hover:underline">
                 {part}
               </Link>
             )}
@@ -145,7 +81,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
           <div className="h-10 bg-gh-bg border-b border-gh-border rounded-t-md" />
           <div className="p-4 space-y-2">
             {[...Array(12)].map((_, i) => (
-              <div key={i} className="h-3 bg-gray-100 rounded" style={{ width: `${60 + Math.random() * 40}%` }} />
+              <div key={i} className="h-3 bg-gray-100 rounded" style={{ width: `${60 + (i * 17) % 40}%` }} />
             ))}
           </div>
         </div>
@@ -157,9 +93,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     return (
       <div>
         {breadcrumb}
-        <div className="card p-8 text-center text-gh-danger">
-          {error ?? "File not found"}
-        </div>
+        <div className="card p-8 text-center text-gh-danger">{error ?? "File not found"}</div>
       </div>
     );
   }
@@ -168,47 +102,23 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     <div>
       {breadcrumb}
       <div className="card overflow-hidden">
-        {/* File header */}
+        {/* Universal file header */}
         <div className="flex items-center justify-between px-4 py-2 bg-gh-bg border-b border-gh-border">
           <div className="flex items-center gap-3 text-xs text-gh-muted">
             <span><span className="font-semibold text-gh-text">{lineCount}</span> lines</span>
             <span><span className="font-semibold text-gh-text">{(content.length / 1024).toFixed(1)}</span> KB</span>
           </div>
-          <div className="flex items-center gap-2">
-            {isMarkdown && (
-              <div className="flex items-center border border-gh-border rounded-md overflow-hidden text-xs">
-                <button
-                  className={`px-2 py-1 transition-colors ${renderMode === "preview" ? "bg-gh-accent text-white" : "text-gh-muted hover:bg-gh-bg"}`}
-                  onClick={() => setRenderMode("preview")}
-                >
-                  Preview
-                </button>
-                <button
-                  className={`px-2 py-1 transition-colors ${renderMode === "raw" ? "bg-gh-accent text-white" : "text-gh-muted hover:bg-gh-bg"}`}
-                  onClick={() => setRenderMode("raw")}
-                >
-                  Raw
-                </button>
-              </div>
-            )}
-            <button
-              className="flex items-center gap-1.5 text-xs text-gh-muted hover:text-gh-text px-2 py-1 border border-gh-border rounded-md hover:bg-gh-bg transition-colors"
-              onClick={copy}
-            >
-              <CopyIcon />
-              {copied ? "Copied!" : "Copy"}
-            </button>
-          </div>
+          <button
+            className="flex items-center gap-1.5 text-xs text-gh-muted hover:text-gh-text px-2 py-1 border border-gh-border rounded-md hover:bg-gh-bg transition-colors"
+            onClick={copy}
+          >
+            <CopyIcon />
+            {copied ? "Copied!" : "Copy"}
+          </button>
         </div>
 
-        {/* Content */}
-        {isMarkdown && renderMode === "preview" ? (
-          <div className="px-8 py-6">
-            <MarkdownRenderer content={content} />
-          </div>
-        ) : (
-          <RawContent code={content} lang={lang} />
-        )}
+        {/* Delegated to the registered viewer */}
+        <Viewer content={content} path={path} filename={filename} gitRef={ref} />
       </div>
     </div>
   );
