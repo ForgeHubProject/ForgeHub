@@ -176,6 +176,28 @@ export type CommitInfo = {
   parents: string[];
 };
 
+export type DiffLine = {
+  type: "context" | "add" | "remove";
+  content: string;
+  oldLineNo: number | null;
+  newLineNo: number | null;
+};
+
+export type DiffHunk = {
+  header: string;
+  lines: DiffLine[];
+};
+
+export type FileDiff = {
+  oldPath: string;
+  newPath: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  hunks: DiffHunk[];
+};
+
 export type CommitDetail = CommitInfo & {
   changedFiles: string[];
 };

@@ -152,7 +152,7 @@ describe("getCommit()", () => {
     expect(commit!.sha).toBe(sha2);
     expect(commit!.message).toBe("docs: update readme");
     expect(commit!.shortSha).toHaveLength(7);
-    expect(commit!.parentShas).toContain(sha1);
+    expect(commit!.parents).toContain(sha1);
   });
 
   it("includes changedFiles listing which files were modified", async () => {
@@ -161,9 +161,9 @@ describe("getCommit()", () => {
     expect(commit!.changedFiles).not.toContain("src/main.ts");
   });
 
-  it("initial commit has empty parentShas", async () => {
+  it("initial commit has empty parents", async () => {
     const commit = await getCommit(repo.storageKey, sha1);
-    expect(commit!.parentShas).toEqual([]);
+    expect(commit!.parents).toEqual([]);
   });
 
   it("returns null for an unknown SHA", async () => {
@@ -263,7 +263,7 @@ describe("GET /repos/:h/:r/commits/:sha", () => {
     expect(body.sha).toBe(sha2);
     expect(body.message).toBe("docs: update readme");
     expect(body.changedFiles).toContain("readme.txt");
-    expect(body.parentShas).toContain(sha1);
+    expect(body.parents).toContain(sha1);
   });
 
   it("returns 404 for unknown SHA", async () => {
