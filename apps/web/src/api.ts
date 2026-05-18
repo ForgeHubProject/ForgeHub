@@ -651,12 +651,5 @@ export async function search(
   type: "repos" | "issues" | "users",
 ): Promise<{ type: string; results: unknown[] }> {
   const params = new URLSearchParams({ q, type });
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`/api/search?${params}`, { headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error ?? res.statusText);
-  }
-  return res.json();
+  return req<{ type: string; results: unknown[] }>(`/search?${params}`, { token: token ?? undefined });
 }
