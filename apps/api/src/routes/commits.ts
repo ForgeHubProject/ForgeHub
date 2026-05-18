@@ -22,8 +22,8 @@ export async function commitRoutes(app: FastifyInstance) {
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
     if (!repo.storageKey) return reply.send({ commits: [], branch: "main", page: 1, perPage: 20 });
 
-    const { branch: branchQ, page: pageQ, per_page: perPageQ } = request.query as Record<string, string | undefined>;
-    const ref = branchQ ?? await defaultBranch(repo.storageKey);
+    const { branch: branchQ, ref: refQ, page: pageQ, per_page: perPageQ } = request.query as Record<string, string | undefined>;
+    const ref = branchQ ?? refQ ?? await defaultBranch(repo.storageKey);
     const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(perPageQ ?? "20", 10) || 20));
 
@@ -44,6 +44,14 @@ export async function commitRoutes(app: FastifyInstance) {
     return commit;
   });
 
+  async function withReadme(storageKey: string, ref: string, dirPath: string, entries: Awaited<ReturnType<typeof listTree>>) {
+    const readmeEntry = findReadmeEntry(entries);
+    if (!readmeEntry) return null;
+    const content = await readFileAtBranch(storageKey, ref, readmeEntry.path);
+    if (content === null) return null;
+    return { path: readmeEntry.path, name: readmeEntry.name, ref, content };
+  }
+
   // GET /repos/:handle/:name/tree/:ref  (root listing)
   app.get("/repos/:handle/:name/tree/:ref", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name, ref } = request.params as { handle: string; name: string; ref: string };
@@ -54,10 +62,10 @@ export async function commitRoutes(app: FastifyInstance) {
 
     const entries = await listTree(repo.storageKey, ref, "");
     if (entries.length === 0) {
-      // Could be an empty/invalid ref — treat as 404
       return reply.status(404).send({ error: "Ref not found or empty tree" });
     }
-    return { ref, path: "", entries };
+    const readme = await withReadme(repo.storageKey, ref, "", entries);
+    return { ref, path: "", entries, readme };
   });
 
   // GET /repos/:handle/:name/tree/:ref/*  (subdirectory listing)
@@ -71,7 +79,8 @@ export async function commitRoutes(app: FastifyInstance) {
 
     const entries = await listTree(repo.storageKey, ref, treePath);
     if (entries.length === 0) return reply.status(404).send({ error: "Path not found or empty directory" });
-    return { ref, path: treePath, entries };
+    const readme = await withReadme(repo.storageKey, ref, treePath, entries);
+    return { ref, path: treePath, entries, readme };
   });
 
   // GET /repos/:handle/:name/readme?ref=X&path=Y

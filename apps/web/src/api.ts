@@ -369,7 +369,7 @@ export async function listCommits(
   limit?: number,
 ): Promise<{ commits: CommitInfo[] }> {
   const qs = new URLSearchParams();
-  if (ref) qs.set("ref", ref);
+  if (ref) qs.set("branch", ref);
   if (path) qs.set("path", path);
   if (limit) qs.set("limit", String(limit));
   const q = qs.toString() ? `?${qs}` : "";
@@ -394,11 +394,9 @@ export async function listTree(
   ref?: string,
   path?: string,
 ): Promise<{ entries: TreeEntry[]; readme: { path: string; content: string } | null }> {
-  const qs = new URLSearchParams();
-  if (ref) qs.set("ref", ref);
-  if (path) qs.set("path", path);
-  const q = qs.toString() ? `?${qs}` : "";
-  return req(`/repos/${handle}/${repoName}/tree${q}`, { token: token ?? undefined });
+  if (!ref) ref = "main";
+  const segments = path ? `${ref}/${path}` : ref;
+  return req(`/repos/${handle}/${repoName}/tree/${segments}`, { token: token ?? undefined });
 }
 
 export async function getBlob(
