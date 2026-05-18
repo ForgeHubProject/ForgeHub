@@ -51,6 +51,10 @@ export async function getMyRepos(token: string): Promise<{ repos: Repo[] }> {
   return req("/repos/mine", { token });
 }
 
+export async function getCollaboratingRepos(token: string): Promise<{ repos: Repo[] }> {
+  return req("/repos/collaborating", { token });
+}
+
 export async function getRepo(
   token: string | null,
   handle: string,
