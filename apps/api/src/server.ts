@@ -20,6 +20,7 @@ import { prCommentRoutes } from "./routes/pr-comments.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { releaseRoutes } from "./routes/releases.js";
 import { repoRoutes } from "./routes/repos.js";
+import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { tagRoutes } from "./routes/tags.js";
 
@@ -75,6 +76,7 @@ export async function buildServer() {
   await app.register(issueRoutes);
   await app.register(labelRoutes);
   await app.register(notificationRoutes);
+  await app.register(searchRoutes);
   await app.register(gitHttpRoutes);
 
   return app;
