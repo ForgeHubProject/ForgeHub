@@ -130,6 +130,21 @@ export async function repoRoutes(app: FastifyInstance) {
   );
 
   app.get(
+    "/repos/collaborating",
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const collabs = await prisma.repoCollaborator.findMany({
+        where: { userId: request.user.sub },
+        include: {
+          repo: { include: { owner: { select: { handle: true } } } },
+        },
+        orderBy: { repo: { updatedAt: "desc" } },
+      });
+      return { repos: collabs.map((c) => repoResponse(c.repo)) };
+    },
+  );
+
+  app.get(
     "/repos/:handle/:name",
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createRepo, getMyRepos } from "../api";
+import { createRepo, getCollaboratingRepos, getMyRepos } from "../api";
 import { Header } from "../components/Header";
 import type { Repo, User } from "../types";
 
@@ -24,8 +24,33 @@ function RepoIcon() {
   );
 }
 
+function RepoRow({ repo, onSelect, collab }: { repo: Repo; onSelect: (r: Repo) => void; collab?: boolean }) {
+  return (
+    <div className="py-5 flex items-start gap-3">
+      <RepoIcon />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            className="text-gh-accent font-semibold text-gh-lg hover:underline bg-transparent border-none cursor-pointer p-0 text-left"
+            onClick={() => onSelect(repo)}
+          >
+            {collab ? (repo.fullName ?? `${repo.ownerHandle}/${repo.name}`) : repo.name}
+          </button>
+          <span className={repo.visibility === "public" ? "badge-public" : "badge-private"}>
+            {repo.visibility === "public" ? "Public" : "Private"}
+          </span>
+        </div>
+        {repo.description && (
+          <p className="text-gh-sm text-gh-muted mt-1 line-clamp-1">{repo.description}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [collabRepos, setCollabRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -34,8 +59,11 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
-    getMyRepos(token)
-      .then((r) => setRepos(r.repos))
+    Promise.all([getMyRepos(token), getCollaboratingRepos(token)])
+      .then(([mine, collab]) => {
+        setRepos(mine.repos);
+        setCollabRepos(collab.repos);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, [token]);
@@ -91,7 +119,7 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
               <span className="tab-item-active">
                 <RepoIcon />
                 Repositories
-                <span className="counter">{repos.length}</span>
+                <span className="counter">{repos.length + collabRepos.length}</span>
               </span>
             </div>
 
@@ -114,7 +142,7 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
             {error && (
               <div className="text-gh-danger text-gh-sm py-4">{error}</div>
             )}
-            {!loading && repos.length === 0 && !error && (
+            {!loading && repos.length === 0 && collabRepos.length === 0 && !error && (
               <div className="text-center py-16 text-gh-muted">
                 <RepoIcon />
                 <p className="mt-3 text-gh-lg font-semibold text-gh-text">No repositories yet</p>
@@ -127,27 +155,22 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
 
             <div className="divide-y divide-gh-border border-t border-gh-border">
               {repos.map((repo) => (
-                <div key={repo.id} className="py-5 flex items-start gap-3">
-                  <RepoIcon />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        className="text-gh-accent font-semibold text-gh-lg hover:underline bg-transparent border-none cursor-pointer p-0 text-left"
-                        onClick={() => onSelectRepo(repo)}
-                      >
-                        {repo.fullName ?? repo.name}
-                      </button>
-                      <span className={repo.visibility === "public" ? "badge-public" : "badge-private"}>
-                        {repo.visibility === "public" ? "Public" : "Private"}
-                      </span>
-                    </div>
-                    {repo.description && (
-                      <p className="text-gh-sm text-gh-muted mt-1 line-clamp-1">{repo.description}</p>
-                    )}
-                  </div>
-                </div>
+                <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} />
               ))}
             </div>
+
+            {collabRepos.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mt-6 mb-1 px-0.5">
+                  Collaborating on
+                </p>
+                <div className="divide-y divide-gh-border border-t border-gh-border">
+                  {collabRepos.map((repo) => (
+                    <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} collab />
+                  ))}
+                </div>
+              </>
+            )}
           </main>
         </div>
       </div>
