@@ -433,10 +433,22 @@ export async function listIssues(
   repoName: string,
   state: "open" | "closed" | "all" = "open",
   label?: string,
+  assignee?: string,
+  author?: string,
+  sort?: "newest" | "oldest",
 ): Promise<{ issues: Issue[] }> {
   const qs = new URLSearchParams({ state });
   if (label) qs.set("label", label);
+  if (assignee) qs.set("assignee", assignee);
+  if (author) qs.set("author", author);
+  if (sort) qs.set("sort", sort);
   return req(`/repos/${handle}/${repoName}/issues?${qs}`, { token: token ?? undefined });
+}
+
+export type RepoMember = { id: string; handle: string; displayName: string | null; role: "owner" | "writer" | "reader" };
+
+export async function listRepoMembers(token: string | null, handle: string, repoName: string): Promise<{ members: RepoMember[] }> {
+  return req(`/repos/${handle}/${repoName}/members`, { token: token ?? undefined });
 }
 
 export async function getIssue(
