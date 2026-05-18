@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getCommit, listCommits } from "../../api";
-import type { CommitDetail, CommitInfo } from "../../types";
+import { getCommit, getCommitDiff, listCommits } from "../../api";
+import type { CommitDetail, CommitInfo, FileDiff } from "../../types";
 
 type Props = {
   token: string;
@@ -34,21 +34,120 @@ function groupByDate(commits: CommitInfo[]): Array<{ date: string; commits: Comm
   return Array.from(groups.entries()).map(([date, commits]) => ({ date, commits }));
 }
 
+// ─── Diff Viewer ──────────────────────────────────────────────────────────────
+
+function FileDiffCard({ file, sha, base }: { file: FileDiff; sha: string; base: string }) {
+  const [expanded, setExpanded] = useState(true);
+  const displayPath = file.status === "renamed"
+    ? `${file.oldPath} → ${file.newPath}`
+    : file.status === "deleted" ? file.oldPath : file.newPath;
+  const blobPath = file.status === "deleted" ? file.oldPath : file.newPath;
+
+  return (
+    <div className="card overflow-hidden">
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 bg-gh-bg border-b border-gh-border cursor-pointer select-none"
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <svg
+          width="12" height="12" viewBox="0 0 16 16" fill="currentColor"
+          className="text-gh-muted flex-shrink-0 transition-transform"
+          style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
+        >
+          <path fillRule="evenodd" d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z" />
+        </svg>
+        <Link
+          to={`${base}/blob/${sha}/${blobPath}`}
+          className="font-mono text-sm text-gh-accent hover:underline flex-1 min-w-0 truncate no-underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {displayPath}
+        </Link>
+        <div className="flex items-center gap-2 flex-shrink-0 text-xs font-mono">
+          {file.additions > 0 && <span className="text-green-600">+{file.additions}</span>}
+          {file.deletions > 0 && <span className="text-red-600">-{file.deletions}</span>}
+          {file.status !== "modified" && (
+            <span className="px-1.5 py-0.5 rounded text-xs font-semibold"
+              style={{
+                backgroundColor: file.status === "added" ? "#dafbe1" : file.status === "deleted" ? "#ffd7d5" : "#fff8c5",
+                color: file.status === "added" ? "#1a7f37" : file.status === "deleted" ? "#cf222e" : "#9a6700",
+              }}
+            >
+              {file.status}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {expanded && (
+        file.binary ? (
+          <p className="px-4 py-3 text-sm text-gh-muted italic">Binary file changed</p>
+        ) : file.hunks.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gh-muted italic">No textual changes</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse" style={{ fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+              <tbody>
+                {file.hunks.map((hunk, hi) => (
+                  <>
+                    <tr key={`h${hi}`} style={{ backgroundColor: "#eaf5ff" }}>
+                      <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
+                      <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
+                      <td className="px-3 py-0.5" style={{ color: "#0969da" }}>{hunk.header}</td>
+                    </tr>
+                    {hunk.lines.map((line, li) => {
+                      const bg = line.type === "add" ? "#e6ffec" : line.type === "remove" ? "#ffebe9" : "#ffffff";
+                      const fg = line.type === "add" ? "#1a7f37" : line.type === "remove" ? "#cf222e" : "#1f2328";
+                      const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                      return (
+                        <tr key={`${hi}-${li}`} style={{ backgroundColor: bg }}>
+                          <td className="select-none text-right px-2 py-0 border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40, minWidth: 40 }}>
+                            {line.oldLineNo ?? ""}
+                          </td>
+                          <td className="select-none text-right px-2 py-0 border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40, minWidth: 40 }}>
+                            {line.newLineNo ?? ""}
+                          </td>
+                          <td className="pl-2 pr-4 whitespace-pre" style={{ color: fg }}>
+                            <span className="select-none mr-2" style={{ opacity: 0.7 }}>{prefix}</span>
+                            {line.content}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 // ─── Commit Detail ────────────────────────────────────────────────────────────
 
 function CommitDetailView({ token, handle, repoName, sha, base }: {
   token: string; handle: string; repoName: string; sha: string; base: string;
 }) {
   const [commit, setCommit] = useState<CommitDetail | null>(null);
+  const [diffFiles, setDiffFiles] = useState<FileDiff[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [diffLoading, setDiffLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
+    setDiffLoading(true);
+    setDiffFiles(null);
     getCommit(token, handle, repoName, sha)
       .then(setCommit)
       .catch((e) => setError(e instanceof Error ? e.message : "Not found"))
       .finally(() => setLoading(false));
+    getCommitDiff(token, handle, repoName, sha)
+      .then((d) => setDiffFiles(d.files))
+      .catch(() => setDiffFiles([]))
+      .finally(() => setDiffLoading(false));
   }, [token, handle, repoName, sha]);
 
   if (loading) {
@@ -70,6 +169,9 @@ function CommitDetailView({ token, handle, repoName, sha, base }: {
       </div>
     );
   }
+
+  const totalAdditions = diffFiles?.reduce((s, f) => s + f.additions, 0) ?? 0;
+  const totalDeletions = diffFiles?.reduce((s, f) => s + f.deletions, 0) ?? 0;
 
   return (
     <div>
@@ -97,43 +199,42 @@ function CommitDetailView({ token, handle, repoName, sha, base }: {
             <span className="text-gh-muted">{commit.authorEmail}</span>
           </div>
           <span className="text-gh-muted">{timeAgo(commit.date)}</span>
-          <div className="ml-auto">
-            <code className="font-mono text-sm text-gh-muted bg-gh-canvas border border-gh-border px-2.5 py-1 rounded-md">
-              {commit.sha}
-            </code>
-          </div>
+          <code className="ml-auto font-mono text-sm text-gh-muted bg-gh-canvas border border-gh-border px-2.5 py-1 rounded-md">
+            {commit.sha.slice(0, 7)}
+          </code>
         </div>
       </div>
 
-      {/* Changed files */}
-      <div className="card overflow-hidden">
-        <div className="px-4 py-2.5 bg-gh-bg border-b border-gh-border flex items-center gap-2">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
-            <path fillRule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z" />
-          </svg>
-          <span className="text-sm font-semibold text-gh-text">
-            {commit.changedFiles.length} file{commit.changedFiles.length !== 1 ? "s" : ""} changed
-          </span>
+      {/* Diff section */}
+      {diffLoading ? (
+        <div className="space-y-3">
+          {[...Array(commit.changedFiles.length || 2)].map((_, i) => (
+            <div key={i} className="card animate-pulse">
+              <div className="px-4 py-2.5 bg-gh-bg border-b border-gh-border h-9" />
+              <div className="p-4 space-y-1">
+                {[...Array(4)].map((_, j) => <div key={j} className="h-4 bg-gray-100 rounded" />)}
+              </div>
+            </div>
+          ))}
         </div>
-        {commit.changedFiles.length === 0 ? (
-          <p className="p-4 text-sm text-gh-muted">No files changed (empty commit)</p>
-        ) : (
-          <div className="divide-y divide-gh-border">
-            {commit.changedFiles.map((file) => (
-              <Link
-                key={file}
-                to={`${base}/blob/${commit.sha}/${file}`}
-                className="flex items-center gap-2 px-4 py-2 text-sm hover:bg-gh-bg no-underline text-gh-text hover:text-gh-accent group"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-                  <path fillRule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z" />
-                </svg>
-                <span className="font-mono group-hover:underline">{file}</span>
-              </Link>
+      ) : diffFiles && diffFiles.length > 0 ? (
+        <>
+          <div className="flex items-center gap-3 mb-3 text-sm text-gh-muted">
+            <span>{diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed</span>
+            {totalAdditions > 0 && <span className="text-green-600 font-mono">+{totalAdditions}</span>}
+            {totalDeletions > 0 && <span className="text-red-600 font-mono">-{totalDeletions}</span>}
+          </div>
+          <div className="space-y-3">
+            {diffFiles.map((file, i) => (
+              <FileDiffCard key={i} file={file} sha={sha} base={base} />
             ))}
           </div>
-        )}
-      </div>
+        </>
+      ) : (
+        <div className="card p-8 text-center text-gh-muted text-sm">
+          {commit.changedFiles.length === 0 ? "Empty commit — no files changed." : "Could not load diff."}
+        </div>
+      )}
     </div>
   );
 }
