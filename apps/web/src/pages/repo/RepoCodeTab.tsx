@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { listCommits, listTree } from "../../api";
+import { API_BASE, listCommits, listTree } from "../../api";
 import { BlobViewer } from "../../components/BlobViewer";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import type { BranchInfo, CommitInfo, Repo, TreeEntry } from "../../types";
@@ -16,6 +16,90 @@ type Props = {
   onRefChange: (ref: string) => void;
   splat: string;
 };
+
+function CloneDropdown({ handle, repoName, visibility }: { handle: string; repoName: string; visibility: string }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const url = `${API_BASE}/git/${handle}/${repoName}.git`;
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  function copy() {
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        className="btn-primary flex items-center gap-1.5 text-sm px-3 py-1.5"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+        </svg>
+        Code
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+          <path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+6px)] w-96 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-50 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gh-border">
+            <p className="text-sm font-semibold text-gh-text">Clone this repository</p>
+          </div>
+
+          <div className="p-3 space-y-3">
+            {/* URL row */}
+            <div className="flex items-center gap-1.5">
+              <input
+                readOnly
+                value={url}
+                className="input flex-1 font-mono text-xs bg-gh-bg"
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <button className="btn-default px-2.5 py-1.5 text-xs flex-shrink-0" onClick={copy} title="Copy URL">
+                {copied ? (
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-success">
+                    <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                    <path fillRule="evenodd" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" /><path fillRule="evenodd" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+
+            {/* Clone command */}
+            <div className="bg-gh-bg border border-gh-border rounded-md p-3 space-y-1.5">
+              <p className="text-xs text-gh-muted font-semibold uppercase tracking-wide">Clone</p>
+              <code className="text-xs font-mono text-gh-text break-all select-all block">
+                git clone {url}
+              </code>
+            </div>
+
+            {visibility === "private" && (
+              <p className="text-xs text-gh-muted bg-gh-warning-muted border border-gh-border rounded-md p-3">
+                <strong>Private repository</strong> — you'll be prompted for your ForgeHub <strong>username</strong> and <strong>password</strong>.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FolderIcon() {
   return (
@@ -128,7 +212,7 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
   );
 }
 
-function TreeView({ token, handle, repoName, branches, currentRef, onRefChange, splat, base }: Props & { base: string }) {
+function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefChange, splat, base }: Props & { base: string }) {
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
@@ -209,6 +293,7 @@ function TreeView({ token, handle, repoName, branches, currentRef, onRefChange, 
           </svg>
           Commits
         </Link>
+        <CloneDropdown handle={handle} repoName={repoName_} visibility={repo.visibility} />
       </div>
 
       {/* File tree */}
