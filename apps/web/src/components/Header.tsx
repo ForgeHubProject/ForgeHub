@@ -104,7 +104,7 @@ export function Header({ user, onLogout, token }: Props) {
       {/* Breadcrumb / nav — hidden on small screens */}
       <nav className="hidden md:flex items-center gap-1 ml-2">
         <Link
-          to="/"
+          to={`/${user.handle}`}
           className="text-sm font-semibold px-2 py-1 rounded-md transition-colors"
           style={{ color: "rgba(240,246,252,0.9)", textDecoration: "none" }}
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)")}
@@ -206,8 +206,10 @@ export function Header({ user, onLogout, token }: Props) {
             >
               {/* User info */}
               <div className="px-4 py-3 border-b" style={{ borderColor: "#eaeef2" }}>
-                <p className="font-semibold text-gh-text text-sm">{user.displayName || user.handle}</p>
-                <p className="text-xs text-gh-muted mt-0.5">@{user.handle}</p>
+                <Link to={`/${user.handle}`} className="no-underline" onClick={() => setMenuOpen(false)}>
+                  <p className="font-semibold text-gh-text text-sm hover:text-gh-accent">{user.displayName || user.handle}</p>
+                  <p className="text-xs text-gh-muted mt-0.5">@{user.handle}</p>
+                </Link>
               </div>
 
               <div className="py-1">

@@ -1,6 +1,6 @@
 import type {
   BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, Issue, IssueComment,
-  Label, Notification, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+  Label, Notification, PublicProfile, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -29,6 +29,21 @@ async function req<T>(
 
 export async function login(email: string, password: string): Promise<{ token: string; user: User }> {
   return req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+export async function getPublicProfile(token: string | null, handle: string): Promise<PublicProfile> {
+  return req(`/users/${handle}`, { token: token ?? undefined });
+}
+
+export async function updateMyProfile(
+  token: string,
+  patch: { displayName?: string; bio?: string; location?: string; website?: string },
+): Promise<{ user: User }> {
+  return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+export async function getUserRepos(token: string | null, handle: string): Promise<{ repos: Repo[] }> {
+  return req(`/users/${handle}/repos`, { token: token ?? undefined });
 }
 
 export async function register(

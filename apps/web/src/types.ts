@@ -3,6 +3,20 @@ export type User = {
   handle: string;
   email: string;
   displayName: string | null;
+  bio?: string | null;
+  location?: string | null;
+  website?: string | null;
+  createdAt?: string;
+};
+
+export type PublicProfile = {
+  id: string;
+  handle: string;
+  displayName: string | null;
+  bio: string | null;
+  location: string | null;
+  website: string | null;
+  createdAt: string;
 };
 
 export type Repo = {
