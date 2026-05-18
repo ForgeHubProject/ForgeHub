@@ -26,7 +26,7 @@ export function bareRepoPathFromKey(key: string): string {
 export async function createBareRepo(storageKey: string): Promise<string> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await execFile("git", ["init", "--bare", fullPath]);
+  await execFile("git", ["init", "--bare", "--initial-branch=main", fullPath]);
   return fullPath;
 }
 

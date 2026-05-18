@@ -15,10 +15,12 @@ export async function branchRoutes(app: FastifyInstance) {
       listBranches(repo.storageKey),
       defaultBranch(repo.storageKey),
     ]);
+    // If HEAD points to a branch with no commits, fall back to the first real branch
+    const resolvedDefault = branches.some((b) => b.name === def) ? def : (branches[0]?.name ?? def);
     // Annotate protected status
     const protected_ = await prisma.protectedBranch.findMany({ where: { repoId: repo.id }, select: { branch: true } });
     const protectedSet = new Set(protected_.map((p) => p.branch));
-    return { branches: branches.map((b) => ({ ...b, protected: protectedSet.has(b.name) })), defaultBranch: def };
+    return { branches: branches.map((b) => ({ ...b, protected: protectedSet.has(b.name) })), defaultBranch: resolvedDefault };
   });
 
   // POST /repos/:handle/:name/branches
