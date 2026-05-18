@@ -226,3 +226,31 @@ export type Notification = {
   repo: string;
   updatedAt: string;
 };
+
+export type SearchRepoResult = {
+  id: string;
+  name: string;
+  description: string | null;
+  visibility: "public" | "private";
+  ownerHandle: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SearchIssueResult = {
+  id: string;
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  repo: { name: string; ownerHandle: string };
+};
+
+export type SearchUserResult = {
+  id: string;
+  handle: string;
+  displayName: string | null;
+  createdAt: string;
+};

@@ -644,3 +644,19 @@ export async function addCollaborator(
 export async function removeCollaborator(token: string, repoName: string, handle: string): Promise<void> {
   return req(`/repos/${repoName}/collaborators/${handle}`, { method: "DELETE", token });
 }
+
+export async function search(
+  token: string | null,
+  q: string,
+  type: "repos" | "issues" | "users",
+): Promise<{ type: string; results: unknown[] }> {
+  const params = new URLSearchParams({ q, type });
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`/api/search?${params}`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? res.statusText);
+  }
+  return res.json();
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { listNotifications } from "../api";
 import type { User } from "../types";
 
@@ -52,8 +52,10 @@ const BellIcon = ({ count }: { count: number }) => (
 export function Header({ user, onLogout, token }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -71,6 +73,17 @@ export function Header({ user, onLogout, token }: Props) {
       .then((d) => setUnreadCount(d.notifications.length))
       .catch(() => {});
   }, [token]);
+
+  useEffect(() => {
+    setSearchQuery(searchParams.get("q") ?? "");
+  }, [searchParams]);
+
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchQuery.trim();
+    if (!q) return;
+    navigate(`/search?q=${encodeURIComponent(q)}&type=repos`);
+  }
 
   const initial = (user.displayName || user.handle)[0].toUpperCase();
 
@@ -101,7 +114,42 @@ export function Header({ user, onLogout, token }: Props) {
         </Link>
       </nav>
 
-      <div className="flex-1" />
+      {/* Search bar */}
+      <form onSubmit={handleSearch} className="flex-1 max-w-sm mx-4 hidden md:block">
+        <div className="relative">
+          <svg
+            width="14" height="14" viewBox="0 0 16 16" fill="currentColor"
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: "rgba(240,246,252,0.5)" }}
+          >
+            <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06L10.68 11.74z" />
+          </svg>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search…"
+            className="w-full pl-8 pr-3 py-1 text-sm rounded-md border outline-none transition-colors"
+            style={{
+              backgroundColor: "rgba(255,255,255,0.08)",
+              borderColor: "rgba(240,246,252,0.2)",
+              color: "rgba(240,246,252,0.9)",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.backgroundColor = "#ffffff";
+              e.currentTarget.style.color = "#1f2328";
+              e.currentTarget.style.borderColor = "#0969da";
+            }}
+            onBlur={(e) => {
+              if (!e.currentTarget.value) {
+                e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.08)";
+                e.currentTarget.style.color = "rgba(240,246,252,0.9)";
+                e.currentTarget.style.borderColor = "rgba(240,246,252,0.2)";
+              }
+            }}
+          />
+        </div>
+      </form>
 
       {/* Actions */}
       <div className="flex items-center gap-1">
