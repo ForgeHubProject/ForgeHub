@@ -3,12 +3,32 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../prisma.js";
 import { loginBodySchema, registerBodySchema } from "../validation.js";
 
-function publicUser(u: { id: string; email: string; handle: string; displayName: string | null; createdAt: Date }) {
+type DbUser = {
+  id: string; email: string; handle: string; displayName: string | null;
+  bio: string | null; location: string | null; website: string | null; createdAt: Date;
+};
+
+function publicUser(u: DbUser) {
   return {
     id: u.id,
     email: u.email,
     handle: u.handle,
     displayName: u.displayName,
+    bio: u.bio,
+    location: u.location,
+    website: u.website,
+    createdAt: u.createdAt.toISOString(),
+  };
+}
+
+function publicProfile(u: DbUser) {
+  return {
+    id: u.id,
+    handle: u.handle,
+    displayName: u.displayName,
+    bio: u.bio,
+    location: u.location,
+    website: u.website,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -26,12 +46,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     try {
       const user = await prisma.user.create({
-        data: {
-          email,
-          handle,
-          passwordHash,
-          displayName: parsed.data.displayName?.trim() || null,
-        },
+        data: { email, handle, passwordHash, displayName: parsed.data.displayName?.trim() || null },
       });
       const token = await reply.jwtSign({ sub: user.id });
       return reply.status(201).send({ user: publicUser(user), token });
@@ -51,12 +66,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const email = parsed.data.email.trim().toLowerCase();
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return reply.status(401).send({ error: "Invalid email or password" });
-    }
-
-    const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
-    if (!ok) {
+    if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
       return reply.status(401).send({ error: "Invalid email or password" });
     }
 
@@ -64,12 +74,37 @@ export async function authRoutes(app: FastifyInstance) {
     return { user: publicUser(user), token };
   });
 
-  app.get(
-    "/auth/me",
-    { preHandler: [app.authenticate] },
-    async (request) => {
+  app.get("/auth/me", { preHandler: [app.authenticate] }, async (request) => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user.sub } });
+    return { user: publicUser(user) };
+  });
+
+  // Public profile — no auth required
+  app.get("/users/:handle", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const user = await prisma.user.findUnique({ where: { handle: handle.toLowerCase() } });
+    if (!user) return reply.status(404).send({ error: "User not found" });
+    return publicProfile(user);
+  });
+
+  // Update own profile
+  app.patch("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { displayName, bio, location, website } = request.body as {
+      displayName?: string; bio?: string; location?: string; website?: string;
+    };
+
+    const data: Record<string, string | null> = {};
+    if (displayName !== undefined) data.displayName = displayName.trim() || null;
+    if (bio !== undefined) data.bio = bio.trim() || null;
+    if (location !== undefined) data.location = location.trim() || null;
+    if (website !== undefined) data.website = website.trim() || null;
+
+    if (Object.keys(data).length === 0) {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user.sub } });
       return { user: publicUser(user) };
-    },
-  );
+    }
+
+    const user = await prisma.user.update({ where: { id: request.user.sub }, data });
+    return { user: publicUser(user) };
+  });
 }

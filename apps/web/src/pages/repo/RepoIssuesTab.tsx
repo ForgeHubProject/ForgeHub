@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+
+function UserLink({ handle }: { handle: string }) {
+  return <Link to={`/${handle}`} className="font-semibold text-gh-text hover:text-gh-accent hover:underline" onClick={(e) => e.stopPropagation()}>{handle}</Link>;
+}
 import {
   addIssueLabel, createIssue, createIssueComment, getIssue,
   listIssueComments, listIssues, listLabels, listRepoMembers, removeIssueLabel,
@@ -378,7 +382,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
           {isOpen ? "Open" : "Closed"}
         </span>
         <span className="text-sm text-gh-muted">
-          <span className="font-semibold text-gh-text">{issue.author}</span>
+          <UserLink handle={issue.author} />
           {" opened this issue "}
           {timeAgo(issue.createdAt)}
           {" · "}
@@ -394,7 +398,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
               <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
                 {issue.author[0]?.toUpperCase()}
               </div>
-              <span className="font-semibold text-gh-text">{issue.author}</span>
+              <UserLink handle={issue.author} />
               <span className="text-gh-muted">commented {timeAgo(issue.createdAt)}</span>
             </div>
             <div className="px-6 py-5">
@@ -412,7 +416,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
                 <div className="w-6 h-6 rounded-full bg-gray-400 flex items-center justify-center text-white text-xs font-bold">
                   {c.author[0]?.toUpperCase()}
                 </div>
-                <span className="font-semibold text-gh-text">{c.author}</span>
+                <UserLink handle={c.author} />
                 <span className="text-gh-muted">commented {timeAgo(c.createdAt)}</span>
               </div>
               <div className="px-6 py-5">
