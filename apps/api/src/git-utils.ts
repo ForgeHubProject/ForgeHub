@@ -215,11 +215,12 @@ export async function readFileAtBranch(
 export type CommitInfo = {
   sha: string;
   shortSha: string;
+  subject: string;
   message: string;
   authorName: string;
   authorEmail: string;
   date: string;
-  parentShas: string[];
+  parents: string[];
 };
 
 export async function listCommits(
@@ -239,15 +240,16 @@ export async function listCommits(
     ]);
     if (!out) return [];
     return out.split("\n").filter(Boolean).map((line) => {
-      const [sha, message, authorName, authorEmail, date, parents] = line.split("\x1f");
+      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
       return {
         sha: sha ?? "",
         shortSha: (sha ?? "").slice(0, 7),
-        message: message ?? "",
+        subject: subject ?? "",
+        message: subject ?? "",
         authorName: authorName ?? "",
         authorEmail: authorEmail ?? "",
         date: date ?? "",
-        parentShas: parents?.trim() ? parents.trim().split(" ") : [],
+        parents: parents?.trim() ? parents.trim().split(" ") : [],
       };
     });
   } catch {
@@ -261,22 +263,126 @@ export async function getCommit(
 ): Promise<(CommitInfo & { changedFiles: string[] }) | null> {
   try {
     const meta = await git(storageKey, [
-      "show", "--no-patch", "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P", sha,
+      "show", "--no-patch", "--format=%H\x1f%an\x1f%ae\x1f%aI\x1f%P", sha,
     ]);
-    const [fullSha, message, authorName, authorEmail, date, parents] = meta.split("\x1f");
+    const [fullSha, authorName, authorEmail, date, parents] = meta.split("\x1f");
+    const fullMsg = await git(storageKey, ["show", "--no-patch", "--format=%B", sha]);
+    const subject = fullMsg.split("\n")[0]?.trim() ?? "";
     const filesOut = await git(storageKey, ["diff-tree", "--no-commit-id", "-r", "--name-only", sha]);
     return {
       sha: fullSha ?? "",
       shortSha: (fullSha ?? "").slice(0, 7),
-      message: message ?? "",
+      subject,
+      message: fullMsg.trim(),
       authorName: authorName ?? "",
       authorEmail: authorEmail ?? "",
       date: date ?? "",
-      parentShas: parents?.trim() ? parents.trim().split(" ") : [],
+      parents: parents?.trim() ? parents.trim().split(" ") : [],
       changedFiles: filesOut.split("\n").filter(Boolean),
     };
   } catch {
     return null;
+  }
+}
+
+// ─── commit diff ─────────────────────────────────────────────────────────────
+
+export type DiffLine = {
+  type: "context" | "add" | "remove";
+  content: string;
+  oldLineNo: number | null;
+  newLineNo: number | null;
+};
+
+export type DiffHunk = {
+  header: string;
+  lines: DiffLine[];
+};
+
+export type FileDiff = {
+  oldPath: string;
+  newPath: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  hunks: DiffHunk[];
+};
+
+function parseDiff(raw: string): FileDiff[] {
+  const result: FileDiff[] = [];
+  const sections: string[] = [];
+
+  let lastIndex = 0;
+  const pattern = /^diff --git /gm;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(raw)) !== null) {
+    if (m.index > lastIndex) sections.push(raw.slice(lastIndex, m.index));
+    lastIndex = m.index;
+  }
+  sections.push(raw.slice(lastIndex));
+
+  for (const section of sections) {
+    if (!section.startsWith("diff --git ")) continue;
+    const lines = section.split("\n");
+    const headerMatch = lines[0].match(/^diff --git a\/(.+) b\/(.+)$/);
+    if (!headerMatch) continue;
+
+    let oldPath = headerMatch[1];
+    let newPath = headerMatch[2];
+    let status: FileDiff["status"] = "modified";
+    let binary = false;
+    let additions = 0;
+    let deletions = 0;
+    const hunks: DiffHunk[] = [];
+    let currentHunk: DiffHunk | null = null;
+    let oldLineNo = 1;
+    let newLineNo = 1;
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("new file mode")) {
+        status = "added";
+      } else if (line.startsWith("deleted file mode")) {
+        status = "deleted";
+      } else if (line.startsWith("rename from ")) {
+        status = "renamed";
+        oldPath = line.slice(12);
+      } else if (line.startsWith("rename to ")) {
+        newPath = line.slice(10);
+      } else if (line.includes("Binary files")) {
+        binary = true;
+      } else if (line.startsWith("@@ ")) {
+        const hm = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        oldLineNo = hm ? parseInt(hm[1], 10) : 1;
+        newLineNo = hm ? parseInt(hm[2], 10) : 1;
+        currentHunk = { header: line, lines: [] };
+        hunks.push(currentHunk);
+      } else if (currentHunk) {
+        if (line.startsWith("+")) {
+          additions++;
+          currentHunk.lines.push({ type: "add", content: line.slice(1), oldLineNo: null, newLineNo: newLineNo++ });
+        } else if (line.startsWith("-")) {
+          deletions++;
+          currentHunk.lines.push({ type: "remove", content: line.slice(1), oldLineNo: oldLineNo++, newLineNo: null });
+        } else if (line.startsWith(" ")) {
+          currentHunk.lines.push({ type: "context", content: line.slice(1), oldLineNo: oldLineNo++, newLineNo: newLineNo++ });
+        }
+      }
+    }
+
+    result.push({ oldPath, newPath, status, binary, additions, deletions, hunks });
+  }
+
+  return result;
+}
+
+export async function getCommitDiff(storageKey: string, sha: string): Promise<FileDiff[]> {
+  try {
+    const patch = await git(storageKey, ["show", "--patch", "--format=", sha]);
+    return parseDiff(patch);
+  } catch {
+    return [];
   }
 }
 

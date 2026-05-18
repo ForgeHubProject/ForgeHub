@@ -1,5 +1,5 @@
 import type {
-  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, Issue, IssueComment,
+  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, FileDiff, Issue, IssueComment,
   Label, Notification, PublicProfile, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
@@ -398,6 +398,15 @@ export async function getCommit(
   sha: string,
 ): Promise<CommitDetail> {
   return req(`/repos/${handle}/${repoName}/commits/${sha}`, { token: token ?? undefined });
+}
+
+export async function getCommitDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  sha: string,
+): Promise<{ files: FileDiff[] }> {
+  return req(`/repos/${handle}/${repoName}/commits/${sha}/diff`, { token: token ?? undefined });
 }
 
 // ─── tree / blob ──────────────────────────────────────────────────────────────

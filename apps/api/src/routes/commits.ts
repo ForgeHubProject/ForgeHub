@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { defaultBranch, getCommit, listCommits, listTree, readFileAtBranch } from "../git-utils.js";
+import { defaultBranch, getCommit, getCommitDiff, listCommits, listTree, readFileAtBranch } from "../git-utils.js";
 
 // Checked in priority order: prefer .md > .txt > .rst > .adoc > bare README
 const README_NAMES = ["readme.md", "readme.txt", "readme.rst", "readme.adoc", "readme"];
@@ -42,6 +42,18 @@ export async function commitRoutes(app: FastifyInstance) {
     const commit = await getCommit(repo.storageKey, sha);
     if (!commit) return reply.status(404).send({ error: "Commit not found" });
     return commit;
+  });
+
+  // GET /repos/:handle/:name/commits/:sha/diff
+  app.get("/repos/:handle/:name/commits/:sha/diff", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name, sha } = request.params as { handle: string; name: string; sha: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(404).send({ error: "No git storage" });
+
+    const files = await getCommitDiff(repo.storageKey, sha);
+    return { files };
   });
 
   async function withReadme(storageKey: string, ref: string, dirPath: string, entries: Awaited<ReturnType<typeof listTree>>) {
