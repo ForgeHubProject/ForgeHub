@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   addIssueLabel, createIssue, createIssueComment, getIssue,
-  listIssueComments, listIssues, listLabels, removeIssueLabel, updateIssue,
+  listIssueComments, listIssues, listLabels, listRepoMembers, removeIssueLabel,
+  RepoMember, updateIssue,
 } from "../../api";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
-import { UserSearchInput } from "../../components/UserSearchInput";
 import type { Issue, IssueComment, Label, SearchUserResult, User } from "../../types";
 
 type Props = {
@@ -155,62 +155,112 @@ function LabelPicker({ token, handle, repoName, issue, canEdit, onUpdate }: {
   );
 }
 
+// ─── Member picker (only repo owner + collaborators) ──────────────────────────
+
+function MemberPicker({ token, handle, repoName, selected, onSelect, onClear, placeholder = "Assign to…" }: {
+  token: string; handle: string; repoName: string;
+  selected?: string | null;
+  onSelect: (m: RepoMember) => void;
+  onClear?: () => void;
+  placeholder?: string;
+}) {
+  const [members, setMembers] = useState<RepoMember[]>([]);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listRepoMembers(token, handle, repoName).then((d) => setMembers(d.members)).catch(() => {});
+  }, [token, handle, repoName]);
+
+  useEffect(() => {
+    function onOut(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQuery(""); }
+    }
+    document.addEventListener("mousedown", onOut);
+    return () => document.removeEventListener("mousedown", onOut);
+  }, []);
+
+  const filtered = query.trim()
+    ? members.filter((m) => m.handle.includes(query.toLowerCase()) || (m.displayName ?? "").toLowerCase().includes(query.toLowerCase()))
+    : members;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        className="w-full text-left text-xs text-gh-accent hover:underline"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {selected ?? placeholder}
+      </button>
+      {open && (
+        <div className="absolute z-50 left-0 top-[calc(100%+4px)] w-56 bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-gh-border">
+            <input
+              autoFocus
+              className="input text-xs py-1"
+              placeholder="Filter members…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          {filtered.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gh-bg text-left"
+              onClick={() => { onSelect(m); setOpen(false); setQuery(""); }}
+            >
+              <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                {(m.displayName || m.handle)[0].toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-gh-text truncate">{m.displayName || m.handle}</p>
+                <p className="text-xs text-gh-muted">@{m.handle}</p>
+              </div>
+              {selected === m.handle && <svg className="ml-auto flex-shrink-0" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+            </button>
+          ))}
+          {onClear && selected && (
+            <button type="button" className="w-full px-3 py-2 text-xs text-gh-danger hover:bg-gh-bg text-left border-t border-gh-border" onClick={() => { onClear(); setOpen(false); }}>
+              Clear assignee
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Sidebar assignee picker ───────────────────────────────────────────────────
 
 function AssigneePicker({ token, handle, repoName, issue, canEdit, onUpdate }: {
   token: string; handle: string; repoName: string;
   issue: Issue; canEdit: boolean; onUpdate: (updated: Issue) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
-
-  async function assign(u: SearchUserResult | null) {
-    setOpen(false);
+  async function assign(id: string | null) {
     try {
-      const updated = await updateIssue(token, handle, repoName, issue.number, {
-        assigneeId: u?.id ?? null,
-      });
+      const updated = await updateIssue(token, handle, repoName, issue.number, { assigneeId: id });
       onUpdate(updated);
     } catch { /* ignore */ }
   }
 
   return (
-    <div className="mb-4" ref={ref}>
+    <div className="mb-4">
       <div className="flex items-center justify-between mb-2 pb-2 border-b border-gh-border">
         <p className="text-xs font-semibold text-gh-text uppercase tracking-wide">Assignee</p>
-        {canEdit && (
-          <button type="button" onClick={() => setOpen((o) => !o)} className="text-gh-muted hover:text-gh-text">
-            <GearIcon />
-          </button>
-        )}
       </div>
-
-      {open && (
-        <div className="absolute z-50 mt-1 w-64 bg-gh-canvas border border-gh-border rounded-lg shadow-xl p-2">
-          <UserSearchInput token={token} onSelect={(u) => assign(u)} placeholder="Search users…" />
-          {issue.assignee && (
-            <button
-              type="button"
-              className="mt-2 w-full text-left text-xs text-gh-danger hover:underline px-1"
-              onClick={() => assign(null)}
-            >
-              Clear assignee
-            </button>
-          )}
-        </div>
-      )}
-
-      {issue.assignee ? (
+      {canEdit ? (
+        <MemberPicker
+          token={token} handle={handle} repoName={repoName}
+          selected={issue.assignee}
+          onSelect={(m) => assign(m.id)}
+          onClear={() => assign(null)}
+        />
+      ) : issue.assignee ? (
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+          <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
             {issue.assignee[0]?.toUpperCase()}
           </div>
           <span className="text-xs text-gh-text">{issue.assignee}</span>
@@ -434,7 +484,7 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
   const [body, setBody] = useState("");
   const [allLabels, setAllLabels] = useState<Label[]>([]);
   const [selectedLabels, setSelectedLabels] = useState<Label[]>([]);
-  const [assignee, setAssignee] = useState<SearchUserResult | null>(null);
+  const [assignee, setAssignee] = useState<RepoMember | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -512,17 +562,18 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
 
           <div>
             <label className="label">Assignee</label>
-            {assignee ? (
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
-                  {(assignee.displayName || assignee.handle)[0].toUpperCase()}
-                </div>
-                <span className="text-sm text-gh-text">{assignee.displayName || assignee.handle}</span>
+            <div className="flex items-center gap-2">
+              <MemberPicker
+                token={token} handle={handle} repoName={repoName}
+                selected={assignee?.handle ?? null}
+                onSelect={setAssignee}
+                onClear={() => setAssignee(null)}
+                placeholder="No assignee"
+              />
+              {assignee && (
                 <button type="button" className="text-xs text-gh-muted hover:text-gh-danger" onClick={() => setAssignee(null)}>×</button>
-              </div>
-            ) : (
-              <UserSearchInput token={token} onSelect={setAssignee} placeholder="Search collaborators…" />
-            )}
+              )}
+            </div>
           </div>
 
           {error && <p className="text-gh-danger text-sm bg-gh-danger-muted rounded-md px-3 py-2">{error}</p>}
@@ -540,48 +591,80 @@ function NewIssueModal({ token, handle, repoName, onCreated, onClose }: {
 
 // ─── Issues List ──────────────────────────────────────────────────────────────
 
+type FilterDropdownProps = {
+  label: string;
+  active: boolean;
+  children: React.ReactNode;
+};
+
+function FilterDropdown({ label, active, children }: FilterDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function onOut(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onOut);
+    return () => document.removeEventListener("mousedown", onOut);
+  }, []);
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        className={`flex items-center gap-1 text-sm px-3 py-1.5 hover:text-gh-text transition-colors ${active ? "text-gh-text font-semibold" : "text-gh-muted"}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {label}
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" /></svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+2px)] z-50 min-w-[180px] bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden" onClick={() => setOpen(false)}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
   const [stateFilter, setStateFilter] = useState<"open" | "closed">("open");
   const [labelFilter, setLabelFilter] = useState<{ id: string; name: string } | null>(null);
+  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
+  const [authorFilter, setAuthorFilter] = useState<string | null>(null);
+  const [sort, setSort] = useState<"newest" | "oldest">("newest");
   const [allLabels, setAllLabels] = useState<Label[]>([]);
+  const [members, setMembers] = useState<RepoMember[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
-  const [labelDropdown, setLabelDropdown] = useState(false);
-  const labelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
+    listRepoMembers(token, handle, repoName).then((d) => setMembers(d.members)).catch(() => {});
   }, [token, handle, repoName]);
-
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (labelRef.current && !labelRef.current.contains(e.target as Node)) setLabelDropdown(false);
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listIssues(token, handle, repoName, stateFilter, labelFilter?.name)
+    listIssues(token, handle, repoName, stateFilter, labelFilter?.name, assigneeFilter ?? undefined, authorFilter ?? undefined, sort)
       .then((d) => setIssues(d.issues))
       .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
-  }, [token, handle, repoName, stateFilter, labelFilter]);
+  }, [token, handle, repoName, stateFilter, labelFilter, assigneeFilter, authorFilter, sort]);
+
+  const hasFilter = !!(labelFilter || assigneeFilter || authorFilter);
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1">
           {(["open", "closed"] as const).map((s) => (
             <button
               key={s}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${stateFilter === s ? "font-semibold text-gh-text bg-gh-bg border border-gh-border" : "text-gh-muted hover:text-gh-text"}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${stateFilter === s ? "font-semibold text-gh-text" : "text-gh-muted hover:text-gh-text"}`}
               onClick={() => setStateFilter(s)}
             >
               {s === "open"
@@ -591,36 +674,82 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
               {s === "open" ? "Open" : "Closed"}
             </button>
           ))}
-
-          {allLabels.length > 0 && (
-            <div className="relative ml-2" ref={labelRef}>
-              <button
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border transition-colors ${labelFilter ? "border-gh-accent text-gh-accent bg-gh-accent-muted" : "border-gh-border text-gh-muted hover:text-gh-text"}`}
-                onClick={() => setLabelDropdown((o) => !o)}
-              >
-                Label{labelFilter ? `: ${labelFilter.name}` : ""}
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" /></svg>
-              </button>
-              {labelDropdown && (
-                <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-48 bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden">
-                  <button className="w-full text-left px-3 py-2 text-sm hover:bg-gh-bg text-gh-muted" onClick={() => { setLabelFilter(null); setLabelDropdown(false); }}>
-                    All labels
-                  </button>
-                  {allLabels.map((lbl) => (
-                    <button key={lbl.id} className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gh-bg" onClick={() => { setLabelFilter({ id: lbl.id, name: lbl.name }); setLabelDropdown(false); }}>
-                      <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: `#${lbl.color}` }} />
-                      {lbl.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
-        <button className="btn-primary px-3" onClick={() => setShowNew(true)}>New issue</button>
+        <button className="btn-primary px-3 text-sm" onClick={() => setShowNew(true)}>New issue</button>
       </div>
 
-      <div className="card overflow-hidden">
+      {/* Filter bar + issue list as one connected block */}
+      <div className="flex items-center justify-between bg-gh-bg border border-gh-border rounded-t-md px-3 py-1.5 -mt-px">
+        <div className="flex items-center gap-0.5">
+          {/* Author */}
+          <FilterDropdown label={authorFilter ? `Author: ${authorFilter}` : "Author"} active={!!authorFilter}>
+            <p className="text-xs font-semibold text-gh-text px-3 pt-2 pb-1">Filter by author</p>
+            {authorFilter && (
+              <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-gh-bg text-gh-muted" onClick={() => setAuthorFilter(null)}>
+                All authors
+              </button>
+            )}
+            {members.map((m) => (
+              <button key={m.id} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gh-bg" onClick={() => setAuthorFilter(m.handle)}>
+                <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                  {(m.displayName || m.handle)[0].toUpperCase()}
+                </div>
+                <span className="truncate">{m.handle}</span>
+                {authorFilter === m.handle && <svg className="ml-auto flex-shrink-0" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+              </button>
+            ))}
+          </FilterDropdown>
+
+          {/* Labels */}
+          <FilterDropdown label={labelFilter ? `Label: ${labelFilter.name}` : "Label"} active={!!labelFilter}>
+            <p className="text-xs font-semibold text-gh-text px-3 pt-2 pb-1">Filter by label</p>
+            {labelFilter && (
+              <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-gh-bg text-gh-muted" onClick={() => setLabelFilter(null)}>
+                All labels
+              </button>
+            )}
+            {allLabels.length === 0 && <p className="px-3 py-2 text-sm text-gh-muted">No labels yet</p>}
+            {allLabels.map((lbl) => (
+              <button key={lbl.id} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gh-bg" onClick={() => setLabelFilter({ id: lbl.id, name: lbl.name })}>
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: `#${lbl.color}` }} />
+                <span className="truncate">{lbl.name}</span>
+                {labelFilter?.id === lbl.id && <svg className="ml-auto flex-shrink-0" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+              </button>
+            ))}
+          </FilterDropdown>
+
+          {/* Assignees */}
+          <FilterDropdown label={assigneeFilter ? `Assignee: ${assigneeFilter}` : "Assignee"} active={!!assigneeFilter}>
+            <p className="text-xs font-semibold text-gh-text px-3 pt-2 pb-1">Filter by assignee</p>
+            {assigneeFilter && (
+              <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-gh-bg text-gh-muted" onClick={() => setAssigneeFilter(null)}>
+                All assignees
+              </button>
+            )}
+            {members.map((m) => (
+              <button key={m.id} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gh-bg" onClick={() => setAssigneeFilter(m.handle)}>
+                <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                  {(m.displayName || m.handle)[0].toUpperCase()}
+                </div>
+                <span className="truncate">{m.handle}</span>
+                {assigneeFilter === m.handle && <svg className="ml-auto flex-shrink-0" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+              </button>
+            ))}
+          </FilterDropdown>
+        </div>
+
+        {/* Sort */}
+        <FilterDropdown label={sort === "newest" ? "Newest" : "Oldest"} active={sort === "oldest"}>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-gh-bg flex items-center justify-between" onClick={() => setSort("newest")}>
+            Newest {sort === "newest" && <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+          </button>
+          <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-gh-bg flex items-center justify-between" onClick={() => setSort("oldest")}>
+            Oldest {sort === "oldest" && <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" /></svg>}
+          </button>
+        </FilterDropdown>
+      </div>
+
+      <div className="card overflow-hidden rounded-t-none border-t-0">
         {loading ? (
           <div className="divide-y divide-gh-border">
             {[...Array(5)].map((_, i) => (
@@ -634,8 +763,8 @@ function IssuesList({ token, handle, repoName, user }: Omit<Props, "splat">) {
           <div className="p-8 text-center text-gh-danger">{error}</div>
         ) : issues.length === 0 ? (
           <div className="p-16 text-center">
-            <p className="text-lg font-semibold text-gh-text">{stateFilter === "open" ? "No open issues" : "No closed issues"}</p>
-            {stateFilter === "open" && !labelFilter && (
+            <p className="text-lg font-semibold text-gh-text">{hasFilter ? "No results match your filters" : stateFilter === "open" ? "No open issues" : "No closed issues"}</p>
+            {stateFilter === "open" && !hasFilter && (
               <p className="text-gh-muted text-sm mt-1">Open a new issue to start tracking work.</p>
             )}
           </div>

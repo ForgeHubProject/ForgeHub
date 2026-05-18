@@ -453,6 +453,46 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
+  // Returns owner + collaborators — anyone who can be assigned to issues.
+  // Visible to all repo readers (no auth requirement beyond read access).
+  app.get(
+    "/repos/:handle/:name/members",
+    { preHandler: [app.optionalAuthenticate] },
+    async (request, reply) => {
+      const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
+      const handle = handleParam.toLowerCase();
+      const name = nameParam.toLowerCase();
+      const viewerId = (request as { user?: { sub: string } }).user?.sub;
+
+      const repo = await prisma.repo.findFirst({
+        where: { name, owner: { handle } },
+        include: {
+          owner: { select: { id: true, handle: true, displayName: true } },
+          collaborators: {
+            include: { user: { select: { id: true, handle: true, displayName: true } } },
+          },
+        },
+      });
+      if (!repo) return reply.status(404).send({ error: "Not found" });
+      if (repo.visibility === "PRIVATE") {
+        const isReader =
+          viewerId === repo.ownerId || repo.collaborators.some((c) => c.userId === viewerId);
+        if (!isReader) return reply.status(404).send({ error: "Not found" });
+      }
+
+      const members = [
+        { id: repo.owner.id, handle: repo.owner.handle, displayName: repo.owner.displayName, role: "owner" as const },
+        ...repo.collaborators.map((c) => ({
+          id: c.user.id,
+          handle: c.user.handle,
+          displayName: c.user.displayName,
+          role: c.role === "WRITER" ? "writer" as const : "reader" as const,
+        })),
+      ];
+      return { members };
+    },
+  );
+
   app.get(
     "/repos/:handle/:name/storage",
     { preHandler: [app.authenticate] },

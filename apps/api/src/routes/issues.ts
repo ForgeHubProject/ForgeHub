@@ -65,10 +65,12 @@ export async function issueRoutes(app: FastifyInstance) {
   app.get("/repos/:handle/:name/issues", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
-    const { state = "open", label, assignee } = request.query as {
+    const { state = "open", label, assignee, author, sort } = request.query as {
       state?: string;
       label?: string;
       assignee?: string;
+      author?: string;
+      sort?: string;
     };
 
     const repo = await resolveRepo(handle, name);
@@ -85,8 +87,9 @@ export async function issueRoutes(app: FastifyInstance) {
         ...(stateFilter ? { state: stateFilter } : {}),
         ...(label ? { labels: { some: { label: { name: label } } } } : {}),
         ...(assignee ? { assignee: { handle: assignee } } : {}),
+        ...(author ? { author: { handle: author } } : {}),
       },
-      orderBy: { number: "desc" },
+      orderBy: sort === "oldest" ? { number: "asc" } : { number: "desc" },
       include: issueInclude,
     });
 
