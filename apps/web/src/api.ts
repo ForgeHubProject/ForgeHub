@@ -432,8 +432,11 @@ export async function listIssues(
   handle: string,
   repoName: string,
   state: "open" | "closed" | "all" = "open",
+  label?: string,
 ): Promise<{ issues: Issue[] }> {
-  return req(`/repos/${handle}/${repoName}/issues?state=${state}`, { token: token ?? undefined });
+  const qs = new URLSearchParams({ state });
+  if (label) qs.set("label", label);
+  return req(`/repos/${handle}/${repoName}/issues?${qs}`, { token: token ?? undefined });
 }
 
 export async function getIssue(
@@ -465,13 +468,21 @@ export async function updateIssue(
   handle: string,
   repoName: string,
   number: number,
-  patch: { state?: "open" | "closed"; title?: string; body?: string },
+  patch: { state?: "open" | "closed"; title?: string; body?: string; assigneeId?: string | null },
 ): Promise<Issue> {
   return req(`/repos/${handle}/${repoName}/issues/${number}`, {
     method: "PATCH",
     token,
     body: JSON.stringify(patch),
   });
+}
+
+export async function addIssueLabel(token: string, handle: string, repoName: string, number: number, labelId: string): Promise<void> {
+  await req(`/repos/${handle}/${repoName}/issues/${number}/labels`, { method: "POST", token, body: JSON.stringify({ labelId }) });
+}
+
+export async function removeIssueLabel(token: string, handle: string, repoName: string, number: number, labelId: string): Promise<void> {
+  await req(`/repos/${handle}/${repoName}/issues/${number}/labels/${labelId}`, { method: "DELETE", token });
 }
 
 export async function listIssueComments(
