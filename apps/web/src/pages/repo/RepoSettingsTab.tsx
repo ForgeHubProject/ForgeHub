@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   addCollaborator, Collaborator, createLabel, deleteLabel,
-  listCollaborators, listLabels, removeCollaborator, updateLabel,
+  listCollaborators, listLabels, removeCollaborator, search, updateLabel,
 } from "../../api";
-import type { Label, User } from "../../types";
+import type { Label, SearchUserResult, User } from "../../types";
 
 type Props = {
   token: string;
@@ -236,10 +236,116 @@ function LabelsSection({ token, handle, repoName }: { token: string; handle: str
 
 // ─── Collaborators ────────────────────────────────────────────────────────────
 
+function UserSearchInput({ token, onSelect }: {
+  token: string;
+  onSelect: (user: SearchUserResult) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchUserResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    setQuery(val);
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    if (val.trim().length < 2) {
+      setResults([]);
+      setOpen(false);
+      return;
+    }
+
+    timerRef.current = setTimeout(() => {
+      setSearching(true);
+      search(token, val.trim(), "users")
+        .then((d) => {
+          setResults(d.results as SearchUserResult[]);
+          setOpen(true);
+        })
+        .catch(() => {})
+        .finally(() => setSearching(false));
+    }, 300);
+  }
+
+  function pick(user: SearchUserResult) {
+    setQuery("");
+    setResults([]);
+    setOpen(false);
+    onSelect(user);
+  }
+
+  return (
+    <div ref={containerRef} className="relative flex-1 min-w-[200px]">
+      <div className="relative">
+        <svg
+          width="14" height="14" viewBox="0 0 16 16" fill="currentColor"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gh-muted pointer-events-none"
+        >
+          <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06L10.68 11.74z" />
+        </svg>
+        <input
+          className="input pl-8 w-full"
+          placeholder="Search by username or name…"
+          value={query}
+          onChange={handleChange}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          autoComplete="off"
+        />
+        {searching && (
+          <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-gh-muted" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+          </svg>
+        )}
+      </div>
+
+      {open && results.length > 0 && (
+        <div className="absolute z-50 top-[calc(100%+4px)] left-0 right-0 bg-gh-canvas border border-gh-border rounded-lg shadow-xl overflow-hidden max-h-64 overflow-y-auto">
+          {results.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gh-bg text-left transition-colors"
+              onClick={() => pick(u)}
+            >
+              <div className="w-8 h-8 rounded-full bg-gh-accent flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                {(u.displayName || u.handle)[0].toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gh-text truncate">{u.displayName || u.handle}</p>
+                <p className="text-xs text-gh-muted">@{u.handle}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {open && !searching && query.trim().length >= 2 && results.length === 0 && (
+        <div className="absolute z-50 top-[calc(100%+4px)] left-0 right-0 bg-gh-canvas border border-gh-border rounded-lg shadow-xl px-4 py-3 text-sm text-gh-muted">
+          No users found for "{query}"
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollaboratorsSection({ token, repoName }: { token: string; repoName: string }) {
   const [collabs, setCollabs] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
-  const [handle, setHandle] = useState("");
+  const [selected, setSelected] = useState<SearchUserResult | null>(null);
   const [role, setRole] = useState<"reader" | "writer" | "admin">("writer");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -253,11 +359,11 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    if (!handle.trim()) return;
+    if (!selected) return;
     setAdding(true);
     setError(null);
     try {
-      const c = await addCollaborator(token, repoName, handle.trim().toLowerCase(), role);
+      const c = await addCollaborator(token, repoName, selected.handle, role);
       setCollabs((prev) => {
         const exists = prev.findIndex((x) => x.user.handle === c.user.handle);
         if (exists >= 0) {
@@ -267,9 +373,9 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
         }
         return [...prev, c];
       });
-      setHandle("");
+      setSelected(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "User not found");
+      setError(err instanceof Error ? err.message : "Failed to add collaborator");
     } finally {
       setAdding(false);
     }
@@ -297,27 +403,46 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
       {/* Add collaborator */}
       <form onSubmit={add} className="card p-4 mb-4">
         <p className="text-sm font-semibold text-gh-text mb-3">Add a collaborator</p>
-        <div className="flex gap-2 flex-wrap">
-          <input
-            className="input flex-1 min-w-[180px]"
-            placeholder="Username (handle)"
-            value={handle}
-            onChange={(e) => setHandle(e.target.value)}
-            required
-          />
-          <select
-            className="input w-28"
-            value={role}
-            onChange={(e) => setRole(e.target.value as "reader" | "writer" | "admin")}
-          >
-            <option value="reader">Reader</option>
-            <option value="writer">Writer</option>
-            <option value="admin">Admin</option>
-          </select>
-          <button type="submit" className="btn-primary px-4" disabled={adding}>
-            {adding ? "Adding…" : "Add"}
-          </button>
-        </div>
+
+        {selected ? (
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            {/* Selected user chip */}
+            <div className="flex items-center gap-2 bg-gh-bg border border-gh-border rounded-full pl-1 pr-3 py-1">
+              <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
+                {(selected.displayName || selected.handle)[0].toUpperCase()}
+              </div>
+              <span className="text-sm font-medium text-gh-text">{selected.displayName || selected.handle}</span>
+              <span className="text-xs text-gh-muted">@{selected.handle}</span>
+              <button
+                type="button"
+                className="ml-1 text-gh-muted hover:text-gh-danger transition-colors"
+                onClick={() => setSelected(null)}
+                title="Clear selection"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path fillRule="evenodd" d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
+                </svg>
+              </button>
+            </div>
+
+            <select
+              className="input w-28"
+              value={role}
+              onChange={(e) => setRole(e.target.value as "reader" | "writer" | "admin")}
+            >
+              <option value="reader">Reader</option>
+              <option value="writer">Writer</option>
+              <option value="admin">Admin</option>
+            </select>
+
+            <button type="submit" className="btn-primary px-4" disabled={adding}>
+              {adding ? "Adding…" : "Add collaborator"}
+            </button>
+          </div>
+        ) : (
+          <UserSearchInput token={token} onSelect={setSelected} />
+        )}
+
         {error && <p className="text-gh-danger text-sm mt-2">{error}</p>}
         <p className="text-xs text-gh-muted mt-2">
           <strong>Reader</strong> — view · <strong>Writer</strong> — push, create issues/PRs · <strong>Admin</strong> — manage settings
