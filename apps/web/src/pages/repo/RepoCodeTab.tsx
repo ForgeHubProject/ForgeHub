@@ -4,6 +4,7 @@ import { API_BASE, listCommits, listTree } from "../../api";
 import { BlobViewer } from "../../components/BlobViewer";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import type { BranchInfo, CommitInfo, Repo, TreeEntry } from "../../types";
+import type { KeyboardEvent } from "react";
 
 type Props = {
   token: string;
@@ -14,6 +15,7 @@ type Props = {
   defaultBranch: string;
   currentRef: string;
   onRefChange: (ref: string) => void;
+  onCreateBranch: (name: string, from: string) => Promise<void>;
   splat: string;
 };
 
@@ -117,18 +119,60 @@ function FileIcon() {
   );
 }
 
-function BranchSelector({ branches, currentRef, onRefChange }: {
+function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
   branches: BranchInfo[];
   currentRef: string;
   onRefChange: (ref: string) => void;
+  onCreateBranch: (name: string, from: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const trimmed = query.trim();
+  const filtered = branches.filter((b) => b.name.toLowerCase().includes(trimmed.toLowerCase()));
+  const exactMatch = branches.some((b) => b.name === trimmed);
+  const canCreate = trimmed.length > 0 && !exactMatch && /^[\w/._-]+$/.test(trimmed);
+
+  function openDropdown() {
+    setOpen(true);
+    setQuery("");
+    setError(null);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  function close() {
+    setOpen(false);
+    setQuery("");
+    setError(null);
+  }
+
+  async function handleCreate() {
+    if (!canCreate || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      await onCreateBranch(trimmed, currentRef);
+      close();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create branch");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && canCreate && filtered.length === 0) handleCreate();
+    if (e.key === "Escape") close();
+  }
 
   return (
     <div className="relative">
       <button
         className="btn-default flex items-center gap-2 min-w-[160px] justify-between text-sm"
-        onClick={() => setOpen((o) => !o)}
+        onClick={openDropdown}
       >
         <span className="flex items-center gap-1.5 truncate">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
@@ -143,18 +187,32 @@ function BranchSelector({ branches, currentRef, onRefChange }: {
 
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-10" onClick={close} />
           <div className="absolute left-0 top-[calc(100%+4px)] w-72 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-20 overflow-hidden">
             <div className="px-3 py-2 border-b border-gh-border bg-gh-bg">
-              <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide">Switch branches</p>
+              <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mb-2">Switch branches / tags</p>
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => { setQuery(e.target.value); setError(null); }}
+                onKeyDown={onKeyDown}
+                placeholder="Find or create a branch…"
+                className="input w-full text-sm py-1.5"
+              />
             </div>
+
+            {error && (
+              <div className="px-3 py-2 text-xs text-gh-danger bg-red-50 border-b border-gh-border">{error}</div>
+            )}
+
             <div className="max-h-64 overflow-y-auto">
-              {branches.map((b) => (
+              {filtered.map((b) => (
                 <button
                   key={b.name}
                   className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gh-accent hover:text-white transition-colors"
                   style={{ color: b.name === currentRef ? "#0969da" : "#1f2328" }}
-                  onClick={() => { onRefChange(b.name); setOpen(false); }}
+                  onClick={() => { onRefChange(b.name); close(); }}
                 >
                   {b.name === currentRef ? (
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
@@ -169,6 +227,28 @@ function BranchSelector({ branches, currentRef, onRefChange }: {
                   )}
                 </button>
               ))}
+
+              {canCreate && (
+                <button
+                  className="w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gh-bg border-t border-gh-border transition-colors"
+                  onClick={handleCreate}
+                  disabled={creating}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
+                    <path fillRule="evenodd" d="M8 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 018 2z" />
+                  </svg>
+                  <span className="text-gh-text">
+                    {creating ? "Creating…" : <>Create branch: <strong className="font-mono">{trimmed}</strong></>}
+                  </span>
+                  <span className="ml-auto text-xs text-gh-muted">from <span className="font-mono">{currentRef}</span></span>
+                </button>
+              )}
+
+              {!canCreate && filtered.length === 0 && trimmed.length > 0 && (
+                <div className="px-3 py-3 text-sm text-gh-muted text-center">
+                  No branches match. Use only letters, numbers, <code>/ . _ -</code>
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -177,7 +257,7 @@ function BranchSelector({ branches, currentRef, onRefChange }: {
   );
 }
 
-export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, splat }: Props) {
+export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat }: Props) {
   const base = `/${handle}/${repoName}`;
 
   // Detect blob mode
@@ -206,13 +286,14 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
       defaultBranch={defaultBranch}
       currentRef={currentRef}
       onRefChange={onRefChange}
+      onCreateBranch={onCreateBranch}
       splat={splat}
       base={base}
     />
   );
 }
 
-function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefChange, splat, base }: Props & { base: string }) {
+function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefChange, onCreateBranch, splat, base }: Props & { base: string }) {
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
@@ -261,7 +342,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
     <div>
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap mb-4">
-        <BranchSelector branches={branches} currentRef={currentRef} onRefChange={onRefChange} />
+        <BranchSelector branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} />
 
         {/* Breadcrumb */}
         {pathParts.length > 0 && (

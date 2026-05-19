@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { getRepo, listBranches, listIssues, listPulls } from "../api";
+import { createBranch, getRepo, listBranches, listIssues, listPulls } from "../api";
 import { Header } from "../components/Header";
 import type { BranchInfo, Issue, PullRequest, Repo, User } from "../types";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
@@ -129,6 +129,13 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .catch(() => {});
   }, [token, h, r]);
 
+  async function handleCreateBranch(name: string, from: string) {
+    await createBranch(token, h, r, name, from);
+    const { branches: newBranches } = await listBranches(token, h, r);
+    setBranches(newBranches);
+    setCurrentRef(name);
+  }
+
   const base = `/${h}/${r}`;
 
   function TabLink({ tab, icon, label, count }: { tab: Tab; icon: React.ReactNode; label: string; count?: number | null }) {
@@ -230,6 +237,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             defaultBranch={defaultBranch}
             currentRef={currentRef}
             onRefChange={setCurrentRef}
+            onCreateBranch={handleCreateBranch}
             splat={splat}
           />
         )}
