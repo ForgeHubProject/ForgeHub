@@ -386,6 +386,129 @@ export async function getCommitDiff(storageKey: string, sha: string): Promise<Fi
   }
 }
 
+// ─── PR merge-base helpers ────────────────────────────────────────────────────
+
+export type PRFileEntry = {
+  path: string;
+  oldPath?: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  status: "added" | "modified" | "deleted" | "renamed";
+};
+
+/** File list with stats only (no diff content) using merge-base. */
+export async function getMergeBaseFileList(
+  storageKey: string,
+  toBranch: string,
+  fromBranch: string,
+): Promise<PRFileEntry[]> {
+  try {
+    const mergeBase = await git(storageKey, ["merge-base", toBranch, fromBranch]);
+    if (!mergeBase) return [];
+
+    // Run name-status and numstat in parallel
+    const [nameStatusOut, numstatOut] = await Promise.all([
+      git(storageKey, ["diff", "--name-status", "-M", mergeBase, fromBranch]),
+      git(storageKey, ["diff", "--numstat", "-M", mergeBase, fromBranch]),
+    ]);
+
+    // Parse name-status: A\tpath | M\tpath | D\tpath | R100\toldPath\tnewPath
+    const statusMap = new Map<string, { status: PRFileEntry["status"]; oldPath?: string }>();
+    for (const line of nameStatusOut.split("\n").filter(Boolean)) {
+      const parts = line.split("\t");
+      const code = parts[0];
+      if (!code) continue;
+      if (code === "A") {
+        statusMap.set(parts[1], { status: "added" });
+      } else if (code === "M") {
+        statusMap.set(parts[1], { status: "modified" });
+      } else if (code === "D") {
+        statusMap.set(parts[1], { status: "deleted" });
+      } else if (code.startsWith("R")) {
+        const oldPath = parts[1];
+        const newPath = parts[2];
+        statusMap.set(newPath, { status: "renamed", oldPath });
+      }
+    }
+
+    // Parse numstat: additions\tdeletions\tpath (binary: -\t-\tpath)
+    const entries: PRFileEntry[] = [];
+    for (const line of numstatOut.split("\n").filter(Boolean)) {
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      const [addStr, delStr, path] = parts;
+      const binary = addStr === "-" && delStr === "-";
+      const additions = binary ? 0 : parseInt(addStr ?? "0", 10);
+      const deletions = binary ? 0 : parseInt(delStr ?? "0", 10);
+      const info = statusMap.get(path ?? "") ?? { status: "modified" as const };
+      entries.push({
+        path: path ?? "",
+        ...(info.oldPath ? { oldPath: info.oldPath } : {}),
+        additions,
+        deletions,
+        binary,
+        status: info.status,
+      });
+    }
+
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+/** Full or single-file diff using merge-base. */
+export async function getMergeBaseDiff(
+  storageKey: string,
+  toBranch: string,
+  fromBranch: string,
+  filePath?: string,
+): Promise<FileDiff[]> {
+  try {
+    const mergeBase = await git(storageKey, ["merge-base", toBranch, fromBranch]);
+    if (!mergeBase) return [];
+    const args = ["diff", "--patch", mergeBase, fromBranch];
+    if (filePath) args.push("--", filePath);
+    const patch = await git(storageKey, args);
+    return parseDiff(patch);
+  } catch {
+    return [];
+  }
+}
+
+/** Only commits in the PR (between merge-base and fromBranch tip). */
+export async function listMergeBaseCommits(
+  storageKey: string,
+  toBranch: string,
+  fromBranch: string,
+): Promise<CommitInfo[]> {
+  try {
+    const mergeBase = await git(storageKey, ["merge-base", toBranch, fromBranch]);
+    if (!mergeBase) return [];
+    const out = await git(storageKey, [
+      "log", `${mergeBase}..${fromBranch}`,
+      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+    ]);
+    if (!out) return [];
+    return out.split("\n").filter(Boolean).map((line) => {
+      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
+      return {
+        sha: sha ?? "",
+        shortSha: (sha ?? "").slice(0, 7),
+        subject: subject ?? "",
+        message: subject ?? "",
+        authorName: authorName ?? "",
+        authorEmail: authorEmail ?? "",
+        date: date ?? "",
+        parents: parents?.trim() ? parents.trim().split(" ") : [],
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 // ─── file tree ───────────────────────────────────────────────────────────────
 
 export type TreeEntry = {
