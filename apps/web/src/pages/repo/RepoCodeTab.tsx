@@ -260,10 +260,18 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
 export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat }: Props) {
   const base = `/${handle}/${repoName}`;
 
-  // Detect blob mode
-  const blobMatch = splat.match(/^blob\/([^/]+)\/(.+)$/);
-  if (blobMatch) {
-    const [, blobRef, blobPath] = blobMatch;
+  // Detect blob mode — use currentRef state to correctly split ref/path even for slashed branch names
+  if (splat.startsWith("blob/")) {
+    const blobPrefix = `blob/${currentRef}/`;
+    let blobRef: string, blobPath: string;
+    if (currentRef && splat.startsWith(blobPrefix)) {
+      blobRef = currentRef;
+      blobPath = splat.slice(blobPrefix.length);
+    } else {
+      const m = splat.match(/^blob\/([^/]+)\/(.+)$/);
+      if (!m) return null;
+      [, blobRef, blobPath] = m;
+    }
     return (
       <BlobViewer
         token={token}
@@ -300,8 +308,11 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Extract current path from splat: "tree/main/src" → "src"
+  // Extract current path — use currentRef state as prefix so slashed branch names work correctly
   const currentPath = (() => {
+    const treePrefix = `tree/${currentRef}`;
+    if (splat === treePrefix) return "";
+    if (splat.startsWith(treePrefix + "/")) return splat.slice(treePrefix.length + 1);
     const m = splat.match(/^tree\/[^/]+\/(.*)$/);
     return m ? m[1] : "";
   })();
