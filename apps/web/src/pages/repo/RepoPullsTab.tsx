@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { closePull, getPRFileDiff, getPull, listPRCommits, listPRFiles, listPulls, mergePull } from "../../api";
+import { closePull, createPull, getPRFileDiff, getPull, listPRCommits, listPRFiles, listPulls, mergePull } from "../../api";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
-import type { CommitInfo, FileDiff, PRFileEntry, PullRequest, User } from "../../types";
+import type { BranchInfo, CommitInfo, FileDiff, PRFileEntry, PullRequest, User } from "../../types";
 import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
 
 type Props = {
@@ -10,6 +10,9 @@ type Props = {
   handle: string;
   repoName: string;
   user: User;
+  branches: BranchInfo[];
+  defaultBranch: string;
+  currentRef: string;
   splat: string;
 };
 
@@ -416,9 +419,124 @@ function PullDetail({ token, handle, repoName, user, number }: {
   );
 }
 
+// ─── PR Create ───────────────────────────────────────────────────────────────
+
+function PullCreate({ token, handle, repoName, branches, defaultBranch, currentRef }: Omit<Props, "splat" | "user">) {
+  const navigate = useNavigate();
+  const base = `/${handle}/${repoName}`;
+
+  const initialFrom = currentRef !== defaultBranch ? currentRef : (branches.find((b) => !b.isDefault)?.name ?? currentRef);
+  const [fromBranch, setFromBranch] = useState(initialFrom);
+  const [toBranch, setToBranch] = useState(defaultBranch);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sameBranch = fromBranch === toBranch;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || sameBranch) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const pr = await createPull(token, handle, repoName, title.trim(), fromBranch, toBranch, description.trim() || undefined);
+      navigate(`${base}/pulls/${pr.number}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create pull request");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <Link to={`${base}/pulls`} className="inline-flex items-center gap-1.5 text-sm text-gh-muted hover:text-gh-accent mb-4 no-underline">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M9.78 12.78a.75.75 0 01-1.06 0L4.47 8.53a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 1.06L6.06 8l3.72 3.72a.75.75 0 010 1.06z" /></svg>
+        Pull requests
+      </Link>
+
+      <h1 className="text-2xl font-semibold text-gh-text mb-6">New pull request</h1>
+
+      {/* Branch selectors */}
+      <div className="card p-4 mb-6">
+        <p className="text-sm text-gh-muted mb-3">Choose the branch you want to merge into and the branch with your changes.</p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gh-text">base:</span>
+            <select
+              value={toBranch}
+              onChange={(e) => setToBranch(e.target.value)}
+              className="input text-sm py-1.5"
+            >
+              {branches.map((b) => (
+                <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>
+              ))}
+            </select>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
+            <path fillRule="evenodd" d="M8.22 2.97a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06l2.97-2.97H3.75a.75.75 0 010-1.5h7.44L8.22 4.03a.75.75 0 010-1.06z" />
+          </svg>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gh-text">compare:</span>
+            <select
+              value={fromBranch}
+              onChange={(e) => setFromBranch(e.target.value)}
+              className="input text-sm py-1.5"
+            >
+              {branches.map((b) => (
+                <option key={b.name} value={b.name}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {sameBranch && (
+          <p className="mt-3 text-sm text-gh-danger">Base and compare branches must be different.</p>
+        )}
+      </div>
+
+      {/* Form */}
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-semibold text-gh-text mb-1">Title</label>
+          <input
+            type="text"
+            className="input w-full"
+            placeholder="Pull request title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-gh-text mb-1">Description <span className="text-gh-muted font-normal">(optional)</span></label>
+          <textarea
+            className="input w-full font-sans resize-y"
+            rows={6}
+            placeholder="Describe your changes…"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        {error && <p className="text-sm text-gh-danger">{error}</p>}
+        <div className="flex items-center gap-3">
+          <button
+            type="submit"
+            className="btn-primary px-4"
+            disabled={submitting || !title.trim() || sameBranch}
+          >
+            {submitting ? "Creating…" : "Create pull request"}
+          </button>
+          <Link to={`${base}/pulls`} className="btn-default no-underline">Cancel</Link>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ─── PR List ─────────────────────────────────────────────────────────────────
 
-function PullsList({ token, handle, repoName, user }: Omit<Props, "splat">) {
+function PullsList({ token, handle, repoName, user }: Omit<Props, "splat" | "branches" | "defaultBranch" | "currentRef">) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
   const [stateFilter, setStateFilter] = useState<"open" | "closed">("open");
@@ -436,6 +554,14 @@ function PullsList({ token, handle, repoName, user }: Omit<Props, "splat">) {
 
   return (
     <div>
+      <div className="flex items-center gap-2 mb-4">
+        <Link to={`${base}/pulls/new`} className="btn-primary text-sm no-underline ml-auto">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="inline mr-1.5 -mt-0.5">
+            <path fillRule="evenodd" d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
+          </svg>
+          New pull request
+        </Link>
+      </div>
       <div className="flex items-center gap-2 mb-4">
         {(["open", "closed"] as const).map((s) => (
           <button
@@ -494,10 +620,13 @@ function PullsList({ token, handle, repoName, user }: Omit<Props, "splat">) {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export function RepoPullsTab({ token, handle, repoName, user, splat }: Props) {
+export function RepoPullsTab({ token, handle, repoName, user, branches, defaultBranch, currentRef, splat }: Props) {
   const match = splat.match(/^pulls\/(\d+)$/);
   if (match) {
     return <PullDetail token={token} handle={handle} repoName={repoName} user={user} number={Number(match[1])} />;
+  }
+  if (splat === "pulls/new") {
+    return <PullCreate token={token} handle={handle} repoName={repoName} branches={branches} defaultBranch={defaultBranch} currentRef={currentRef} />;
   }
   return <PullsList token={token} handle={handle} repoName={repoName} user={user} />;
 }

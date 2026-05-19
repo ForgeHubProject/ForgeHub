@@ -3,6 +3,16 @@ import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { createBranch, getRepo, listBranches, listIssues, listPulls } from "../api";
 import { Header } from "../components/Header";
 import type { BranchInfo, Issue, PullRequest, Repo, User } from "../types";
+
+function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
+  if (!splat.startsWith("tree/")) return null;
+  const rest = splat.slice(5);
+  const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
+  for (const b of sorted) {
+    if (rest === b.name || rest.startsWith(b.name + "/")) return b.name;
+  }
+  return null;
+}
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
@@ -115,7 +125,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
         setRepo(repoData);
         setBranches(branchData.branches);
         setDefaultBranch(branchData.defaultBranch);
-        setCurrentRef(branchData.defaultBranch);
+        // Restore selected branch from URL if present
+        const refFromUrl = refFromSplat(splat, branchData.branches);
+        setCurrentRef(refFromUrl ?? branchData.defaultBranch);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
@@ -129,11 +141,16 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .catch(() => {});
   }, [token, h, r]);
 
+  function handleRefChange(newRef: string) {
+    setCurrentRef(newRef);
+    navigate(`/${h}/${r}/tree/${newRef}`);
+  }
+
   async function handleCreateBranch(name: string, from: string) {
     await createBranch(token, h, r, name, from);
     const { branches: newBranches } = await listBranches(token, h, r);
     setBranches(newBranches);
-    setCurrentRef(name);
+    handleRefChange(name);
   }
 
   const base = `/${h}/${r}`;
@@ -236,7 +253,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             branches={branches}
             defaultBranch={defaultBranch}
             currentRef={currentRef}
-            onRefChange={setCurrentRef}
+            onRefChange={handleRefChange}
             onCreateBranch={handleCreateBranch}
             splat={splat}
           />
@@ -265,6 +282,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            branches={branches}
+            defaultBranch={defaultBranch}
+            currentRef={currentRef}
             splat={splat}
           />
         )}
