@@ -64,6 +64,26 @@ export async function commitRoutes(app: FastifyInstance) {
     return { path: readmeEntry.path, name: readmeEntry.name, ref, content };
   }
 
+  // GET /repos/:handle/:name/tree?ref=X&path=Y  (query-param; handles slashed branch names)
+  app.get("/repos/:handle/:name/tree", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name } = request.params as { handle: string; name: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(404).send({ error: "No git storage" });
+
+    const { ref: refQ, path: pathQ } = request.query as { ref?: string; path?: string };
+    const ref = refQ ?? await defaultBranch(repo.storageKey);
+    const treePath = pathQ ?? "";
+
+    const entries = await listTree(repo.storageKey, ref, treePath);
+    if (entries.length === 0) {
+      return reply.status(404).send({ error: treePath ? "Path not found or empty directory" : "Ref not found or empty tree" });
+    }
+    const readme = await withReadme(repo.storageKey, ref, treePath, entries);
+    return { ref, path: treePath, entries, readme };
+  });
+
   // GET /repos/:handle/:name/tree/:ref  (root listing)
   app.get("/repos/:handle/:name/tree/:ref", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name, ref } = request.params as { handle: string; name: string; ref: string };
