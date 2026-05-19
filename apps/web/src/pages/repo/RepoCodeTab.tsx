@@ -127,6 +127,7 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [fromRef, setFromRef] = useState(currentRef);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +140,7 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
   function openDropdown() {
     setOpen(true);
     setQuery("");
+    setFromRef(currentRef);
     setError(null);
     setTimeout(() => inputRef.current?.focus(), 0);
   }
@@ -154,17 +156,15 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
     setCreating(true);
     setError(null);
     try {
-      await onCreateBranch(trimmed, currentRef);
+      await onCreateBranch(trimmed, fromRef);
       close();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create branch");
-    } finally {
       setCreating(false);
     }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && canCreate && filtered.length === 0) handleCreate();
     if (e.key === "Escape") close();
   }
 
@@ -188,7 +188,8 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={close} />
-          <div className="absolute left-0 top-[calc(100%+4px)] w-72 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-20 overflow-hidden">
+          <div className="absolute left-0 top-[calc(100%+4px)] w-80 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-20 overflow-hidden">
+            {/* Search / filter input */}
             <div className="px-3 py-2 border-b border-gh-border bg-gh-bg">
               <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mb-2">Switch branches / tags</p>
               <input
@@ -202,54 +203,69 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
               />
             </div>
 
-            {error && (
-              <div className="px-3 py-2 text-xs text-gh-danger bg-red-50 border-b border-gh-border">{error}</div>
+            {/* Branch list */}
+            {!canCreate && (
+              <div className="max-h-60 overflow-y-auto">
+                {filtered.map((b) => (
+                  <button
+                    key={b.name}
+                    className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gh-accent hover:text-white transition-colors"
+                    style={{ color: b.name === currentRef ? "#0969da" : "#1f2328" }}
+                    onClick={() => { onRefChange(b.name); close(); }}
+                  >
+                    {b.name === currentRef ? (
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+                        <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+                      </svg>
+                    ) : (
+                      <span className="w-3 flex-shrink-0" />
+                    )}
+                    <span className="truncate">{b.name}</span>
+                    {b.isDefault && (
+                      <span className="ml-auto text-xs text-gh-muted border border-gh-border rounded px-1">default</span>
+                    )}
+                  </button>
+                ))}
+                {filtered.length === 0 && trimmed.length > 0 && (
+                  <div className="px-3 py-3 text-sm text-gh-muted text-center">
+                    No branches match. Use letters, numbers, <code>/ . _ -</code>
+                  </div>
+                )}
+              </div>
             )}
 
-            <div className="max-h-64 overflow-y-auto">
-              {filtered.map((b) => (
+            {/* Create branch panel — shown when typed name is valid and new */}
+            {canCreate && (
+              <div className="p-3 space-y-3">
+                <div>
+                  <p className="text-xs text-gh-muted font-semibold uppercase tracking-wide mb-1">Create branch</p>
+                  <p className="text-sm font-mono font-semibold text-gh-text truncate bg-gh-bg border border-gh-border rounded px-2 py-1">
+                    {trimmed}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-gh-muted font-semibold block mb-1">Branch source</label>
+                  <select
+                    value={fromRef}
+                    onChange={(e) => setFromRef(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="input w-full text-sm py-1.5"
+                  >
+                    {branches.map((b) => (
+                      <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>
+                    ))}
+                  </select>
+                </div>
+                {error && <p className="text-xs text-gh-danger">{error}</p>}
                 <button
-                  key={b.name}
-                  className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gh-accent hover:text-white transition-colors"
-                  style={{ color: b.name === currentRef ? "#0969da" : "#1f2328" }}
-                  onClick={() => { onRefChange(b.name); close(); }}
-                >
-                  {b.name === currentRef ? (
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
-                      <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-                    </svg>
-                  ) : (
-                    <span className="w-3 flex-shrink-0" />
-                  )}
-                  <span className="truncate">{b.name}</span>
-                  {b.isDefault && (
-                    <span className="ml-auto text-xs text-gh-muted border border-gh-border rounded px-1">default</span>
-                  )}
-                </button>
-              ))}
-
-              {canCreate && (
-                <button
-                  className="w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 hover:bg-gh-bg border-t border-gh-border transition-colors"
+                  className="btn-primary w-full text-sm py-1.5"
                   onClick={handleCreate}
                   disabled={creating}
                 >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-                    <path fillRule="evenodd" d="M8 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 018 2z" />
-                  </svg>
-                  <span className="text-gh-text">
-                    {creating ? "Creating…" : <>Create branch: <strong className="font-mono">{trimmed}</strong></>}
-                  </span>
-                  <span className="ml-auto text-xs text-gh-muted">from <span className="font-mono">{currentRef}</span></span>
+                  {creating ? "Creating…" : "Create branch"}
                 </button>
-              )}
-
-              {!canCreate && filtered.length === 0 && trimmed.length > 0 && (
-                <div className="px-3 py-3 text-sm text-gh-muted text-center">
-                  No branches match. Use only letters, numbers, <code>/ . _ -</code>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </>
       )}
