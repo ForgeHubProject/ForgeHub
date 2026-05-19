@@ -1,6 +1,6 @@
 import type {
   BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PublicProfile, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+  Label, Notification, PRFileEntry, PublicProfile, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -335,6 +335,34 @@ export async function resolveMergePr(
     token,
     body: JSON.stringify(body),
   });
+}
+
+export async function listPRCommits(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ commits: CommitInfo[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/commits`, { token: token ?? undefined });
+}
+
+export async function listPRFiles(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ files: PRFileEntry[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/files`, { token: token ?? undefined });
+}
+
+export async function getPRFileDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+  filePath: string,
+): Promise<{ files: FileDiff[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/diff?path=${encodeURIComponent(filePath)}`, { token: token ?? undefined });
 }
 
 export async function closePull(
