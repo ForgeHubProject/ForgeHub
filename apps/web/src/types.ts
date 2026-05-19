@@ -150,6 +150,15 @@ export type TagInfo = {
   date: string;
 };
 
+export type PRFileEntry = {
+  path: string;
+  oldPath?: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  status: "added" | "modified" | "deleted" | "renamed";
+};
+
 export type PullRequest = {
   id: string;
   number: number;

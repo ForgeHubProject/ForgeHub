@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, performMerge, resolveBranchSha } from "../git-utils.js";
+import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, resolveBranchSha } from "../git-utils.js";
 import { notifySubscribers } from "../notifications-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
@@ -279,6 +279,63 @@ export async function pullRoutes(app: FastifyInstance) {
     }
 
     return { merged: true, sha: result.sha };
+  });
+
+  // GET /repos/:handle/:name/pulls/:number/files
+  app.get("/repos/:handle/:name/pulls/:number/files", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "Repository has no git storage" });
+
+    const pr = await prisma.pullRequest.findFirst({
+      where: { repoId: repo.id, number: Number(number) },
+    });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const files = await getMergeBaseFileList(repo.storageKey, pr.toBranch, pr.fromBranch);
+    return { files };
+  });
+
+  // GET /repos/:handle/:name/pulls/:number/diff
+  app.get("/repos/:handle/:name/pulls/:number/diff", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const { path: filePath } = request.query as { path?: string };
+
+    if (!filePath) return reply.status(400).send({ error: "path query parameter is required" });
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "Repository has no git storage" });
+
+    const pr = await prisma.pullRequest.findFirst({
+      where: { repoId: repo.id, number: Number(number) },
+    });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const files = await getMergeBaseDiff(repo.storageKey, pr.toBranch, pr.fromBranch, filePath);
+    return { files };
+  });
+
+  // GET /repos/:handle/:name/pulls/:number/commits
+  app.get("/repos/:handle/:name/pulls/:number/commits", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "Repository has no git storage" });
+
+    const pr = await prisma.pullRequest.findFirst({
+      where: { repoId: repo.id, number: Number(number) },
+    });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const commits = await listMergeBaseCommits(repo.storageKey, pr.toBranch, pr.fromBranch);
+    return { commits };
   });
 
   // PATCH /repos/:handle/:name/pulls/:number — close or reopen

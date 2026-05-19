@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { closePull, getPull, listCommits, listPulls, mergePull } from "../../api";
+import { closePull, getPRFileDiff, getPull, listPRCommits, listPRFiles, listPulls, mergePull } from "../../api";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
-import type { CommitInfo, PullRequest, User } from "../../types";
+import type { CommitInfo, FileDiff, PRFileEntry, PullRequest, User } from "../../types";
+import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
 
 type Props = {
   token: string;
@@ -55,6 +56,89 @@ function stateColor(state: "open" | "merged" | "closed") {
 
 // ─── PR Detail ───────────────────────────────────────────────────────────────
 
+// ─── PR File Row (lazy diff) ──────────────────────────────────────────────────
+
+function PRFileRow({ token, handle, repoName, prNumber, file, base, headRef }: {
+  token: string; handle: string; repoName: string; prNumber: number;
+  file: PRFileEntry; base: string; headRef: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [diff, setDiff] = useState<FileDiff | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const filename = file.path.split("/").pop() ?? file.path;
+  const Viewer = resolveFileDiffViewer(filename);
+
+  async function toggle() {
+    if (!expanded && !diff) {
+      setDiffLoading(true);
+      try {
+        const result = await getPRFileDiff(token, handle, repoName, prNumber, file.path);
+        setDiff(result.files[0] ?? null);
+      } catch {
+        setDiff(null);
+      } finally {
+        setDiffLoading(false);
+      }
+    }
+    setExpanded((e) => !e);
+  }
+
+  const displayPath = file.status === "renamed" && file.oldPath
+    ? `${file.oldPath} → ${file.path}` : file.path;
+
+  return (
+    <div className="border-b border-gh-border last:border-0">
+      <div
+        className="flex items-center gap-2 px-4 py-2 cursor-pointer select-none hover:bg-gh-bg"
+        onClick={toggle}
+      >
+        <svg
+          width="12" height="12" viewBox="0 0 16 16" fill="currentColor"
+          className="text-gh-muted flex-shrink-0 transition-transform"
+          style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
+        >
+          <path fillRule="evenodd" d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z" />
+        </svg>
+        <Link
+          to={`${base}/blob/${headRef}/${file.path}`}
+          className="font-mono text-sm text-gh-accent hover:underline flex-1 min-w-0 truncate no-underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {displayPath}
+        </Link>
+        <div className="flex items-center gap-2 flex-shrink-0 text-xs font-mono">
+          {!file.binary && file.additions > 0 && <span className="text-green-600">+{file.additions}</span>}
+          {!file.binary && file.deletions > 0 && <span className="text-red-600">-{file.deletions}</span>}
+          {file.binary && <span className="text-gh-muted text-xs">binary</span>}
+          {file.status !== "modified" && (
+            <span className="px-1.5 py-0.5 rounded text-xs font-semibold"
+              style={{
+                backgroundColor: file.status === "added" ? "#dafbe1" : file.status === "deleted" ? "#ffd7d5" : "#fff8c5",
+                color: file.status === "added" ? "#1a7f37" : file.status === "deleted" ? "#cf222e" : "#9a6700",
+              }}
+            >
+              {file.status}
+            </span>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        diffLoading ? (
+          <div className="px-4 py-4 space-y-1 animate-pulse">
+            {[...Array(5)].map((_, i) => <div key={i} className="h-3 bg-gray-100 rounded" style={{ width: `${50 + i * 10}%` }} />)}
+          </div>
+        ) : diff ? (
+          <Viewer file={diff} repoBase={base} headRef={headRef} />
+        ) : (
+          <p className="px-4 py-3 text-sm text-gh-muted italic">No diff available</p>
+        )
+      )}
+    </div>
+  );
+}
+
+// ─── PR Detail ────────────────────────────────────────────────────────────────
+
 function PullDetail({ token, handle, repoName, user, number }: {
   token: string; handle: string; repoName: string; user: User; number: number;
 }) {
@@ -62,25 +146,49 @@ function PullDetail({ token, handle, repoName, user, number }: {
   const base = `/${handle}/${repoName}`;
 
   const [pr, setPr] = useState<PullRequest | null>(null);
-  const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [merging, setMerging] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"commits" | "files">("commits");
+
+  // Commits tab — loaded lazily on first visit
+  const [commits, setCommits] = useState<CommitInfo[] | null>(null);
+  const [commitsLoading, setCommitsLoading] = useState(false);
+
+  // Files tab — loaded lazily on first visit
+  const [prFiles, setPrFiles] = useState<PRFileEntry[] | null>(null);
+  const [filesLoading, setFilesLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
     getPull(token, handle, repoName, number)
-      .then((p) => {
-        setPr(p);
-        return listCommits(token, handle, repoName, p.fromBranch, undefined, 20);
-      })
-      .then((c) => setCommits(c.commits))
+      .then(setPr)
       .catch((e) => setError(e instanceof Error ? e.message : "Not found"))
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
+
+  // Load commits when Commits tab first shown
+  useEffect(() => {
+    if (activeTab !== "commits" || commits !== null || !pr) return;
+    setCommitsLoading(true);
+    listPRCommits(token, handle, repoName, number)
+      .then((d) => setCommits(d.commits))
+      .catch(() => setCommits([]))
+      .finally(() => setCommitsLoading(false));
+  }, [activeTab, commits, pr, token, handle, repoName, number]);
+
+  // Load file list when Files tab first shown
+  useEffect(() => {
+    if (activeTab !== "files" || prFiles !== null || !pr) return;
+    setFilesLoading(true);
+    listPRFiles(token, handle, repoName, number)
+      .then((d) => setPrFiles(d.files))
+      .catch(() => setPrFiles([]))
+      .finally(() => setFilesLoading(false));
+  }, [activeTab, prFiles, pr, token, handle, repoName, number]);
 
   async function merge() {
     if (!pr) return;
@@ -188,13 +296,29 @@ function PullDetail({ token, handle, repoName, user, number }: {
             </div>
           </div>
 
-          {/* Commits */}
-          {commits.length > 0 && (
-            <div>
-              <h3 className="text-sm font-semibold text-gh-muted mb-2 flex items-center gap-2">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z" /></svg>
-                {commits.length} commit{commits.length !== 1 ? "s" : ""} from <code className="font-mono text-xs">{pr.fromBranch}</code>
-              </h3>
+          {/* Tab bar */}
+          <div className="tab-nav">
+            <button className={activeTab === "commits" ? "tab-item-active" : "tab-item"} onClick={() => setActiveTab("commits")}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z" /></svg>
+              Commits
+              {commits !== null && <span className="counter">{commits.length}</span>}
+            </button>
+            <button className={activeTab === "files" ? "tab-item-active" : "tab-item"} onClick={() => setActiveTab("files")}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z" /></svg>
+              Files changed
+              {prFiles !== null && <span className="counter">{prFiles.length}</span>}
+            </button>
+          </div>
+
+          {/* Commits tab */}
+          {activeTab === "commits" && (
+            commitsLoading ? (
+              <div className="card divide-y divide-gh-border overflow-hidden animate-pulse">
+                {[...Array(3)].map((_, i) => <div key={i} className="flex items-center gap-3 px-4 py-3"><div className="w-5 h-5 bg-gray-200 rounded-full" /><div className="flex-1 h-4 bg-gray-100 rounded" /><div className="w-16 h-5 bg-gray-100 rounded" /></div>)}
+              </div>
+            ) : commits !== null && commits.length === 0 ? (
+              <div className="card p-8 text-center text-sm text-gh-muted">No commits found between branches.</div>
+            ) : commits !== null ? (
               <div className="card divide-y divide-gh-border overflow-hidden">
                 {commits.map((c) => (
                   <div key={c.sha} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gh-bg text-sm">
@@ -202,13 +326,40 @@ function PullDetail({ token, handle, repoName, user, number }: {
                       {c.authorName[0]?.toUpperCase()}
                     </div>
                     <span className="flex-1 min-w-0 truncate text-gh-text">{c.subject}</span>
-                    <code className="font-mono text-xs text-gh-muted bg-gh-bg border border-gh-border px-1.5 py-0.5 rounded flex-shrink-0">
+                    <button
+                      className="font-mono text-xs text-gh-muted bg-gh-bg border border-gh-border px-1.5 py-0.5 rounded flex-shrink-0 hover:border-gh-accent hover:text-gh-accent transition-colors"
+                      onClick={() => navigate(`${base}/commits/${c.sha}`)}
+                    >
                       {c.shortSha}
-                    </code>
+                    </button>
                   </div>
                 ))}
               </div>
-            </div>
+            ) : null
+          )}
+
+          {/* Files changed tab */}
+          {activeTab === "files" && (
+            filesLoading ? (
+              <div className="card animate-pulse divide-y divide-gh-border overflow-hidden">
+                {[...Array(4)].map((_, i) => <div key={i} className="flex items-center gap-3 px-4 py-2.5"><div className="w-3 h-3 bg-gray-200 rounded" /><div className="h-4 bg-gray-100 rounded flex-1" /><div className="w-12 h-4 bg-gray-100 rounded" /></div>)}
+              </div>
+            ) : prFiles !== null && prFiles.length === 0 ? (
+              <div className="card p-8 text-center text-sm text-gh-muted">No files changed.</div>
+            ) : prFiles !== null ? (
+              <div>
+                <p className="text-sm text-gh-muted mb-2">
+                  Showing <span className="font-semibold text-gh-text">{prFiles.length}</span> changed file{prFiles.length !== 1 ? "s" : ""} with{" "}
+                  <span className="text-green-600 font-mono font-semibold">+{prFiles.reduce((s, f) => s + f.additions, 0)}</span>{" "}
+                  <span className="text-red-600 font-mono font-semibold">-{prFiles.reduce((s, f) => s + f.deletions, 0)}</span>
+                </p>
+                <div className="card overflow-hidden">
+                  {prFiles.map((file) => (
+                    <PRFileRow key={file.path} token={token} handle={handle} repoName={repoName} prNumber={number} file={file} base={base} headRef={pr.fromBranch} />
+                  ))}
+                </div>
+              </div>
+            ) : null
           )}
 
           {/* Merge box */}
