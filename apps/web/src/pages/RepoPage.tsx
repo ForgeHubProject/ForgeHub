@@ -246,7 +246,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             token={token}
             handle={h}
             repoName={r}
-            defaultBranch={defaultBranch}
+            defaultBranch={currentRef}
             splat={splat}
           />
         )}
