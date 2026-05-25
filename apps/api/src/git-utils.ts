@@ -625,3 +625,37 @@ export async function performMergeWithResolvedFiles(
     await rm(tmpDir, { recursive: true, force: true });
   }
 }
+
+// ─── blob helpers (for handler.diff()) ───────────────────────────────────────
+
+/** Resolve the git blob SHA for a file at a specific commit. */
+export async function resolveBlobSha(
+  storageKey: string,
+  commitSha: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    return await git(storageKey, ["rev-parse", `${commitSha}:${filePath}`]);
+  } catch {
+    return null;
+  }
+}
+
+/** Read raw file content as a Buffer for a specific commit. Supports binary files. */
+export function readBlobAsBuffer(
+  storageKey: string,
+  commitSha: string,
+  filePath: string,
+): Promise<Buffer | null> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  return new Promise((resolve) => {
+    execFileCb(
+      "git",
+      ["show", `${commitSha}:${filePath}`],
+      { cwd, maxBuffer: MAX, encoding: "buffer" },
+      (err, stdout) => {
+        resolve(err ? null : (stdout as unknown as Buffer));
+      },
+    );
+  });
+}
