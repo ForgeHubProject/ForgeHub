@@ -14,4 +14,14 @@ export { compareGltfSceneSnapshots } from "./gltf-scene/index.js";
 export type { GltfCompareResult } from "./gltf-scene/index.js";
 export { comparePlainTextSnapshots, PLAIN_TEXT_MAX_BYTES } from "./plain-text/index.js";
 export type { PlainTextCompareResult, TextDiffLine } from "./plain-text/index.js";
-export type { ArtifactHandler, IngestInput, HandlerCapabilities } from "./types.js";
+export type {
+  ArtifactHandler,
+  IngestInput,
+  HandlerCapabilities,
+  StructuredDiff,
+  DiffChange,
+  ChangeKind,
+  ConflictInfo,
+  SemanticConflict,
+  MergeResult,
+} from "./types.js";
