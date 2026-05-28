@@ -324,13 +324,14 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Extract current path — use currentRef state as prefix so slashed branch names work correctly
+  // Extract current path — use currentRef state as prefix so slashed branch names work correctly.
+  // When splat doesn’t match the current ref prefix (e.g. during a branch switch before the URL
+  // has updated), fall back to root rather than misparse the stale splat.
   const currentPath = (() => {
     const treePrefix = `tree/${currentRef}`;
     if (splat === treePrefix) return "";
     if (splat.startsWith(treePrefix + "/")) return splat.slice(treePrefix.length + 1);
-    const m = splat.match(/^tree\/[^/]+\/(.*)$/);
-    return m ? m[1] : "";
+    return "";
   })();
 
   useEffect(() => {
