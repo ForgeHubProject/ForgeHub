@@ -1,6 +1,6 @@
 import type { Entity } from "@prisma/client";
 import { prisma } from "../prisma.js";
-import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
+import { gltfSceneHandler } from "../handlers/gltf-scene/handler.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "../handlers/types.js";
 import {
@@ -94,20 +94,20 @@ export async function materializeResolvedFiles(
       const incJson = await readFileAtBranch(storageKey, fromBranch, sourceFile);
       if (!baseJson || !incJson) continue;
 
-      const compare = compareGltfSceneSnapshots(
-        baseSnap.id,
-        incSnap.id,
-        baseSnap.entities,
-        incSnap.entities,
-      );
+      const diff = await gltfSceneHandler.diff(Buffer.from(baseJson), Buffer.from(incJson));
       const entitySides: Record<string, MergeSide> = {};
       const fieldSides: Record<string, MergeSide> = {};
       for (const e of fileRes.entities ?? []) entitySides[e.entityId] = e.side;
       for (const f of fileRes.fields ?? []) fieldSides[`${f.entityId}:${f.field}`] = f.side;
 
       const fieldChangesByEntity = new Map<string, Array<{ field: string }>>();
-      for (const c of compare.changes) {
-        if (c.fieldChanges.length > 0) fieldChangesByEntity.set(c.entityId, c.fieldChanges);
+      for (const c of diff.changes) {
+        if (c.kind === "modified" && c.children && c.children.length > 0) {
+          const payload = (c.before ?? c.after) as { entityId?: string } | null;
+          if (payload?.entityId) {
+            fieldChangesByEntity.set(payload.entityId, c.children.map((ch) => ({ field: ch.path })));
+          }
+        }
       }
 
       out[sourceFile] = materializeGltfMerge(
