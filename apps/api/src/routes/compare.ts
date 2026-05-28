@@ -2,13 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import {
   firstHandlerForPath,
-  compareGltfSceneSnapshots,
-  comparePlainTextSnapshots,
   GLTF_SCENE_HANDLER_ID,
   PLAIN_TEXT_HANDLER_ID,
 } from "../handlers/index.js";
+import type { StructuredDiff, DiffChange } from "../handlers/types.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
+import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
+import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 
 export async function compareRoutes(app: FastifyInstance) {
   app.get(
@@ -29,7 +30,6 @@ export async function compareRoutes(app: FastifyInstance) {
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
 
-      // Lean select — no entity rows needed for the fast path
       const [baseSnap, targetSnap] = await Promise.all([
         prisma.snapshot.findFirst({
           where: { id: base, repoId: repo.id },
@@ -54,7 +54,7 @@ export async function compareRoutes(app: FastifyInstance) {
       const handler = firstHandlerForPath(baseSnap.sourceFile);
       const storageKey = repo.storageKey;
 
-      // ── Forge path: blob-level diff with cache ────────────────────────────
+      // ── Fast path: blob-level diff with cache ─────────────────────────────────
       if (handler && storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
         const [baseBlobSha, headBlobSha] = await Promise.all([
           resolveBlobSha(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
@@ -65,7 +65,6 @@ export async function compareRoutes(app: FastifyInstance) {
           const cached = await prisma.diffCache.findUnique({
             where: { handlerId_baseBlobSha_headBlobSha: { handlerId: handler.id, baseBlobSha, headBlobSha } },
           });
-          if (cached) return JSON.parse(cached.result);
 
           const [baseBuffer, headBuffer] = await Promise.all([
             readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
@@ -73,17 +72,22 @@ export async function compareRoutes(app: FastifyInstance) {
           ]);
 
           if (baseBuffer && headBuffer) {
-            const diff = await handler.diff(baseBuffer, headBuffer);
-            // Cache write is non-fatal — don't await
-            prisma.diffCache.create({
-              data: { handlerId: handler.id, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
-            }).catch(() => undefined);
-            return diff;
+            let diff: StructuredDiff;
+            if (cached) {
+              diff = JSON.parse(cached.result) as StructuredDiff;
+            } else {
+              diff = await handler.diff(baseBuffer, headBuffer);
+              prisma.diffCache.create({
+                data: { handlerId: handler.id, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+              }).catch(() => undefined);
+            }
+
+            return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
           }
         }
       }
 
-      // ── Fallback: snapshot-based comparison (no commit SHA, or blob unresolvable) ──
+      // ── Fallback: snapshot-based comparison ───────────────────────────────────
       const [baseSnapFull, targetSnapFull] = await Promise.all([
         prisma.snapshot.findFirst({
           where: { id: base, repoId: repo.id },
@@ -100,10 +104,29 @@ export async function compareRoutes(app: FastifyInstance) {
       }
 
       if (baseSnapFull.handlerId === GLTF_SCENE_HANDLER_ID) {
-        return compareGltfSceneSnapshots(base, target, baseSnapFull.entities, targetSnapFull.entities);
+        const gltfResult = compareGltfSceneSnapshots(base, target, baseSnapFull.entities, targetSnapFull.entities);
+        const changes: DiffChange[] = gltfResult.changes
+          .filter((c) => c.type !== "unchanged")
+          .map((c) => ({
+            path: c.path,
+            kind: (c.type === "added" ? "added" : c.type === "removed" ? "removed" : "modified") as "added" | "removed" | "modified",
+            label: c.name,
+            before: c.before ?? undefined,
+            after: c.after ?? undefined,
+            children: c.fieldChanges.map((fc) => ({
+              path: fc.field,
+              kind: "modified" as const,
+              before: fc.before,
+              after: fc.after,
+            })),
+          }));
+        return { version: "1.0", format: "gltf-scene", baseSnapshotId: base, targetSnapshotId: target, changes };
       }
+
       if (baseSnapFull.handlerId === PLAIN_TEXT_HANDLER_ID) {
-        return comparePlainTextSnapshots(base, target, baseSnapFull.snapshotBody ?? "", targetSnapFull.snapshotBody ?? "");
+        const baseBody = baseSnapFull.snapshotBody ?? "";
+        const targetBody = targetSnapFull.snapshotBody ?? "";
+        return buildTextResponse(base, target, baseBody, targetBody);
       }
 
       return reply.status(501).send({
@@ -112,4 +135,42 @@ export async function compareRoutes(app: FastifyInstance) {
       });
     },
   );
+}
+
+function buildTextResponse(base: string, target: string, baseBody: string, targetBody: string) {
+  const { lines } = comparePlainTextSnapshots(base, target, baseBody, targetBody);
+  // Derive sparse changes (added/removed only) from lines for the StructuredDiff format
+  const changes: DiffChange[] = [];
+  let oldNum = 1;
+  let newNum = 1;
+  for (const l of lines) {
+    if (l.type === "added") {
+      changes.push({ path: `line:${newNum}`, kind: "added", after: l.content });
+      newNum++;
+    } else if (l.type === "removed") {
+      changes.push({ path: `line:${oldNum}`, kind: "removed", before: l.content });
+      oldNum++;
+    } else {
+      oldNum++;
+      newNum++;
+    }
+  }
+  return { version: "1.0" as const, format: "text", baseSnapshotId: base, targetSnapshotId: target, changes, lines };
+}
+
+function buildNormalizedResponse(
+  diff: StructuredDiff,
+  base: string,
+  target: string,
+  baseBody: string | null,
+  targetBody: string | null,
+  baseBuffer?: Buffer,
+  headBuffer?: Buffer,
+) {
+  if (diff.format === "text") {
+    const b = baseBody ?? baseBuffer?.toString("utf8") ?? "";
+    const h = targetBody ?? headBuffer?.toString("utf8") ?? "";
+    return buildTextResponse(base, target, b, h);
+  }
+  return { ...diff, baseSnapshotId: base, targetSnapshotId: target };
 }

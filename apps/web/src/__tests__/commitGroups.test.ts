@@ -113,14 +113,19 @@ describe("predecessorSnapshotId", () => {
 // ─── diffResultToChangeCounts ─────────────────────────────────────────────────
 
 describe("diffResultToChangeCounts", () => {
-  it("handles plain-text diff (lines branch)", () => {
-    const diff = {
-      kind: "plain-text" as const,
+  it("handles plain-text diff (text format)", () => {
+    const diff: DiffResult = {
+      version: "1.0",
+      format: "text",
       baseSnapshotId: "b",
       targetSnapshotId: "t",
-      summary: { added: 3, removed: 1, unchanged: 10 },
-      lines: [],
-    } satisfies DiffResult;
+      changes: [
+        { path: "line:1", kind: "added", after: "new line" },
+        { path: "line:2", kind: "added", after: "another" },
+        { path: "line:3", kind: "added", after: "third" },
+        { path: "line:4", kind: "removed", before: "old line" },
+      ],
+    };
     expect(diffResultToChangeCounts(diff)).toEqual({
       added: 3,
       removed: 1,
@@ -129,13 +134,29 @@ describe("diffResultToChangeCounts", () => {
     });
   });
 
-  it("handles glTF diff (changes branch)", () => {
-    const diff = {
+  it("handles glTF diff (gltf-scene format)", () => {
+    const diff: DiffResult = {
+      version: "1.0",
+      format: "gltf-scene",
       baseSnapshotId: "b",
       targetSnapshotId: "t",
-      summary: { added: 1, removed: 2, modified: 3, moved: 4, unchanged: 0 },
-      changes: [],
-    } satisfies DiffResult;
+      changes: [
+        // added: 1
+        { path: "a", kind: "added" },
+        // removed: 2
+        { path: "b", kind: "removed" },
+        { path: "c", kind: "removed" },
+        // moved: 4 — all children are transform fields
+        { path: "d", kind: "modified", children: [{ path: "position", kind: "modified" }] },
+        { path: "e", kind: "modified", children: [{ path: "rotation", kind: "modified" }] },
+        { path: "f", kind: "modified", children: [{ path: "position", kind: "modified" }, { path: "scale", kind: "modified" }] },
+        { path: "g", kind: "modified", children: [{ path: "position", kind: "modified" }, { path: "rotation", kind: "modified" }, { path: "scale", kind: "modified" }] },
+        // modified: 3 — has non-transform children
+        { path: "h", kind: "modified", children: [{ path: "name", kind: "modified" }] },
+        { path: "i", kind: "modified", children: [{ path: "name", kind: "modified" }, { path: "position", kind: "modified" }] },
+        { path: "j", kind: "modified", children: [{ path: "attributes", kind: "modified" }] },
+      ],
+    };
     expect(diffResultToChangeCounts(diff)).toEqual({
       added: 1,
       removed: 2,
