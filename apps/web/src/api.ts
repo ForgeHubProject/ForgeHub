@@ -172,7 +172,7 @@ export async function compareDiff(
   baseId: string,
   targetId: string,
 ): Promise<DiffResult> {
-  return req(
+  return req<DiffResult>(
     `/repos/${handle}/${repoName}/compare?base=${encodeURIComponent(baseId)}&target=${encodeURIComponent(targetId)}`,
     { token: token ?? undefined },
   );
@@ -242,7 +242,7 @@ export async function deleteBranch(
   });
 }
 
-// ─── tags ─────────────────────────────────────────────────────────────────────
+// ─── tags ─────────────────────────────────────────────────────────────────────────────
 
 export async function listTags(
   token: string | null,
@@ -252,7 +252,7 @@ export async function listTags(
   return req(`/repos/${handle}/${repoName}/tags`, { token: token ?? undefined });
 }
 
-// ─── pull requests ────────────────────────────────────────────────────────────
+// ─── pull requests ────────────────────────────────────────────────────────────────
 
 export async function listPulls(
   token: string | null,
@@ -391,7 +391,7 @@ export async function reopenPull(
   });
 }
 
-// ─── fork ─────────────────────────────────────────────────────────────────────
+// ─── fork ─────────────────────────────────────────────────────────────────────────────
 
 export async function forkRepo(
   token: string,
@@ -401,7 +401,7 @@ export async function forkRepo(
   return req(`/repos/${handle}/${repoName}/fork`, { method: "POST", token });
 }
 
-// ─── commits ──────────────────────────────────────────────────────────────────
+// ─── commits ─────────────────────────────────────────────────────────────────────────────
 
 export async function listCommits(
   token: string | null,
@@ -437,7 +437,7 @@ export async function getCommitDiff(
   return req(`/repos/${handle}/${repoName}/commits/${sha}/diff`, { token: token ?? undefined });
 }
 
-// ─── tree / blob ──────────────────────────────────────────────────────────────
+// ─── tree / blob ────────────────────────────────────────────────────────────────────────────
 
 export async function listTree(
   token: string | null,
@@ -478,7 +478,7 @@ export async function getReadme(
   return req(`/repos/${handle}/${repoName}/readme${q}`, { token: token ?? undefined });
 }
 
-// ─── issues ───────────────────────────────────────────────────────────────────
+// ─── issues ─────────────────────────────────────────────────────────────────────────────
 
 export async function listIssues(
   token: string | null,
@@ -573,7 +573,7 @@ export async function createIssueComment(
   });
 }
 
-// ─── labels ───────────────────────────────────────────────────────────────────
+// ─── labels ─────────────────────────────────────────────────────────────────────────────
 
 export async function listLabels(
   token: string | null,
@@ -583,7 +583,7 @@ export async function listLabels(
   return req(`/repos/${handle}/${repoName}/labels`, { token: token ?? undefined });
 }
 
-// ─── releases ─────────────────────────────────────────────────────────────────
+// ─── releases ─────────────────────────────────────────────────────────────────────────────
 
 export async function listReleases(
   token: string | null,
@@ -632,7 +632,7 @@ export async function deleteRelease(
   });
 }
 
-// ─── notifications ────────────────────────────────────────────────────────────
+// ─── notifications ────────────────────────────────────────────────────────────────
 
 export async function listNotifications(
   token: string,
@@ -653,7 +653,7 @@ export async function deleteNotification(token: string, id: string): Promise<voi
   return req(`/notifications/${id}`, { method: "DELETE", token });
 }
 
-// ─── labels ──────────────────────────────────────────────────────────────────
+// ─── labels ─────────────────────────────────────────────────────────────────────────────
 
 export async function createLabel(
   token: string,
@@ -693,7 +693,7 @@ export async function deleteLabel(
   return req(`/repos/${handle}/${repoName}/labels/${labelId}`, { method: "DELETE", token });
 }
 
-// ─── collaborators ────────────────────────────────────────────────────────────
+// ─── collaborators ────────────────────────────────────────────────────────────────
 
 export type Collaborator = {
   id: string;
