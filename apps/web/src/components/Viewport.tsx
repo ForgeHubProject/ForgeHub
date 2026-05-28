@@ -11,8 +11,9 @@ import {
 import { Suspense, useMemo, useState } from "react";
 import * as THREE from "three";
 import type { Constraint, DiffChange, DiffChangeType, DiffEntitySnapshot, Entity, Transform } from "../types";
+import { gltfChangeType, gltfEntityOf } from "../types";
 
-// ─── tree builder ────────────────────────────────────────────────────────────
+// ─── tree builder ────────────────────────────────────────────────────────────────
 
 type VNode = Entity & { children: VNode[] };
 
@@ -43,7 +44,7 @@ function transformsNearlyEqual(a: Transform, b: Transform, eps = 1e-3): boolean 
   );
 }
 
-// ─── diff color mapping ───────────────────────────────────────────────────────
+// ─── diff color mapping ───────────────────────────────────────────────────────────────
 
 const DIFF_COLOR: Record<DiffChangeType, string> = {
   added:     "#22c55e",
@@ -53,7 +54,7 @@ const DIFF_COLOR: Record<DiffChangeType, string> = {
   unchanged: "#475569",
 };
 
-// ─── per-kind 3D geometry ─────────────────────────────────────────────────────
+// ─── per-kind 3D geometry ──────────────────────────────────────────────────────────────
 
 function AssemblyModel({ color, size }: { color: string; size: number }) {
   const s = Math.max(0.6, size * 0.22);
@@ -107,7 +108,7 @@ function PartModel({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ─── kind config ─────────────────────────────────────────────────────────────
+// ─── kind config ────────────────────────────────────────────────────────────────────────
 
 const KIND_COLOR: Record<string, string> = {
   assembly: "#3b82f6",
@@ -121,7 +122,7 @@ const KIND_SIZE: Record<string, number> = {
   part:     3.5,
 };
 
-// ─── removed entity ghost ─────────────────────────────────────────────────────
+// ─── removed entity ghost ───────────────────────────────────────────────────────────
 
 function GhostEntity({ snap, onSelect }: { snap: DiffEntitySnapshot; onSelect?: (entityId: string) => void }) {
   const p = (snap.transform?.position ?? [0, 0, 0]) as [number, number, number];
@@ -155,7 +156,7 @@ function GhostEntity({ snap, onSelect }: { snap: DiffEntitySnapshot; onSelect?: 
   );
 }
 
-// ─── single entity ───────────────────────────────────────────────────────────
+// ─── single entity ────────────────────────────────────────────────────────────────────────
 
 type SelectionState = "none" | "selected" | "ancestor";
 
@@ -255,7 +256,7 @@ function EntityMesh({
   );
 }
 
-// ─── recursive scene node ─────────────────────────────────────────────────────
+// ─── recursive scene node ───────────────────────────────────────────────────────────────
 
 type DiffOverlayMode = "old" | "both" | "new";
 
@@ -312,7 +313,7 @@ function SceneNode({
   );
 }
 
-// ─── public component ─────────────────────────────────────────────────────────
+// ─── public component ───────────────────────────────────────────────────────────────────────
 
 type Props = {
   entities: Entity[];
@@ -349,8 +350,12 @@ export function Viewport({
     if (!diffMode || !diffChanges?.length) return empty;
     const set = new Set<string>();
     for (const c of diffChanges) {
-      if ((c.type === "modified" || c.type === "moved") && c.before?.transform && c.after?.transform) {
-        set.add(c.entityId);
+      const ct = gltfChangeType(c);
+      const before = c.before as DiffEntitySnapshot | undefined;
+      const after = c.after as DiffEntitySnapshot | undefined;
+      if ((ct === "modified" || ct === "moved") && before?.transform && after?.transform) {
+        const eid = gltfEntityOf(c)?.entityId;
+        if (eid) set.add(eid);
       }
     }
     return set;
@@ -359,15 +364,18 @@ export function Viewport({
   const diffTypeMap = useMemo<Map<string, DiffChangeType> | null>(() => {
     if (!diffChanges || !diffMode) return null;
     const m = new Map<string, DiffChangeType>();
-    for (const c of diffChanges) m.set(c.entityId, c.type);
+    for (const c of diffChanges) {
+      const eid = gltfEntityOf(c)?.entityId;
+      if (eid) m.set(eid, gltfChangeType(c));
+    }
     return m;
   }, [diffChanges, diffMode]);
 
   const removedSnaps = useMemo<DiffEntitySnapshot[]>(() => {
     if (!diffChanges) return [];
     return diffChanges
-      .filter((c) => c.type === "removed" && c.before?.transform)
-      .map((c) => c.before!);
+      .filter((c) => c.kind === "removed" && (c.before as DiffEntitySnapshot | undefined)?.transform)
+      .map((c) => c.before as DiffEntitySnapshot);
   }, [diffChanges]);
 
   const beforeAfterSnaps = useMemo(() => {
@@ -382,12 +390,15 @@ export function Viewport({
       localOffset: [number, number, number];
     }> = [];
     for (const c of diffChanges) {
-      if (c.type === "unchanged") continue;
-      if (c.type === "modified" || c.type === "moved") {
-        const tb = c.before?.transform;
-        const ta = c.after?.transform;
-        const kind = c.before?.kind ?? c.after?.kind ?? "part";
-        const size = KIND_SIZE[kind] ?? 4;
+      const ct = gltfChangeType(c);
+      if (ct === "modified" || ct === "moved") {
+        const before = c.before as DiffEntitySnapshot | undefined;
+        const after = c.after as DiffEntitySnapshot | undefined;
+        const tb = before?.transform;
+        const ta = after?.transform;
+        const entityKind = before?.kind ?? after?.kind ?? "part";
+        const size = KIND_SIZE[entityKind] ?? 4;
+        const eid = gltfEntityOf(c)?.entityId ?? "";
         let offBefore: [number, number, number] = [0, 0, 0];
         let offAfter: [number, number, number] = [0, 0, 0];
         if (tb && ta && transformsNearlyEqual(tb, ta)) {
@@ -395,21 +406,21 @@ export function Viewport({
           offBefore = [0, y, 0];
           offAfter = [0, -y, 0];
         }
-        if (showBefore && c.before?.transform) {
+        if (showBefore && before?.transform) {
           out.push({
-            key: `${c.entityId}-before`,
-            snap: c.before,
+            key: `${eid}-before`,
+            snap: before,
             color: "#ef4444",
-            label: `- ${c.before.name}`,
+            label: `- ${before.name}`,
             localOffset: offBefore,
           });
         }
-        if (showAfter && c.after?.transform) {
+        if (showAfter && after?.transform) {
           out.push({
-            key: `${c.entityId}-after`,
-            snap: c.after,
+            key: `${eid}-after`,
+            snap: after,
             color: "#22c55e",
-            label: `+ ${c.after.name}`,
+            label: `+ ${after.name}`,
             localOffset: offAfter,
           });
         }
