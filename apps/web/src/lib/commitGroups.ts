@@ -72,20 +72,24 @@ export function predecessorSnapshotId(
 }
 
 export function diffResultToChangeCounts(diff: DiffResult): ChangeCounts {
-  if ("lines" in diff) {
-    return {
-      added: diff.summary.added,
-      removed: diff.summary.removed,
-      modified: 0,
-      moved: 0,
-    };
+  let added = 0, removed = 0, modified = 0, moved = 0;
+  if (diff.format === "text") {
+    for (const c of diff.changes) {
+      if (c.kind === "added") added++;
+      else if (c.kind === "removed") removed++;
+    }
+    return { added, removed, modified, moved };
   }
-  return {
-    added: diff.summary.added,
-    removed: diff.summary.removed,
-    modified: diff.summary.modified,
-    moved: diff.summary.moved,
-  };
+  // gltf-scene: detect "moved" from transform-only children
+  for (const c of diff.changes) {
+    if (c.kind === "added") { added++; continue; }
+    if (c.kind === "removed") { removed++; continue; }
+    const children = c.children ?? [];
+    const isMove = children.length > 0 && children.every((ch) => ["position", "rotation", "scale"].includes(ch.path));
+    if (isMove) moved++;
+    else modified++;
+  }
+  return { added, removed, modified, moved };
 }
 
 export function isChangeCountsEmpty(stats: ChangeCounts): boolean {

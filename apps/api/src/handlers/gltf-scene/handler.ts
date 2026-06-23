@@ -69,6 +69,18 @@ function approxEq(a: number | null | undefined, b: number | null | undefined): b
   return Math.abs(a - b) < EPS;
 }
 
+function entityPayload(e: ParsedEntity) {
+  return {
+    entityId: e.entityId,
+    parentEntityId: e.parentEntityId,
+    kind: e.kind,
+    name: e.name,
+    path: e.path,
+    transform: e.transform,
+    attributes: e.attributes,
+  };
+}
+
 function diffGltfEntities(baseEntities: ParsedEntity[], headEntities: ParsedEntity[]): DiffChange[] {
   const baseMap = new Map(baseEntities.map((e) => [e.entityId, e]));
   const headMap = new Map(headEntities.map((e) => [e.entityId, e]));
@@ -81,11 +93,11 @@ function diffGltfEntities(baseEntities: ParsedEntity[], headEntities: ParsedEnti
     const h = headMap.get(id);
 
     if (!b && h) {
-      changes.push({ path: h.path, kind: "added", label: h.name });
+      changes.push({ path: h.path, kind: "added", label: h.name, after: entityPayload(h) });
       continue;
     }
     if (b && !h) {
-      changes.push({ path: b.path, kind: "removed", label: b.name });
+      changes.push({ path: b.path, kind: "removed", label: b.name, before: entityPayload(b) });
       continue;
     }
     if (!b || !h) continue;
@@ -146,7 +158,7 @@ function diffGltfEntities(baseEntities: ParsedEntity[], headEntities: ParsedEnti
     }
 
     if (fieldChanges.length > 0) {
-      changes.push({ path: h.path, kind: "modified", label: h.name, children: fieldChanges });
+      changes.push({ path: h.path, kind: "modified", label: h.name, before: entityPayload(b), after: entityPayload(h), children: fieldChanges });
     }
   }
 

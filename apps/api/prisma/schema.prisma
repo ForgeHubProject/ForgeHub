@@ -322,6 +322,17 @@ model PullRequestReview {
   comments      PullRequestReviewComment[]
 }
 
+model DiffCache {
+  id          String   @id @default(cuid())
+  handlerId   String
+  baseBlobSha String
+  headBlobSha String
+  result      String   // JSON-encoded StructuredDiff
+  createdAt   DateTime @default(now())
+
+  @@unique([handlerId, baseBlobSha, headBlobSha])
+}
+
 model PullRequestReviewComment {
   id            String            @id @default(cuid())
   reviewId      String
