@@ -467,16 +467,16 @@ export function PlainTextView({
                         <span style={{ fontSize: 10, color: "#94a3b8" }}>checking…</span>
                       )}
                     </div>
-                    {n === 1 && isActiveGroup && diffResult && isPlainTextDiff(diffResult) && (
-                      <div style={styles.commitDiffBadges}>
-                        {diffResult.summary.added > 0 && (
-                          <span style={diffBadgeStyle("#22c55e")}>+{diffResult.summary.added}</span>
-                        )}
-                        {diffResult.summary.removed > 0 && (
-                          <span style={diffBadgeStyle("#ef4444")}>−{diffResult.summary.removed}</span>
-                        )}
-                      </div>
-                    )}
+                    {n === 1 && isActiveGroup && diffResult && isPlainTextDiff(diffResult) && (() => {
+                      const added = diffResult.changes.filter(c => c.kind === "added").length;
+                      const removed = diffResult.changes.filter(c => c.kind === "removed").length;
+                      return (
+                        <div style={styles.commitDiffBadges}>
+                          {added > 0 && <span style={diffBadgeStyle("#22c55e")}>+{added}</span>}
+                          {removed > 0 && <span style={diffBadgeStyle("#ef4444")}>−{removed}</span>}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </button>
                 {isExpanded && commitFilePreviews && (

@@ -87,25 +87,20 @@ export type DiffEntitySnapshot = {
   attributes: Record<string, unknown>;
 };
 
+/** Change kind in the Forge wire format. */
+export type ChangeKind = "added" | "removed" | "modified";
+
+/** Extended change type used by the gltf-scene format (includes "moved" / "unchanged" derived from children). */
 export type DiffChangeType = "added" | "removed" | "modified" | "moved" | "unchanged";
 
+/** Forge wire-format diff change node. `before`/`after` carry format-specific payloads. */
 export type DiffChange = {
-  entityId: string;
-  name: string;
-  kind: string;
   path: string;
-  type: DiffChangeType;
-  fieldChanges: Array<{ field: string; before: unknown; after: unknown }>;
-  before: DiffEntitySnapshot | null;
-  after: DiffEntitySnapshot | null;
-};
-
-export type GlTfDiffResult = {
-  kind?: "gltf-scene";
-  baseSnapshotId: string;
-  targetSnapshotId: string;
-  summary: { added: number; removed: number; modified: number; moved: number; unchanged: number };
-  changes: DiffChange[];
+  kind: ChangeKind;
+  label?: string;
+  before?: unknown;
+  after?: unknown;
+  children?: DiffChange[];
 };
 
 export type TextDiffLineRow = {
@@ -115,23 +110,39 @@ export type TextDiffLineRow = {
   newLine: number | null;
 };
 
-export type PlainTextDiffResult = {
-  kind: "plain-text";
+/** Result of GET /compare — unified Forge wire format envelope. */
+export type DiffResult = {
+  version: "1.0";
+  format: string;
   baseSnapshotId: string;
   targetSnapshotId: string;
-  summary: { added: number; removed: number; unchanged: number };
-  lines: TextDiffLineRow[];
+  changes: DiffChange[];
+  /** Full line-by-line diff including unchanged lines — present only for `format: "text"`. */
+  lines?: TextDiffLineRow[];
 };
 
-/** Result of GET /compare — discriminated by `kind` or presence of `lines` vs `changes`. */
-export type DiffResult = GlTfDiffResult | PlainTextDiffResult;
-
-export function isPlainTextDiff(d: DiffResult | null): d is PlainTextDiffResult {
-  return d !== null && "lines" in d;
+export function isPlainTextDiff(d: DiffResult | null): d is DiffResult & { format: "text"; lines: TextDiffLineRow[] } {
+  return d !== null && d.format === "text";
 }
 
-export function isGlTfDiff(d: DiffResult | null): d is GlTfDiffResult {
-  return d !== null && "changes" in d;
+export function isGlTfDiff(d: DiffResult | null): d is DiffResult & { format: "gltf-scene" } {
+  return d !== null && d.format === "gltf-scene";
+}
+
+/** Extract the gltf entity payload from a DiffChange (before ?? after). */
+export function gltfEntityOf(c: DiffChange): DiffEntitySnapshot | null {
+  const payload = c.before ?? c.after;
+  if (!payload || typeof payload !== "object") return null;
+  return payload as DiffEntitySnapshot;
+}
+
+/** Derive a DiffChangeType from a DiffChange, detecting "moved" (transform-only children). */
+export function gltfChangeType(c: DiffChange): DiffChangeType {
+  if (c.kind === "added") return "added";
+  if (c.kind === "removed") return "removed";
+  const children = c.children ?? [];
+  if (children.length > 0 && children.every((ch) => ["position", "rotation", "scale"].includes(ch.path))) return "moved";
+  return "modified";
 }
 
 export type BranchInfo = {

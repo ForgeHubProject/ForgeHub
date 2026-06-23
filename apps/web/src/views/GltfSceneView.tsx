@@ -4,7 +4,7 @@ import { ModuleTree } from "../components/ModuleTree";
 import { Viewport } from "../components/Viewport";
 import { commitGroupFileChipLabel } from "../lib/commitGroups";
 import type { DiffChange, DiffChangeType, DiffEntitySnapshot, Entity } from "../types";
-import { isGlTfDiff } from "../types";
+import { gltfChangeType, gltfEntityOf, isGlTfDiff } from "../types";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 
@@ -111,8 +111,8 @@ export function GltfSceneView({
 
   const selectedChange = useMemo(() => {
     if (!diffResult || !isGlTfDiff(diffResult)) return null;
-    if (ghostSelectedId) return diffResult.changes.find((c) => c.entityId === ghostSelectedId) ?? null;
-    if (selectedEntity) return diffResult.changes.find((c) => c.entityId === selectedEntity.entityId) ?? null;
+    if (ghostSelectedId) return diffResult.changes.find((c) => gltfEntityOf(c)?.entityId === ghostSelectedId) ?? null;
+    if (selectedEntity) return diffResult.changes.find((c) => gltfEntityOf(c)?.entityId === selectedEntity.entityId) ?? null;
     return null;
   }, [diffResult, ghostSelectedId, selectedEntity]);
 
@@ -120,22 +120,38 @@ export function GltfSceneView({
     if (!diffMode || !diffResult || !isGlTfDiff(diffResult)) return null;
     const m = new Map<string, DiffChangeType>();
     for (const c of diffResult.changes) {
-      if (c.type !== "unchanged") m.set(c.entityId, c.type);
+      const eid = gltfEntityOf(c)?.entityId;
+      if (eid) m.set(eid, gltfChangeType(c));
     }
     return m;
   }, [diffMode, diffResult]);
+
+  const gltfSummary = useMemo(() => {
+    if (!diffResult || !isGlTfDiff(diffResult)) return null;
+    let added = 0, removed = 0, modified = 0, moved = 0;
+    for (const c of diffResult.changes) {
+      const ct = gltfChangeType(c);
+      if (ct === "added") added++;
+      else if (ct === "removed") removed++;
+      else if (ct === "moved") moved++;
+      else modified++;
+    }
+    return { added, removed, modified, moved };
+  }, [diffResult]);
 
   const { diffSceneHasOld, diffSceneHasNew } = useMemo(() => {
     if (!diffResult || !isGlTfDiff(diffResult)) return { diffSceneHasOld: false, diffSceneHasNew: false };
     let diffSceneHasOld = false;
     let diffSceneHasNew = false;
     for (const c of diffResult.changes) {
-      if (c.type === "unchanged") continue;
-      if (c.type === "removed") diffSceneHasOld = true;
-      if (c.type === "added" && c.after?.transform) diffSceneHasNew = true;
-      if (c.type === "modified" || c.type === "moved") {
-        if (c.before?.transform) diffSceneHasOld = true;
-        if (c.after?.transform) diffSceneHasNew = true;
+      const ct = gltfChangeType(c);
+      const before = c.before as DiffEntitySnapshot | undefined;
+      const after = c.after as DiffEntitySnapshot | undefined;
+      if (ct === "removed") diffSceneHasOld = true;
+      if (ct === "added" && after?.transform) diffSceneHasNew = true;
+      if (ct === "modified" || ct === "moved") {
+        if (before?.transform) diffSceneHasOld = true;
+        if (after?.transform) diffSceneHasNew = true;
       }
     }
     return { diffSceneHasOld, diffSceneHasNew };
@@ -269,37 +285,39 @@ export function GltfSceneView({
             <div style={styles.overlayHeader}>
               <span>Changes</span>
               <div style={{ display: "flex", gap: 3 }}>
-                {diffResult.summary.added > 0 && (
-                  <span style={diffCountStyle(DIFF_COLOR.added)}>+{diffResult.summary.added}</span>
+                {gltfSummary && gltfSummary.added > 0 && (
+                  <span style={diffCountStyle(DIFF_COLOR.added)}>+{gltfSummary.added}</span>
                 )}
-                {diffResult.summary.removed > 0 && (
-                  <span style={diffCountStyle(DIFF_COLOR.removed)}>−{diffResult.summary.removed}</span>
+                {gltfSummary && gltfSummary.removed > 0 && (
+                  <span style={diffCountStyle(DIFF_COLOR.removed)}>−{gltfSummary.removed}</span>
                 )}
-                {diffResult.summary.modified > 0 && (
-                  <span style={diffCountStyle(DIFF_COLOR.modified)}>~{diffResult.summary.modified}</span>
+                {gltfSummary && gltfSummary.modified > 0 && (
+                  <span style={diffCountStyle(DIFF_COLOR.modified)}>~{gltfSummary.modified}</span>
                 )}
-                {diffResult.summary.moved > 0 && (
-                  <span style={diffCountStyle(DIFF_COLOR.moved)}>↔{diffResult.summary.moved}</span>
+                {gltfSummary && gltfSummary.moved > 0 && (
+                  <span style={diffCountStyle(DIFF_COLOR.moved)}>↔{gltfSummary.moved}</span>
                 )}
               </div>
             </div>
             {diffResult.changes
-              .filter((c) => c.type !== "unchanged")
               .map((c) => {
-                const isSelected = ghostSelectedId === c.entityId || selectedEntity?.entityId === c.entityId;
-                const entitySide = mergeGltfEntitySides?.[c.entityId] ?? (c.type === "removed" ? "base" : "incoming");
+                const ct = gltfChangeType(c);
+                const payload = gltfEntityOf(c);
+                const entityId = payload?.entityId ?? c.path;
+                const isSelected = ghostSelectedId === entityId || selectedEntity?.entityId === entityId;
+                const entitySide = mergeGltfEntitySides?.[entityId] ?? (ct === "removed" ? "base" : "incoming");
                 const baseLabel = mergeReviewPr?.toBranch ?? "base";
                 const incLabel = mergeReviewPr?.fromBranch ?? "incoming";
                 return (
                   <div
-                    key={c.entityId}
+                    key={entityId}
                     style={{ ...styles.overlayRow, ...(isSelected ? styles.overlayRowSelected : {}) }}
                     onClick={() => {
-                      if (c.type === "removed") {
-                        setGhostSelectedId(c.entityId);
+                      if (ct === "removed") {
+                        setGhostSelectedId(entityId);
                         setSelectionPath([]);
                       } else {
-                        const match = activeSnapshot.entities.find((e) => e.entityId === c.entityId);
+                        const match = activeSnapshot.entities.find((e) => e.entityId === entityId);
                         if (match) {
                           handleTreeSelect(match.id);
                           setGhostSelectedId(null);
@@ -307,11 +325,11 @@ export function GltfSceneView({
                       }
                     }}
                   >
-                    <span style={{ color: DIFF_COLOR[c.type], fontWeight: 700, fontSize: 11, width: 12, flexShrink: 0 }}>
-                      {DIFF_ICON[c.type]}
+                    <span style={{ color: DIFF_COLOR[ct], fontWeight: 700, fontSize: 11, width: 12, flexShrink: 0 }}>
+                      {DIFF_ICON[ct]}
                     </span>
-                    <span style={styles.overlayName}>{c.name}</span>
-                    <span style={styles.overlayKind}>{c.kind}</span>
+                    <span style={styles.overlayName}>{c.label}</span>
+                    <span style={styles.overlayKind}>{payload?.kind}</span>
                     {mergeReviewPr && onMergeGltfEntitySide && (
                       <div style={{ display: "flex", gap: 4, marginLeft: "auto", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                         <button
@@ -326,7 +344,7 @@ export function GltfSceneView({
                             color: entitySide === "base" ? "#1d4ed8" : "#94a3b8",
                             cursor: "pointer",
                           }}
-                          onClick={() => onMergeGltfEntitySide(c.entityId, "base")}
+                          onClick={() => onMergeGltfEntitySide(entityId, "base")}
                         >
                           {baseLabel}
                         </button>
@@ -342,7 +360,7 @@ export function GltfSceneView({
                             color: entitySide === "incoming" ? "#1d4ed8" : "#94a3b8",
                             cursor: "pointer",
                           }}
-                          onClick={() => onMergeGltfEntitySide(c.entityId, "incoming")}
+                          onClick={() => onMergeGltfEntitySide(entityId, "incoming")}
                         >
                           {incLabel}
                         </button>
@@ -437,16 +455,16 @@ export function GltfSceneView({
                         <span style={{ fontSize: 10, color: "#94a3b8" }}>checking…</span>
                       )}
                     </div>
-                    {n === 1 && isActiveGroup && diffResult && isGlTfDiff(diffResult) && (
+                    {n === 1 && isActiveGroup && gltfSummary && (
                       <div style={styles.commitDiffBadges}>
-                        {diffResult.summary.added > 0 && (
-                          <span style={diffBadgeStyle("#22c55e")}>+{diffResult.summary.added}</span>
+                        {gltfSummary.added > 0 && (
+                          <span style={diffBadgeStyle("#22c55e")}>+{gltfSummary.added}</span>
                         )}
-                        {diffResult.summary.removed > 0 && (
-                          <span style={diffBadgeStyle("#ef4444")}>−{diffResult.summary.removed}</span>
+                        {gltfSummary.removed > 0 && (
+                          <span style={diffBadgeStyle("#ef4444")}>−{gltfSummary.removed}</span>
                         )}
-                        {diffResult.summary.modified > 0 && (
-                          <span style={diffBadgeStyle("#64748b")}>~{diffResult.summary.modified}</span>
+                        {gltfSummary.modified > 0 && (
+                          <span style={diffBadgeStyle("#64748b")}>~{gltfSummary.modified}</span>
                         )}
                       </div>
                     )}
@@ -603,10 +621,13 @@ function EntityInspector({
   mergeGltfFieldSides?: Record<string, "base" | "incoming">;
   onMergeGltfFieldSide?: (entityId: string, field: string, side: "base" | "incoming") => void;
 }) {
-  const type = change?.type;
+  const type = change ? gltfChangeType(change) : undefined;
   const isRemoved = type === "removed";
   const isAdded = type === "added";
   const isModified = type === "modified" || type === "moved";
+  const changeBefore = change ? (change.before as DiffEntitySnapshot | undefined) : undefined;
+  const changeAfter = change ? (change.after as DiffEntitySnapshot | undefined) : undefined;
+  const changePayload = change ? gltfEntityOf(change) : null;
 
   const showFieldDiff = Boolean(diffMode && change && diffOverlayMode === "both");
 
@@ -616,14 +637,14 @@ function EntityInspector({
   if (!diffMode || !change) {
     if (entity) src = entityToSrc(entity);
   } else if (diffOverlayMode === "old") {
-    if (change.before) src = snapToSrc(change.before);
+    if (changeBefore) src = snapToSrc(changeBefore);
     else emptyBanner = "No previous version for this change.";
   } else if (diffOverlayMode === "new") {
-    if (change.after) src = snapToSrc(change.after);
+    if (changeAfter) src = snapToSrc(changeAfter);
     else emptyBanner = "No new version for this change.";
   } else {
     if (entity) src = entityToSrc(entity);
-    else if (isRemoved && change.before) src = snapToSrc(change.before);
+    else if (isRemoved && changeBefore) src = snapToSrc(changeBefore);
     else emptyBanner = "No data.";
   }
 
@@ -632,11 +653,11 @@ function EntityInspector({
   }
 
   const globalKind: PropKind = !diffMode ? "normal" : isRemoved ? "removed" : isAdded ? "added" : "normal";
-  const getfc = (field: string) => change?.fieldChanges.find((f) => f.field === field);
+  const getfc = (field: string) => change?.children?.find((ch) => ch.path === field);
 
   const changedPropertyCount =
     change && diffMode && isModified && showFieldDiff
-      ? new Set(change.fieldChanges.map((f) => f.field)).size
+      ? new Set((change.children ?? []).map((ch) => ch.path)).size
       : 0;
 
   const rows: PropRow[] = [];
@@ -732,11 +753,12 @@ function EntityInspector({
         )}
       </div>
       {rows.map((row, i) => {
-        const fc = change?.fieldChanges.find((f) => f.field === row.label);
-        const fieldKey = change && fc ? `${change.entityId}:${fc.field}` : null;
+        const fc = change?.children?.find((ch) => ch.path === row.label);
+        const entityId = changePayload?.entityId;
+        const fieldKey = change && fc && entityId ? `${entityId}:${fc.path}` : null;
         const fieldSide = fieldKey && mergeGltfFieldSides?.[fieldKey];
         const showFieldPick =
-          mergeReviewPr && onMergeGltfFieldSide && change && fc && diffMode && diffOverlayMode === "both";
+          mergeReviewPr && onMergeGltfFieldSide && change && fc && entityId && diffMode && diffOverlayMode === "both";
         return (
           <div key={i} style={propRowStyle(row.kind)}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
@@ -754,7 +776,7 @@ function EntityInspector({
                       background: fieldSide === "base" ? "#eff6ff" : "transparent",
                       cursor: "pointer",
                     }}
-                    onClick={() => onMergeGltfFieldSide(change.entityId, fc.field, "base")}
+                    onClick={() => onMergeGltfFieldSide(entityId, fc.path, "base")}
                   >
                     {mergeReviewPr.toBranch}
                   </button>
@@ -769,7 +791,7 @@ function EntityInspector({
                       background: fieldSide === "incoming" ? "#eff6ff" : "transparent",
                       cursor: "pointer",
                     }}
-                    onClick={() => onMergeGltfFieldSide(change.entityId, fc.field, "incoming")}
+                    onClick={() => onMergeGltfFieldSide(entityId, fc.path, "incoming")}
                   >
                     {mergeReviewPr.fromBranch}
                   </button>

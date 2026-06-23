@@ -21,6 +21,7 @@ import {
   type MergeSide,
 } from "../api";
 import type { BranchInfo, DiffResult, PullRequest, Repo, Snapshot, SnapshotSummary, TagInfo, User } from "../types";
+import { gltfEntityOf } from "../types";
 import {
   buildGitCommitGroups,
   diffResultToChangeCounts,
@@ -472,13 +473,13 @@ export function SnapshotPage({ token, user }: Props) {
       });
     }
     if (isGlTfDiff(diffResult)) {
-      const changed = diffResult.changes.filter((c) => c.type !== "unchanged");
-      if (changed.length === 0) return;
+      if (diffResult.changes.length === 0) return;
       setMergeGltfEntitySidesByFile((prev) => {
         if (prev[selectedModuleFile]) return prev;
         const m: Record<string, MergeSide> = {};
-        for (const c of changed) {
-          m[c.entityId] = c.type === "removed" ? "base" : "incoming";
+        for (const c of diffResult.changes) {
+          const eid = gltfEntityOf(c)?.entityId ?? "";
+          if (eid) m[eid] = c.kind === "removed" ? "base" : "incoming";
         }
         return { ...prev, [selectedModuleFile]: m };
       });
@@ -532,20 +533,20 @@ export function SnapshotPage({ token, user }: Props) {
           hunks: hunks.map((h) => ({ hunkId: h.id, side: sides[h.id] ?? "incoming" })),
         });
       } else if (isGlTfDiff(diff)) {
-        const changed = diff.changes.filter((c) => c.type !== "unchanged");
-        if (changed.length === 0) continue;
+        if (diff.changes.length === 0) continue;
         const entitySides = mergeGltfEntitySidesByFile[sourceFile] ?? {};
         const fieldSides = mergeGltfFieldSidesByFile[sourceFile] ?? {};
-        const entities = changed.map((c) => ({
-          entityId: c.entityId,
-          side: entitySides[c.entityId] ?? (c.type === "removed" ? "base" : "incoming"),
-        }));
+        const entities = diff.changes.map((c) => {
+          const eid = gltfEntityOf(c)?.entityId ?? "";
+          return { entityId: eid, side: entitySides[eid] ?? (c.kind === "removed" ? "base" : "incoming") };
+        });
         const fields: Array<{ entityId: string; field: string; side: MergeSide }> = [];
-        for (const c of changed) {
-          for (const fc of c.fieldChanges) {
-            const key = `${c.entityId}:${fc.field}`;
+        for (const c of diff.changes) {
+          const eid = gltfEntityOf(c)?.entityId ?? "";
+          for (const ch of (c.children ?? [])) {
+            const key = `${eid}:${ch.path}`;
             if (fieldSides[key]) {
-              fields.push({ entityId: c.entityId, field: fc.field, side: fieldSides[key]! });
+              fields.push({ entityId: eid, field: ch.path, side: fieldSides[key]! });
             }
           }
         }
