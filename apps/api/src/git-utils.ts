@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
+import { firstHandlerForPath } from "./handlers/index.js";
 
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
@@ -14,7 +15,7 @@ export async function git(storageKey: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-// ─── branches ────────────────────────────────────────────────────────────────
+// ─── branches ────────────────────────────────────────────────────────────────────────────
 
 export type BranchInfo = {
   name: string;
@@ -78,7 +79,7 @@ export async function branchShas(storageKey: string, branch: string): Promise<st
   } catch { return []; }
 }
 
-// ─── tags ────────────────────────────────────────────────────────────────────
+// ─── tags ───────────────────────────────────────────────────────────────────────────────
 
 export type TagInfo = {
   name: string;
@@ -121,7 +122,7 @@ export async function deleteTag(storageKey: string, name: string): Promise<void>
   await git(storageKey, ["tag", "-d", name]);
 }
 
-// ─── merge ───────────────────────────────────────────────────────────────────
+// ─── merge ───────────────────────────────────────────────────────────────────────────────
 
 export type MergeResult =
   | { ok: true; sha: string }
@@ -129,6 +130,88 @@ export type MergeResult =
   | { ok: false; alreadyMerged: true };
 
 export type MergeStrategy = "ours" | "theirs" | "none";
+
+const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
+
+function parseForgeFormats(raw: string): Set<string> {
+  const result = new Set<string>();
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    result.add(trimmed.startsWith(".") ? trimmed.toLowerCase() : "." + trimmed.toLowerCase());
+  }
+  return result;
+}
+
+function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    execFileCb(
+      "git",
+      ["show", `:${stage}:${file}`],
+      { cwd: dir, maxBuffer: MAX, encoding: "buffer" },
+      (err, stdout) => {
+        resolve(err ? null : (stdout as unknown as Buffer));
+      },
+    );
+  });
+}
+
+// Attempt to resolve all conflicted files using their semantic handler.
+// Returns true only if every conflict was resolved; false if any are unresolvable.
+async function trySemanticResolve(tmpDir: string): Promise<boolean> {
+  let activeExts: Set<string>;
+  try {
+    const { stdout } = await execFile("git", ["show", "HEAD:.forge-formats"], { cwd: tmpDir, maxBuffer: MAX });
+    activeExts = parseForgeFormats(stdout);
+  } catch {
+    return false;
+  }
+  if (activeExts.size === 0) return false;
+
+  let conflicted: string[];
+  try {
+    const { stdout } = await execFile(
+      "git", ["diff", "--name-only", "--diff-filter=U"],
+      { cwd: tmpDir, maxBuffer: MAX },
+    );
+    conflicted = stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return false;
+  }
+  if (conflicted.length === 0) return true;
+
+  for (const file of conflicted) {
+    const ext = path.extname(file).toLowerCase();
+    if (!activeExts.has(ext)) return false;
+
+    const handler = firstHandlerForPath(file);
+    if (!handler?.merge || !handler.capabilities.semanticMerge) return false;
+
+    const [base, ours, theirs] = await Promise.all([
+      readStageBuffer(tmpDir, 1, file),
+      readStageBuffer(tmpDir, 2, file),
+      readStageBuffer(tmpDir, 3, file),
+    ]);
+    if (!ours || !theirs) return false;
+
+    let result;
+    try {
+      result = await handler.merge(base ?? Buffer.alloc(0), ours, theirs);
+    } catch {
+      return false;
+    }
+
+    // If the handler itself reports unresolved semantic conflicts, bubble up
+    if (result.conflicts && result.conflicts.conflicts.length > 0) return false;
+
+    const fullPath = path.join(tmpDir, file);
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, result.blob);
+    await execFile("git", ["add", "--", file], { cwd: tmpDir, maxBuffer: MAX });
+  }
+
+  return true;
+}
 
 export async function performMerge(
   storageKey: string,
@@ -151,18 +234,27 @@ export async function performMerge(
       return { ok: false, alreadyMerged: true };
     } catch { /* not ancestor — proceed */ }
 
-    // Attempt merge with explicit identity so git doesn't fail on unconfigured hosts.
-    // When a strategy is given, pass -X ours/-X theirs to auto-resolve conflicts.
     const strategyArgs = strategy === "none" ? [] : ["-X", strategy];
+    let mergeClean = true;
     try {
       await execFile("git", [
-        "-c", "user.name=ForgeHub",
-        "-c", "user.email=merge@forgehub.io",
-        "-c", "commit.gpgsign=false",
+        ...MERGE_IDENTITY,
         "merge", "--no-ff", "-m", message, ...strategyArgs, `origin/${fromBranch}`,
       ], { cwd: tmpDir, maxBuffer: MAX });
     } catch {
-      return { ok: false, conflicts: true };
+      mergeClean = false;
+    }
+
+    if (!mergeClean) {
+      // Try resolving conflicts semantically for handler-supported formats
+      const resolved = await trySemanticResolve(tmpDir);
+      if (!resolved) return { ok: false, conflicts: true };
+
+      try {
+        await execFile("git", [...MERGE_IDENTITY, "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+      } catch {
+        return { ok: false, conflicts: true };
+      }
     }
 
     // Push result back to bare repo
@@ -179,7 +271,7 @@ export async function performMerge(
   }
 }
 
-// ─── fork ────────────────────────────────────────────────────────────────────
+// ─── fork ───────────────────────────────────────────────────────────────────────────────
 
 export async function cloneMirror(sourceKey: string, destKey: string): Promise<void> {
   const sourcePath = bareRepoPathFromKey(sourceKey);
@@ -189,7 +281,7 @@ export async function cloneMirror(sourceKey: string, destKey: string): Promise<v
   await execFile("git", ["clone", "--mirror", sourcePath, destPath], { maxBuffer: MAX });
 }
 
-// ─── branch SHA lookup for HEAD comparisons ──────────────────────────────────
+// ─── branch SHA lookup for HEAD comparisons ────────────────────────────────────────────
 
 export async function resolveBranchSha(storageKey: string, branch: string): Promise<string | null> {
   try {
@@ -210,7 +302,7 @@ export async function readFileAtBranch(
   }
 }
 
-// ─── commits ─────────────────────────────────────────────────────────────────
+// ─── commits ─────────────────────────────────────────────────────────────────────────────
 
 export type CommitInfo = {
   sha: string;
@@ -285,7 +377,7 @@ export async function getCommit(
   }
 }
 
-// ─── commit diff ─────────────────────────────────────────────────────────────
+// ─── commit diff ────────────────────────────────────────────────────────────────────────────
 
 export type DiffLine = {
   type: "context" | "add" | "remove";
@@ -386,7 +478,7 @@ export async function getCommitDiff(storageKey: string, sha: string): Promise<Fi
   }
 }
 
-// ─── PR merge-base helpers ────────────────────────────────────────────────────
+// ─── PR merge-base helpers ────────────────────────────────────────────────────────────
 
 export type PRFileEntry = {
   path: string;
@@ -437,13 +529,13 @@ export async function getMergeBaseFileList(
     for (const line of numstatOut.split("\n").filter(Boolean)) {
       const parts = line.split("\t");
       if (parts.length < 3) continue;
-      const [addStr, delStr, path] = parts;
+      const [addStr, delStr, filePath] = parts;
       const binary = addStr === "-" && delStr === "-";
       const additions = binary ? 0 : parseInt(addStr ?? "0", 10);
       const deletions = binary ? 0 : parseInt(delStr ?? "0", 10);
-      const info = statusMap.get(path ?? "") ?? { status: "modified" as const };
+      const info = statusMap.get(filePath ?? "") ?? { status: "modified" as const };
       entries.push({
-        path: path ?? "",
+        path: filePath ?? "",
         ...(info.oldPath ? { oldPath: info.oldPath } : {}),
         additions,
         deletions,
@@ -509,7 +601,7 @@ export async function listMergeBaseCommits(
   }
 }
 
-// ─── file tree ───────────────────────────────────────────────────────────────
+// ─── file tree ─────────────────────────────────────────────────────────────────────────────
 
 export type TreeEntry = {
   mode: string;
@@ -558,8 +650,6 @@ export async function listFilesDifferingBetweenBranches(
     return [];
   }
 }
-
-const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
 
 /**
  * Merge fromBranch into toBranch, writing resolved file contents for given paths,
@@ -626,7 +716,7 @@ export async function performMergeWithResolvedFiles(
   }
 }
 
-// ─── blob helpers (for handler.diff()) ───────────────────────────────────────
+// ─── blob helpers (for handler.diff()) ───────────────────────────────────────────────
 
 /** Resolve the git blob SHA for a file at a specific commit. */
 export async function resolveBlobSha(
