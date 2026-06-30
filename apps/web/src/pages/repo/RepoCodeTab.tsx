@@ -482,7 +482,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         <div className="card mt-4 overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-2.5 bg-gh-bg border-b border-gh-border">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
-              <path fillRule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.062 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm7.quincy 1.5v8.5a3.75 3.75 0 013.75-3.75h3.757V2.5h-3.5a2.25 2.25 0 00-2.25 2.25v.5h-1.5v-.5A2.25 2.25 0 006.003 2.5H2.5v9h2.758a3.75 3.75 0 013.742 3.5V3.25z" />
+              <path fillRule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.062 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm7.75 1.5v8.5a3.75 3.75 0 013.75-3.75h3.757V2.5h-3.5a2.25 2.25 0 00-2.25 2.25v.5h-1.5v-.5A2.25 2.25 0 006.003 2.5H2.5v9h2.758a3.75 3.75 0 013.742 3.5V3.25z" />
             </svg>
             <span className="text-sm font-semibold text-gh-text">{readme.path}</span>
           </div>

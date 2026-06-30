@@ -5,8 +5,9 @@ import { Header } from "../components/Header";
 import type { BranchInfo, Issue, PullRequest, Repo, User } from "../types";
 
 function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
-  if (!splat.startsWith("tree/")) return null;
-  const rest = splat.slice(5);
+  const prefix = splat.startsWith("tree/") ? "tree/" : splat.startsWith("blob/") ? "blob/" : null;
+  if (!prefix) return null;
+  const rest = splat.slice(prefix.length);
   const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
   for (const b of sorted) {
     if (rest === b.name || rest.startsWith(b.name + "/")) return b.name;
