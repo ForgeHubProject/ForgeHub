@@ -394,7 +394,7 @@ function IssueDetail({ token, handle, repoName, user, number }: {
         {/* Main content */}
         <div className="flex-1 min-w-0 space-y-4">
           <div className="card overflow-hidden">
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border text-sm" style={{ backgroundColor: "#ddf4ff" }}>
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border text-sm" style={{ backgroundColor: "#ffedd5" }}>
               <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
                 {issue.author[0]?.toUpperCase()}
               </div>

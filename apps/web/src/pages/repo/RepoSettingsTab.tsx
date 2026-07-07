@@ -108,7 +108,7 @@ function LabelForm({ initial, onSave, onCancel }: {
                 key={c}
                 type="button"
                 className="w-5 h-5 rounded-sm border-2 transition-transform hover:scale-110"
-                style={{ backgroundColor: `#${c}`, borderColor: color === c ? "#0969da" : "transparent" }}
+                style={{ backgroundColor: `#${c}`, borderColor: color === c ? "#ea580c" : "transparent" }}
                 onClick={() => setColor(c)}
               />
             ))}

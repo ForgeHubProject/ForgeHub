@@ -18,7 +18,7 @@ export function TextFileDiffViewer({ file }: FileDiffViewerProps) {
               <tr key={`h${hi}`} style={{ backgroundColor: "#eaf5ff" }}>
                 <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
                 <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
-                <td className="px-3 py-0.5" style={{ color: "#0969da" }}>{hunk.header}</td>
+                <td className="px-3 py-0.5" style={{ color: "#ea580c" }}>{hunk.header}</td>
               </tr>
               {hunk.lines.map((line, li) => {
                 const bg = line.type === "add" ? "#e6ffec" : line.type === "remove" ? "#ffebe9" : "#ffffff";
