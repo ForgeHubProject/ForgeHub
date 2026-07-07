@@ -163,6 +163,31 @@ npm run test:watch -w @forgehub/api
 
 Tests run against mocked Prisma and Git I/O — no real database or Git storage needed.
 
+## Containerized (Docker / Podman)
+
+`docker-compose.yml` builds two images — `apps/api/Dockerfile` (Fastify API + SQLite on a named volume) and `apps/web/Dockerfile` (Vite build served by nginx, which also reverse-proxies `/auth`, `/repos`, `/users`, `/notifications`, `/search`, and `/git` to the api container — one origin for everything, which matters for `forge login`/credential-helper behavior). The compose spec is plain Compose v2 syntax with no Docker-specific extensions, so it runs unchanged under either engine.
+
+```bash
+cp .env.example .env   # set JWT_SECRET: openssl rand -base64 32
+
+# Docker
+docker compose up -d --build
+
+# Podman (podman-compose, or podman v4.4+'s built-in `podman compose`)
+podman compose up -d --build
+```
+
+Web (SPA + proxied API + git-http) is published on `${WEB_PORT:-8080}`. The api container isn't published directly — everything goes through the web container's nginx, same as a real deployment behind one TLS-terminating reverse proxy.
+
+```bash
+curl http://localhost:8080/health
+forge login http://localhost:8080
+```
+
+Data (`forgehub.db` and `git-storage/`) lives on the `forgehub-data` named volume, so `docker compose down` (without `-v`) is safe — data survives a rebuild.
+
+**Note on Postgres:** `apps/api/prisma/schema.prisma` targets SQLite, and the checked-in migrations under `apps/api/prisma/migrations/` are SQLite-dialect SQL — they will not run against Postgres as-is. Moving to Postgres for larger deployments means regenerating the migration history against a Postgres datasource first; that's a separate piece of work, not something this compose file does.
+
 ## Clone / push walkthrough
 
 If you have the `forge` CLI installed, `forge login http://localhost:3001` handles registration-to-credential in one step (prompts for email/password, mints a PAT, stores it via git's credential helper) — skip straight to `git clone`/`git push` afterward. The manual walkthrough below is the same flow spelled out over raw `curl`.

@@ -1,0 +1,30 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: "file:/data/forgehub.db"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — see .env.example}"
+      PORT: "3001"
+      GIT_STORAGE_ROOT: "/data/git-storage"
+    volumes:
+      - forgehub-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  forgehub-data:
