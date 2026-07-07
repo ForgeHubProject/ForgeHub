@@ -1,6 +1,7 @@
 import type {
   BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PRFileEntry, PublicProfile, PullRequest, Release, Repo, Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, Repo,
+  Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -721,6 +722,28 @@ export async function addCollaborator(
 
 export async function removeCollaborator(token: string, repoName: string, handle: string): Promise<void> {
   return req(`/repos/${repoName}/collaborators/${handle}`, { method: "DELETE", token });
+}
+
+// ─── personal access tokens ─────────────────────────────────────────────────────
+
+export async function listTokens(token: string): Promise<{ tokens: PersonalAccessToken[] }> {
+  return req("/auth/tokens", { token });
+}
+
+export async function createToken(
+  token: string,
+  name: string,
+  expiresInDays?: number,
+): Promise<PersonalAccessToken & { token: string }> {
+  return req("/auth/tokens", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ name, expiresInDays }),
+  });
+}
+
+export async function revokeToken(token: string, id: string): Promise<void> {
+  return req(`/auth/tokens/${id}`, { method: "DELETE", token });
 }
 
 export async function search(

@@ -5,6 +5,7 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { RepoListPage } from "./pages/RepoListPage";
 import { RepoPage } from "./pages/RepoPage";
 import { SearchPage } from "./pages/SearchPage";
+import { SettingsTokensPage } from "./pages/SettingsTokensPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
 import type { User } from "./types";
 
@@ -72,6 +73,16 @@ function AppRoutes() {
         element={
           authed ? (
             <SearchPage token={token!} user={user!} onLogout={handleLogout} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/settings/tokens"
+        element={
+          authed ? (
+            <SettingsTokensPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
             <Navigate to="/login" replace />
           )

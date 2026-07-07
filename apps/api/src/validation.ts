@@ -26,6 +26,11 @@ export const loginBodySchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const createTokenBodySchema = z.object({
+  name: z.string().min(1).max(120),
+  expiresInDays: z.number().int().positive().max(3650).optional(),
+});
+
 export const repoVisibilitySchema = z.enum(["public", "private"]);
 export const collaboratorRoleSchema = z.enum(["reader", "writer"]);
 

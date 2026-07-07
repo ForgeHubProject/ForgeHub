@@ -23,6 +23,7 @@ import { repoRoutes } from "./routes/repos.js";
 import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { tagRoutes } from "./routes/tags.js";
+import { tokenRoutes } from "./routes/tokens.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -61,6 +62,7 @@ export async function buildServer() {
 
   await app.register(devUiRoutes);
   await app.register(authRoutes);
+  await app.register(tokenRoutes);
   await app.register(repoRoutes);
   await app.register(snapshotRoutes);
   await app.register(compareRoutes);
