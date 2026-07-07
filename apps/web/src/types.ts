@@ -9,6 +9,15 @@ export type User = {
   createdAt?: string;
 };
 
+export type PersonalAccessToken = {
+  id: string;
+  name: string;
+  prefix: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+};
+
 export type PublicProfile = {
   id: string;
   handle: string;

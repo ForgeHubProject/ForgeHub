@@ -230,6 +230,13 @@ export function Header({ user, onLogout, token }: Props) {
                     <span className="ml-auto counter">{unreadCount}</span>
                   )}
                 </Link>
+                <Link
+                  to="/settings/tokens"
+                  className="flex items-center px-4 py-1.5 text-sm text-gh-text hover:bg-gh-accent hover:text-white no-underline"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Developer settings
+                </Link>
               </div>
 
               <div className="border-t py-1" style={{ borderColor: "#eaeef2" }}>

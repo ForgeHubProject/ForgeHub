@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { ingestCommitRange } from "../ingest.js";
 import { prisma } from "../prisma.js";
+import { hashToken } from "../tokens.js";
 
 const execFile = promisify(execFileCb);
 
@@ -57,6 +58,14 @@ async function resolveActorIdFromAuthHeader(
         const payload = await app.jwt.verify<{ sub?: string }>(password);
         return payload.sub;
       } catch { /* not a JWT, fall through */ }
+
+      // Accept a Personal Access Token as password (scoped, named, revocable — see /auth/tokens)
+      const pat = await prisma.personalAccessToken.findUnique({ where: { tokenHash: hashToken(password) } });
+      if (pat) {
+        if (pat.expiresAt && pat.expiresAt.getTime() < Date.now()) return undefined;
+        prisma.personalAccessToken.update({ where: { id: pat.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+        return pat.userId;
+      }
 
       // Accept handle-or-email + ForgeHub password (for interactive git prompts)
       const user = await prisma.user.findFirst({
