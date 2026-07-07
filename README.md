@@ -47,6 +47,9 @@ The API is fully functional end-to-end. Below is a summary of what is running.
 | `POST` | `/auth/register` | Create account (`email`, `password`, `handle`, optional `displayName`) |
 | `POST` | `/auth/login` | Returns a Bearer JWT |
 | `GET` | `/auth/me` | Current user from token |
+| `POST` | `/auth/tokens` | Create a named, optionally-expiring Personal Access Token (plaintext shown once) |
+| `GET` | `/auth/tokens` | List the caller's tokens (name, prefix, expiry, last used — never the secret) |
+| `DELETE` | `/auth/tokens/:id` | Revoke a token immediately |
 
 ### Repositories
 
@@ -120,7 +123,9 @@ Bare repositories are served over standard Git HTTPS transport so any Git client
 | `GET /git/:handle/:repo/info/refs?service=git-receive-pack` | Push capability advertisement |
 | `POST /git/:handle/:repo/git-receive-pack` | Push pack transfer (triggers auto-ingest) |
 
-Auth on Git endpoints accepts either `Authorization: Bearer <jwt>` or `Authorization: Basic base64(x:<jwt>)`. Public repos are readable anonymously; write requires owner or `writer` collaborator.
+Auth on Git endpoints accepts `Authorization: Bearer <jwt>`, `Authorization: Basic base64(x:<jwt>)`, or a Personal Access Token as the Basic-auth password (`git clone http://<handle>:<pat>@host/...`). Public repos are readable anonymously; write requires owner or `writer` collaborator. The `forge` CLI's `forge login <url>` command wraps this: it logs in, mints a PAT, and stores it via git's own credential-helper protocol so neither `git` nor `forge` need the token passed by hand afterward.
+
+**Run self-hosted instances behind HTTPS.** Git credential helpers (and most OS/browser credential managers) key lookups on `protocol` + `host` and generally won't offer to fill or prompt for a plain `http://` remote the way they do for `https://`. Plain HTTP will work for git operations themselves, but credential-manager integration (`forge login`, `git credential fill`) degrades — put a TLS-terminating proxy in front of any instance where that matters.
 
 ## Local development
 
@@ -159,6 +164,8 @@ npm run test:watch -w @forgehub/api
 Tests run against mocked Prisma and Git I/O — no real database or Git storage needed.
 
 ## Clone / push walkthrough
+
+If you have the `forge` CLI installed, `forge login http://localhost:3001` handles registration-to-credential in one step (prompts for email/password, mints a PAT, stores it via git's credential helper) — skip straight to `git clone`/`git push` afterward. The manual walkthrough below is the same flow spelled out over raw `curl`.
 
 ```bash
 # Register and get a token
