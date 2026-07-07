@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { listNotifications } from "../api";
+import { ForgeLogo } from "./ForgeLogo";
 import type { User } from "../types";
 
 type Props = {
@@ -8,19 +9,6 @@ type Props = {
   onLogout: () => void;
   token?: string;
 };
-
-const OctocatLogo = () => (
-  <svg height="28" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
-      0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
-      -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
-      .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
-      -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27
-      .68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
-      .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
-      0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-  </svg>
-);
 
 const PlusDropIcon = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -90,7 +78,7 @@ export function Header({ user, onLogout, token }: Props) {
   return (
     <header
       className="flex items-center gap-3 px-4 h-14 relative z-50"
-      style={{ backgroundColor: "#24292f" }}
+      style={{ backgroundColor: "#1c1917" }}
     >
       {/* Logo */}
       <Link
@@ -98,7 +86,7 @@ export function Header({ user, onLogout, token }: Props) {
         className="flex items-center text-white hover:opacity-75 transition-opacity flex-shrink-0"
         style={{ textDecoration: "none" }}
       >
-        <OctocatLogo />
+        <ForgeLogo size={28} />
       </Link>
 
       {/* Breadcrumb / nav — hidden on small screens */}
@@ -106,7 +94,7 @@ export function Header({ user, onLogout, token }: Props) {
         <Link
           to={`/${user.handle}`}
           className="text-sm font-semibold px-2 py-1 rounded-md transition-colors"
-          style={{ color: "rgba(240,246,252,0.9)", textDecoration: "none" }}
+          style={{ color: "rgba(250,250,249,0.9)", textDecoration: "none" }}
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)")}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = "")}
         >
@@ -120,7 +108,7 @@ export function Header({ user, onLogout, token }: Props) {
           <svg
             width="14" height="14" viewBox="0 0 16 16" fill="currentColor"
             className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-            style={{ color: "rgba(240,246,252,0.5)" }}
+            style={{ color: "rgba(250,250,249,0.5)" }}
           >
             <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06L10.68 11.74z" />
           </svg>
@@ -132,19 +120,19 @@ export function Header({ user, onLogout, token }: Props) {
             className="w-full pl-8 pr-3 py-1 text-sm rounded-md border outline-none transition-colors"
             style={{
               backgroundColor: "rgba(255,255,255,0.08)",
-              borderColor: "rgba(240,246,252,0.2)",
-              color: "rgba(240,246,252,0.9)",
+              borderColor: "rgba(250,250,249,0.2)",
+              color: "rgba(250,250,249,0.9)",
             }}
             onFocus={(e) => {
               e.currentTarget.style.backgroundColor = "#ffffff";
-              e.currentTarget.style.color = "#1f2328";
-              e.currentTarget.style.borderColor = "#0969da";
+              e.currentTarget.style.color = "#1c1917";
+              e.currentTarget.style.borderColor = "#ea580c";
             }}
             onBlur={(e) => {
               if (!e.currentTarget.value) {
                 e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.08)";
-                e.currentTarget.style.color = "rgba(240,246,252,0.9)";
-                e.currentTarget.style.borderColor = "rgba(240,246,252,0.2)";
+                e.currentTarget.style.color = "rgba(250,250,249,0.9)";
+                e.currentTarget.style.borderColor = "rgba(250,250,249,0.2)";
               }
             }}
           />
@@ -156,9 +144,9 @@ export function Header({ user, onLogout, token }: Props) {
         {/* New button */}
         <button
           className="flex items-center gap-1 px-2 py-1 rounded-md text-sm transition-colors flex-shrink-0"
-          style={{ color: "rgba(240,246,252,0.75)" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,1)"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,0.75)"; }}
+          style={{ color: "rgba(250,250,249,0.75)" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(250,250,249,1)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(250,250,249,0.75)"; }}
           onClick={() => navigate("/")}
           title="Create new…"
         >
@@ -172,9 +160,9 @@ export function Header({ user, onLogout, token }: Props) {
         <Link
           to="/notifications"
           className="flex items-center px-2 py-1 rounded-md transition-colors"
-          style={{ color: "rgba(240,246,252,0.75)", textDecoration: "none" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,1)"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(240,246,252,0.75)"; }}
+          style={{ color: "rgba(250,250,249,0.75)", textDecoration: "none" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = "rgba(250,250,249,1)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = ""; (e.currentTarget as HTMLElement).style.color = "rgba(250,250,249,0.75)"; }}
           title="Notifications"
         >
           <BellIcon count={unreadCount} />
@@ -189,7 +177,7 @@ export function Header({ user, onLogout, token }: Props) {
           >
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
-              style={{ backgroundColor: "#0969da" }}
+              style={{ backgroundColor: "#ea580c" }}
             >
               {initial}
             </div>
@@ -200,12 +188,12 @@ export function Header({ user, onLogout, token }: Props) {
               className="absolute right-0 top-[calc(100%+8px)] w-56 rounded-lg shadow-xl z-50 py-1 text-sm overflow-hidden"
               style={{
                 backgroundColor: "#ffffff",
-                border: "1px solid #d0d7de",
-                boxShadow: "0 8px 24px rgba(140,149,159,0.2)",
+                border: "1px solid #e7e5e4",
+                boxShadow: "0 8px 24px rgba(120,113,108,0.2)",
               }}
             >
               {/* User info */}
-              <div className="px-4 py-3 border-b" style={{ borderColor: "#eaeef2" }}>
+              <div className="px-4 py-3 border-b" style={{ borderColor: "#f5f5f4" }}>
                 <Link to={`/${user.handle}`} className="no-underline" onClick={() => setMenuOpen(false)}>
                   <p className="font-semibold text-gh-text text-sm hover:text-gh-accent">{user.displayName || user.handle}</p>
                   <p className="text-xs text-gh-muted mt-0.5">@{user.handle}</p>
@@ -239,7 +227,7 @@ export function Header({ user, onLogout, token }: Props) {
                 </Link>
               </div>
 
-              <div className="border-t py-1" style={{ borderColor: "#eaeef2" }}>
+              <div className="border-t py-1" style={{ borderColor: "#f5f5f4" }}>
                 <button
                   className="w-full text-left px-4 py-1.5 text-sm text-gh-text hover:bg-gh-accent hover:text-white bg-transparent border-none cursor-pointer"
                   onClick={() => { setMenuOpen(false); onLogout(); }}

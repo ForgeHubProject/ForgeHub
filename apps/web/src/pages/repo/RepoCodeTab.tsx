@@ -210,7 +210,7 @@ function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
                   <button
                     key={b.name}
                     className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gh-accent hover:text-white transition-colors"
-                    style={{ color: b.name === currentRef ? "#0969da" : "#1f2328" }}
+                    style={{ color: b.name === currentRef ? "#ea580c" : "#1c1917" }}
                     onClick={() => { onRefChange(b.name); close(); }}
                   >
                     {b.name === currentRef ? (
