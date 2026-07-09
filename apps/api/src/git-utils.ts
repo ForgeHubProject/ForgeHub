@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
-import { firstHandlerForPath } from "./handlers/index.js";
+import { loadActiveFormats } from "./forge-formats.js";
+import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
@@ -133,14 +134,9 @@ export type MergeStrategy = "ours" | "theirs" | "none";
 
 const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
 
-function parseForgeFormats(raw: string): Set<string> {
-  const result = new Set<string>();
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    result.add(trimmed.startsWith(".") ? trimmed.toLowerCase() : "." + trimmed.toLowerCase());
-  }
-  return result;
+// The repo's opt-in extension set at a commit, for scoping handler resolution.
+export async function activeFormatsAtCommit(storageKey: string, commitIsh: string): Promise<Set<string>> {
+  return loadActiveFormats(bareRepoPathFromKey(storageKey), commitIsh);
 }
 
 function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {
@@ -159,13 +155,7 @@ function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<B
 // Attempt to resolve all conflicted files using their semantic handler.
 // Returns true only if every conflict was resolved; false if any are unresolvable.
 async function trySemanticResolve(tmpDir: string): Promise<boolean> {
-  let activeExts: Set<string>;
-  try {
-    const { stdout } = await execFile("git", ["show", "HEAD:.forge-formats"], { cwd: tmpDir, maxBuffer: MAX });
-    activeExts = parseForgeFormats(stdout);
-  } catch {
-    return false;
-  }
+  const activeExts = await loadActiveFormats(tmpDir, "HEAD");
   if (activeExts.size === 0) return false;
 
   let conflicted: string[];
@@ -181,10 +171,7 @@ async function trySemanticResolve(tmpDir: string): Promise<boolean> {
   if (conflicted.length === 0) return true;
 
   for (const file of conflicted) {
-    const ext = path.extname(file).toLowerCase();
-    if (!activeExts.has(ext)) return false;
-
-    const handler = firstHandlerForPath(file);
+    const handler = firstHandlerForPathAndFormats(file, activeExts);
     if (!handler?.merge || !handler.capabilities.semanticMerge) return false;
 
     const [base, ours, theirs] = await Promise.all([
