@@ -5,7 +5,12 @@ import { plainTextHandler } from "./plain-text/index.js";
 registerHandler(gltfSceneHandler);
 registerHandler(plainTextHandler);
 
-export { getHandler, firstHandlerForPath, matchHandlersForPath } from "./registry.js";
+export {
+  getHandler,
+  firstHandlerForPath,
+  firstHandlerForPathAndFormats,
+  matchHandlersForPath,
+} from "./registry.js";
 export {
   GLTF_SCENE_HANDLER_ID,
   PLAIN_TEXT_HANDLER_ID,
