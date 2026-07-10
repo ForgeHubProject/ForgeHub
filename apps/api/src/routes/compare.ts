@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import {
-  firstHandlerForPath,
+  firstHandlerForPathAndFormats,
   GLTF_SCENE_HANDLER_ID,
   PLAIN_TEXT_HANDLER_ID,
 } from "../handlers/index.js";
 import type { StructuredDiff, DiffChange } from "../handlers/types.js";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
+import { activeFormatsAtCommit, resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
 import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 
@@ -51,8 +51,19 @@ export async function compareRoutes(app: FastifyInstance) {
         });
       }
 
-      const handler = firstHandlerForPath(baseSnap.sourceFile);
       const storageKey = repo.storageKey;
+
+      // Handler resolution is scoped to the repo's opt-in formats at the
+      // target commit. If the format has since been disabled, the fast path
+      // is skipped and the snapshot-based fallback below still serves the
+      // already-ingested data.
+      const handler =
+        storageKey && targetSnap.gitCommitSha
+          ? firstHandlerForPathAndFormats(
+              baseSnap.sourceFile,
+              await activeFormatsAtCommit(storageKey, targetSnap.gitCommitSha),
+            )
+          : undefined;
 
       // ── Fast path: blob-level diff with cache ─────────────────────────────────
       if (handler && storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
