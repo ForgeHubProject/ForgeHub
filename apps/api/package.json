@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && cp src/fhr/wasm_exec.cjs dist/fhr/wasm_exec.cjs",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
