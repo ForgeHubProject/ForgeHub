@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 import type { ArtifactHandler } from "./types.js";
 
 const byId = new Map<string, ArtifactHandler>();
@@ -17,4 +18,19 @@ export function matchHandlersForPath(path: string): ArtifactHandler[] {
 
 export function firstHandlerForPath(path: string): ArtifactHandler | undefined {
   return matchHandlersForPath(path)[0];
+}
+
+/**
+ * Resolve a handler scoped to one repo's opt-in extension set (its
+ * .forge/formats file). The global registry is the pool of available
+ * handlers; this narrows the selection to what the repo enabled. An empty
+ * set means the repo has not opted in to any semantic handling, so no
+ * handler is returned.
+ */
+export function firstHandlerForPathAndFormats(
+  filePath: string,
+  activeExts: Set<string>,
+): ArtifactHandler | undefined {
+  if (!activeExts.has(extname(filePath).toLowerCase())) return undefined;
+  return firstHandlerForPath(filePath);
 }
