@@ -1,8 +1,31 @@
 import type {
-  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffResult, FileDiff, Issue, IssueComment,
+  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
   Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, Repo,
   Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
+
+/** Result of GET /repos/:h/:n/filediff — a format-aware diff for one file blob pair. */
+export type SemanticFileDiff = {
+  version: string;
+  format: string;
+  handlerId: string;
+  path: string;
+  changes: DiffChange[];
+};
+
+/** Compute a semantic diff for one file at a commit (base defaults to its parent). */
+export async function getFileSemanticDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+): Promise<SemanticFileDiff> {
+  return req(
+    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    { token: token ?? undefined },
+  );
+}
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const BASE = API_BASE;
