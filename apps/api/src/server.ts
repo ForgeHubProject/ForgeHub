@@ -8,6 +8,8 @@ import { authRoutes } from "./routes/auth.js";
 import { branchRoutes } from "./routes/branches.js";
 import { commitRoutes } from "./routes/commits.js";
 import { compareRoutes } from "./routes/compare.js";
+import { fileDiffRoutes } from "./routes/filediff.js";
+import { rendererRoutes } from "./routes/renderers.js";
 import { constraintRoutes } from "./routes/constraints.js";
 import { devUiRoutes } from "./routes/dev-ui.js";
 import { entityRoutes } from "./routes/entities.js";
@@ -66,6 +68,8 @@ export async function buildServer() {
   await app.register(repoRoutes);
   await app.register(snapshotRoutes);
   await app.register(compareRoutes);
+  await app.register(fileDiffRoutes);
+  await app.register(rendererRoutes);
   await app.register(constraintRoutes);
   await app.register(entityRoutes);
   await app.register(branchRoutes);

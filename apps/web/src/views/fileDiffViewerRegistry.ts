@@ -1,6 +1,7 @@
 import type { FileDiffViewerComponent } from "./fileDiffViewerTypes";
 import { FallbackFileDiffViewer } from "./diffViewers/FallbackFileDiffViewer";
 import { TextFileDiffViewer } from "./diffViewers/TextFileDiffViewer";
+import { SceneFileDiffViewer } from "./diffViewers/SceneFileDiffViewer";
 
 const registry = new Map<string, FileDiffViewerComponent>();
 
@@ -47,6 +48,9 @@ registerFileDiffViewer(
   FallbackFileDiffViewer,
 );
 registerFileDiffViewer(
-  ["glb", "gltf", "zip", "tar", "gz", "bz2", "7z", "rar", "wasm"],
+  ["zip", "tar", "gz", "bz2", "7z", "rar", "wasm"],
   FallbackFileDiffViewer,
 );
+// glTF/GLB get a format-aware change tree from the FHR renderer bundle,
+// falling back gracefully to a message if the repo hasn't opted the format in.
+registerFileDiffViewer(["glb", "gltf"], SceneFileDiffViewer);

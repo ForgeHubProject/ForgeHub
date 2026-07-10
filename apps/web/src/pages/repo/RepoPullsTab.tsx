@@ -131,7 +131,7 @@ function PRFileRow({ token, handle, repoName, prNumber, file, base, headRef }: {
             {[...Array(5)].map((_, i) => <div key={i} className="h-3 bg-gray-100 rounded" style={{ width: `${50 + i * 10}%` }} />)}
           </div>
         ) : diff ? (
-          <Viewer file={diff} repoBase={base} headRef={headRef} />
+          <Viewer file={diff} repoBase={base} headRef={headRef} token={token} />
         ) : (
           <p className="px-4 py-3 text-sm text-gh-muted italic">No diff available</p>
         )
