@@ -37,7 +37,7 @@ function groupByDate(commits: CommitInfo[]): Array<{ date: string; commits: Comm
 
 // ─── Diff Viewer ──────────────────────────────────────────────────────────────
 
-function FileDiffCard({ file, sha, base }: { file: FileDiff; sha: string; base: string }) {
+function FileDiffCard({ file, sha, base, token }: { file: FileDiff; sha: string; base: string; token: string }) {
   const [expanded, setExpanded] = useState(true);
   const displayPath = file.status === "renamed"
     ? `${file.oldPath} → ${file.newPath}`
@@ -82,7 +82,7 @@ function FileDiffCard({ file, sha, base }: { file: FileDiff; sha: string; base: 
         </div>
       </div>
 
-      {expanded && <Viewer file={file} repoBase={base} headRef={sha} />}
+      {expanded && <Viewer file={file} repoBase={base} headRef={sha} token={token} />}
     </div>
   );
 }
@@ -188,7 +188,7 @@ function CommitDetailView({ token, handle, repoName, sha, base }: {
           </div>
           <div className="space-y-3">
             {diffFiles.map((file, i) => (
-              <FileDiffCard key={i} file={file} sha={sha} base={base} />
+              <FileDiffCard key={i} file={file} sha={sha} base={base} token={token} />
             ))}
           </div>
         </>
