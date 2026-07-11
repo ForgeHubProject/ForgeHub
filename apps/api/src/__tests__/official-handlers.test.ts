@@ -13,7 +13,7 @@ const sampleDiff: StructuredDiff = { version: "1.0", format: "gltf-scene", chang
 function deps(over: Partial<OfficialHandlerDeps> = {}): OfficialHandlerDeps {
   return {
     fetchImpl: vi.fn(async () => new Response(new ArrayBuffer(8), { status: 200 })) as unknown as typeof fetch,
-    instantiate: vi.fn(async () => ({ diff: () => sampleDiff })),
+    instantiate: vi.fn(async () => ({ diff: async () => sampleDiff })),
     ...over,
   };
 }
@@ -65,7 +65,7 @@ describe("officialWasmDiff", () => {
   });
 
   it("falls back (null) when the wasm handler throws on the input", async () => {
-    const d = deps({ instantiate: vi.fn(async () => ({ diff: () => { throw new Error("bad gltf"); } })) });
+    const d = deps({ instantiate: vi.fn(async () => ({ diff: async () => { throw new Error("bad gltf"); } })) });
     const res = await officialWasmDiff("model.gltf", gltfExts, Buffer.from("a"), Buffer.from("b"), d);
     expect(res).toBeNull();
   });
