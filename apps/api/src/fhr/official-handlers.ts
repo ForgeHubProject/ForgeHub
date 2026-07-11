@@ -91,7 +91,7 @@ export async function officialWasmDiff(
   if (!handler) return null;
 
   try {
-    return { diff: handler.diff(base, head), handlerId };
+    return { diff: await handler.diff(base, head), handlerId };
   } catch {
     // Malformed input the wasm rejects — fall back to the built-in handler.
     return null;
