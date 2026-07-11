@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { git, readBlobAsBuffer, activeFormatsAtCommit } from "../git-utils.js";
 import { firstHandlerForPathAndFormats } from "../handlers/index.js";
+import { officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
 // the two git blobs. This is the bridge that lets the commit/PR file views show
@@ -57,9 +58,20 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "File not found at this commit" });
       }
 
+      const baseBlob = baseBuf ?? Buffer.alloc(0);
+      const headBlob = headBuf ?? Buffer.alloc(0);
+
+      // Prefer the official FHR wasm handler — the exact binary forge runs, so
+      // ForgeHub's diff matches the CLI's (closes the producer/consumer drift in
+      // #59). Only official handlers run here; falls back to the built-in TS
+      // handler if the wasm is unavailable or rejects the input.
       try {
-        const diff = await handler.diff(baseBuf ?? Buffer.alloc(0), headBuf ?? Buffer.alloc(0));
-        return { ...diff, handlerId: handler.id, path: filePath };
+        const official = await officialWasmDiff(filePath, activeExts, baseBlob, headBlob);
+        if (official) {
+          return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm" };
+        }
+        const diff = await handler.diff(baseBlob, headBlob);
+        return { ...diff, handlerId: handler.id, path: filePath, engine: "builtin" };
       } catch (e) {
         return reply.status(500).send({ error: `diff failed: ${String(e)}` });
       }
