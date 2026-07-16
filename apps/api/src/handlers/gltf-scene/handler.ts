@@ -6,7 +6,32 @@ import { GLTF_SCENE_HANDLER_ID } from "../types.js";
 const EPS = 1e-4;
 
 function matchesGltfPath(path: string): boolean {
-  return path.toLowerCase().endsWith(".gltf");
+  const p = path.toLowerCase();
+  // .glb is the binary glTF container (Blender's default export); .gltf is the
+  // JSON form. Both are the same scene format — one handler covers both.
+  return p.endsWith(".gltf") || p.endsWith(".glb");
+}
+
+// Decode a raw glTF blob into a document. .gltf is JSON; .glb is a binary
+// container: a 12-byte header (magic "glTF") followed by length-prefixed
+// chunks, the first of which ("JSON") holds the document. Mirrors the FHR
+// renderer bundle's decodeGltf so the server diffs what the renderer displays.
+function decodeGltfDocument(buf: Buffer): GltfDocument {
+  const GLB_MAGIC = 0x46546c67; // "glTF" little-endian
+  if (buf.length >= 12 && buf.readUInt32LE(0) === GLB_MAGIC) {
+    let offset = 12;
+    while (offset + 8 <= buf.length) {
+      const chunkLen = buf.readUInt32LE(offset);
+      const chunkType = buf.readUInt32LE(offset + 4);
+      const dataStart = offset + 8;
+      if (chunkType === 0x4e4f534a) { // "JSON"
+        return JSON.parse(buf.toString("utf8", dataStart, dataStart + chunkLen)) as GltfDocument;
+      }
+      offset = dataStart + chunkLen;
+    }
+    throw new Error("GLB has no JSON chunk");
+  }
+  return JSON.parse(buf.toString("utf8")) as GltfDocument;
 }
 
 async function ingestGltfUtf8(input: IngestInput): Promise<string> {
@@ -168,8 +193,8 @@ function diffGltfEntities(baseEntities: ParsedEntity[], headEntities: ParsedEnti
 
 async function diffGltf(base: Buffer, head: Buffer): Promise<StructuredDiff> {
   const parse = (buf: Buffer): ParsedEntity[] => {
-    const doc = JSON.parse(buf.toString("utf8")) as GltfDocument;
-    return parseGltf(doc);
+    if (buf.length === 0) return [];
+    return parseGltf(decodeGltfDocument(buf));
   };
   return {
     version: "1.0",

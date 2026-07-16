@@ -1,8 +1,9 @@
+import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { git, readBlobAsBuffer, activeFormatsAtCommit } from "../git-utils.js";
 import { firstHandlerForPathAndFormats } from "../handlers/index.js";
-import { officialWasmDiff } from "../fhr/official-handlers.js";
+import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
 // the two git blobs. This is the bridge that lets the commit/PR file views show
@@ -30,11 +31,17 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       const storageKey = repo.storageKey;
       if (!storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      // Only files the repo opted into (its .forge/formats at this commit) get a
-      // semantic handler; everything else falls back to the text patch view.
+      // FHR is the authority on what is semantically diffable: a file qualifies
+      // iff an *official* FHR handler covers its extension AND the repo opted the
+      // extension in (its .forge/formats at this commit). ForgeHub no longer
+      // consults its own built-in handler registry to make this decision — the
+      // built-in handler is only an offline fallback for computing the diff when
+      // the FHR release is unreachable (retirement tracked in #74). A community
+      // (non-official) handler resolves to null here and is never run
+      // server-side; that path belongs to the consented client sandbox (#70).
       const activeExts = await activeFormatsAtCommit(storageKey, sha);
-      const handler = firstHandlerForPathAndFormats(filePath, activeExts);
-      if (!handler) {
+      const ext = extname(filePath).toLowerCase();
+      if (!activeExts.has(ext) || !officialHandlerId(ext)) {
         return reply.status(404).send({ error: "No semantic handler for this file" });
       }
 
@@ -61,17 +68,22 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       const baseBlob = baseBuf ?? Buffer.alloc(0);
       const headBlob = headBuf ?? Buffer.alloc(0);
 
-      // Prefer the official FHR wasm handler — the exact binary forge runs, so
-      // ForgeHub's diff matches the CLI's (closes the producer/consumer drift in
-      // #59). Only official handlers run here; falls back to the built-in TS
-      // handler if the wasm is unavailable or rejects the input.
+      // The official FHR wasm handler is the engine — the exact binary forge
+      // runs, so ForgeHub's diff matches the CLI's (closes the producer/consumer
+      // drift in #59). The built-in TS handler is consulted only as an offline
+      // fallback when the FHR release is unreachable or rejects the input; it is
+      // being retired (#74) and is never the authority.
       try {
         const official = await officialWasmDiff(filePath, activeExts, baseBlob, headBlob);
         if (official) {
           return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm" };
         }
-        const diff = await handler.diff(baseBlob, headBlob);
-        return { ...diff, handlerId: handler.id, path: filePath, engine: "builtin" };
+        const fallback = firstHandlerForPathAndFormats(filePath, activeExts);
+        if (!fallback) {
+          return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
+        }
+        const diff = await fallback.diff(baseBlob, headBlob);
+        return { ...diff, handlerId: fallback.id, path: filePath, engine: "builtin" };
       } catch (e) {
         return reply.status(500).send({ error: `diff failed: ${String(e)}` });
       }
