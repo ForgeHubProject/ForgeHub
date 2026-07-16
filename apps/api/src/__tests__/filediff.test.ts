@@ -29,6 +29,7 @@ let repo: TestRepo;
 let app: FastifyInstance;
 let baseSha: string;
 let headSha: string;
+let communitySha: string;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -47,6 +48,13 @@ beforeAll(async () => {
     "init scene",
   );
   headSha = await makeCommit(repo.workDir, { "model.gltf": gltf(5) }, "move cube");
+  // A repo can opt a format into .forge/formats that no *official* FHR handler
+  // covers (e.g. a community handler). The server must still refuse to diff it.
+  communitySha = await makeCommit(
+    repo.workDir,
+    { ".forge/formats": ".gltf\n.widget\n", "part.widget": "v=1" },
+    "opt in a community format",
+  );
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   app = await createTestServer();
 }, 30_000);
@@ -89,6 +97,14 @@ describe("GET /repos/:handle/:name/filediff", () => {
 
   it("404s for a file whose extension is not in .forge/formats", async () => {
     const res = await get(`path=readme.md&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("404s for an opted-in but non-official extension (FHR is the authority, not opt-in alone)", async () => {
+    // .widget is in .forge/formats at communitySha but no official FHR handler
+    // covers it, so the server refuses — a community handler would run in the
+    // consented client sandbox (#70), never here.
+    const res = await get(`path=part.widget&sha=${communitySha}`);
     expect(res.statusCode).toBe(404);
   });
 
