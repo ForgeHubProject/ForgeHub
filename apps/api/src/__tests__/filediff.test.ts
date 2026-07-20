@@ -1,6 +1,13 @@
 /**
  * Semantic file-diff endpoint tests. Uses a real bare git repo with committed
  * glTF blobs and a .forge/formats opt-in; prisma is mocked for repo visibility.
+ *
+ * FHR's manifest is the authority for the semantic gate (stubbed here via the
+ * manifest test hook so ".gltf" resolves officially without a network call).
+ * The wasm engine itself is mocked (officialWasmDiff) so these endpoint tests
+ * assert routing/gating/SHAs deterministically without a real wasm build. The
+ * built-in TS fallback has been retired from this path (#74): when the official
+ * handler can't run, the endpoint returns 503 — never a substitute engine.
  */
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 
@@ -12,10 +19,42 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+// Keep the real (manifest-driven) officialHandlerId for the gate; mock only the
+// wasm compute so tests don't depend on a real wasm build.
+vi.mock("../fhr/official-handlers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fhr/official-handlers.js")>();
+  return { ...actual, officialWasmDiff: vi.fn() };
+});
+
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
+import { officialWasmDiff } from "../fhr/official-handlers.js";
+import { __setManifestForTests, __resetManifest } from "../fhr/manifest.js";
 import { createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
 import { createTestServer } from "./helpers/server.js";
+
+// ".gltf" → gltf-scene, official per the (stubbed) manifest.
+const MANIFEST = `
+[formats]
+".gltf" = { handler = "gltf-scene", build = "e520cc6" }
+".glb"  = { handler = "gltf-scene", build = "e520cc6" }
+
+[assets.handlers."gltf-scene"]
+"wasm" = "https://cdn.test/fhr/forge-handler-gltf-scene.wasm"
+
+[assets.renderers]
+"gltf-scene" = "https://cdn.test/fhr/renderer-gltf-scene.js"
+`;
+
+// A deterministic StructuredDiff the mocked wasm engine returns.
+const DETERMINISTIC_DIFF = {
+  diff: {
+    version: "1.0" as const,
+    format: "gltf-scene",
+    changes: [{ path: "nodes/0", kind: "modified" as const, label: "Cube" }],
+  },
+  handlerId: "gltf-scene",
+};
 
 const gltf = (x: number) =>
   JSON.stringify({
@@ -56,16 +95,20 @@ beforeAll(async () => {
     "opt in a community format",
   );
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
+  __setManifestForTests(MANIFEST);
   app = await createTestServer();
 }, 30_000);
 
 afterAll(async () => {
+  __resetManifest();
   await repo.cleanup();
   await app.close();
 });
 
 beforeEach(() => {
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(MOCK_REPO as never);
+  __setManifestForTests(MANIFEST);
+  vi.mocked(officialWasmDiff).mockResolvedValue(DETERMINISTIC_DIFF);
 });
 
 function get(query: string) {
@@ -73,13 +116,13 @@ function get(query: string) {
 }
 
 describe("GET /repos/:handle/:name/filediff", () => {
-  it("returns a semantic StructuredDiff for a changed glTF file", async () => {
+  it("returns the official wasm StructuredDiff for a changed glTF file", async () => {
     const res = await get(`path=model.gltf&sha=${headSha}`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.format).toBe("gltf-scene");
     expect(body.handlerId).toBe("gltf-scene");
-    // the Cube's translation changed base→head; the diff should be non-empty
+    expect(body.engine).toBe("wasm");
     expect(Array.isArray(body.changes)).toBe(true);
     expect(JSON.stringify(body.changes)).toContain("Cube");
   });
@@ -97,6 +140,14 @@ describe("GET /repos/:handle/:name/filediff", () => {
     expect(body.baseSha).toBe(baseSha);
   });
 
+  it("503s when the official wasm handler is unavailable — no built-in fallback (#74)", async () => {
+    vi.mocked(officialWasmDiff).mockResolvedValueOnce(null);
+    const res = await get(`path=model.gltf&sha=${headSha}`);
+    expect(res.statusCode).toBe(503);
+    // The response must not carry a substitute engine's answer.
+    expect(res.json().engine).toBeUndefined();
+  });
+
   it("400s without required params", async () => {
     expect((await get(`sha=${headSha}`)).statusCode).toBe(400);
     expect((await get(`path=model.gltf`)).statusCode).toBe(400);
@@ -107,10 +158,10 @@ describe("GET /repos/:handle/:name/filediff", () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it("404s for an opted-in but non-official extension (FHR is the authority, not opt-in alone)", async () => {
-    // .widget is in .forge/formats at communitySha but no official FHR handler
-    // covers it, so the server refuses — a community handler would run in the
-    // consented client sandbox (#70), never here.
+  it("404s for an opted-in but non-official extension (the manifest is the authority, not opt-in alone)", async () => {
+    // .widget is in .forge/formats at communitySha but the manifest maps no
+    // official handler to it, so the server refuses — a community handler would
+    // run in the consented client sandbox (#70), never here.
     const res = await get(`path=part.widget&sha=${communitySha}`);
     expect(res.statusCode).toBe(404);
   });
