@@ -4,6 +4,7 @@ import { closePull, createPull, getPRFileDiff, getPull, listPRCommits, listPRFil
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import type { BranchInfo, CommitInfo, FileDiff, PRFileEntry, PullRequest, User } from "../../types";
 import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { useSemanticExtensions } from "../../lib/fhrFormats";
 
 type Props = {
   token: string;
@@ -69,7 +70,8 @@ function PRFileRow({ token, handle, repoName, prNumber, file, base, headRef }: {
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const filename = file.path.split("/").pop() ?? file.path;
-  const Viewer = resolveFileDiffViewer(filename);
+  const semanticExtensions = useSemanticExtensions();
+  const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
 
   async function toggle() {
     if (!expanded && !diff) {

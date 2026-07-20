@@ -1,11 +1,26 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   officialHandlerId,
   officialWasmDiff,
   __resetOfficialHandlers,
   type OfficialHandlerDeps,
 } from "../fhr/official-handlers.js";
+import { __setManifestForTests, __resetManifest } from "../fhr/manifest.js";
 import type { StructuredDiff } from "../handlers/types.js";
+
+// A stubbed manifest so no test touches the network. The wasm URL ends with the
+// canonical `forge-handler-<id>.wasm` name the wasm fetch is asserted against.
+const MANIFEST = `
+[formats]
+".gltf" = { handler = "gltf-scene", build = "e520cc6" }
+".glb"  = { handler = "gltf-scene", build = "e520cc6" }
+
+[assets.handlers."gltf-scene"]
+"wasm" = "https://example.test/fhr/forge-handler-gltf-scene.wasm"
+
+[assets.renderers]
+"gltf-scene" = "https://example.test/fhr/renderer-gltf-scene.js"
+`;
 
 const gltfExts = new Set([".gltf", ".glb"]);
 const sampleDiff: StructuredDiff = { version: "1.0", format: "gltf-scene", changes: [{ path: "n", kind: "modified" }] };
@@ -18,16 +33,20 @@ function deps(over: Partial<OfficialHandlerDeps> = {}): OfficialHandlerDeps {
   };
 }
 
-beforeEach(() => __resetOfficialHandlers());
+beforeEach(() => {
+  __resetOfficialHandlers();
+  __setManifestForTests(MANIFEST);
+});
+afterEach(() => __resetManifest());
 
 describe("officialHandlerId", () => {
-  it("maps official glTF extensions, case-insensitively", () => {
-    expect(officialHandlerId(".gltf")).toBe("gltf-scene");
-    expect(officialHandlerId(".GLB")).toBe("gltf-scene");
+  it("maps official glTF extensions, case-insensitively", async () => {
+    expect(await officialHandlerId(".gltf")).toBe("gltf-scene");
+    expect(await officialHandlerId(".GLB")).toBe("gltf-scene");
   });
-  it("returns null for anything not in the official set", () => {
-    expect(officialHandlerId(".png")).toBeNull();
-    expect(officialHandlerId(".step")).toBeNull();
+  it("returns null for anything not in the official set", async () => {
+    expect(await officialHandlerId(".png")).toBeNull();
+    expect(await officialHandlerId(".step")).toBeNull();
   });
 });
 
@@ -36,11 +55,11 @@ describe("officialWasmDiff", () => {
     const d = deps();
     const res = await officialWasmDiff("scene/model.gltf", gltfExts, Buffer.from("a"), Buffer.from("b"), d);
     expect(res).toEqual({ diff: sampleDiff, handlerId: "gltf-scene" });
-    // fetched the official wasm asset, not a community source
+    // fetched the official wasm asset from the manifest, not a community source
     expect(d.fetchImpl).toHaveBeenCalledWith(expect.stringContaining("/forge-handler-gltf-scene.wasm"));
   });
 
-  it("returns null (→ TS fallback) when the extension is not opted in", async () => {
+  it("returns null (→ 503, no fallback) when the extension is not opted in", async () => {
     const res = await officialWasmDiff("model.gltf", new Set([".txt"]), Buffer.from("a"), Buffer.from("b"), deps());
     expect(res).toBeNull();
   });
@@ -64,7 +83,7 @@ describe("officialWasmDiff", () => {
     expect(res).toBeNull();
   });
 
-  it("falls back (null) when the wasm handler throws on the input", async () => {
+  it("returns null (no fallback) when the wasm handler throws on the input", async () => {
     const d = deps({ instantiate: vi.fn(async () => ({ diff: async () => { throw new Error("bad gltf"); } })) });
     const res = await officialWasmDiff("model.gltf", gltfExts, Buffer.from("a"), Buffer.from("b"), d);
     expect(res).toBeNull();

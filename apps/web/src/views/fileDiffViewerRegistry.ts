@@ -1,7 +1,7 @@
 import type { FileDiffViewerComponent } from "./fileDiffViewerTypes";
 import { FallbackFileDiffViewer } from "./diffViewers/FallbackFileDiffViewer";
 import { TextFileDiffViewer } from "./diffViewers/TextFileDiffViewer";
-import { SceneFileDiffViewer } from "./diffViewers/SceneFileDiffViewer";
+import { FhrFileDiffViewer } from "./diffViewers/FhrFileDiffViewer";
 
 const registry = new Map<string, FileDiffViewerComponent>();
 
@@ -11,14 +11,50 @@ export function registerFileDiffViewer(extensions: string[], component: FileDiff
   }
 }
 
-export function resolveFileDiffViewer(filename: string): FileDiffViewerComponent {
+/**
+ * Routing key for a filename: the lowercased extension, or — for extensionless
+ * files (Dockerfile, Makefile) — the lowercased full name.
+ */
+export function extensionForFilename(filename: string): string {
   const parts = filename.split(".");
-  // No extension (e.g. Dockerfile, Makefile) — use the lowercased full name as key
-  const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : filename.toLowerCase();
-  return registry.get(ext) ?? TextFileDiffViewer;
+  return parts.length > 1 ? parts.pop()!.toLowerCase() : filename.toLowerCase();
 }
 
-// ─── default registrations ───────────────────────────────────────────────────
+/**
+ * The viewer a file would use with NO semantic (FHR) support: its registered
+ * text/binary viewer, or TextFileDiffViewer by default. This is both the routing
+ * result for non-semantic files and the graceful fallback the FhrFileDiffViewer
+ * renders when a repo hasn't opted a format in (404 from /filediff).
+ */
+export function resolveBaseFileDiffViewer(filename: string): FileDiffViewerComponent {
+  return registry.get(extensionForFilename(filename)) ?? TextFileDiffViewer;
+}
+
+/**
+ * Resolve the viewer for a file. ForgeHub holds NO per-format knowledge of its
+ * own: the set of semantic extensions comes solely from the FHR manifest (via
+ * the API), passed in as `semanticExtensions` (lowercase, no leading dot — see
+ * useSemanticExtensions). A file whose extension is semantic gets the
+ * manifest-driven FhrFileDiffViewer, which takes precedence over any text/binary
+ * registration; every other file keeps its base viewer.
+ *
+ * When the set is empty or omitted (manifest still loading, or unavailable),
+ * every file resolves to its base viewer, so the UI never blocks or crashes —
+ * semantic viewers appear on the next render once the set is known.
+ */
+export function resolveFileDiffViewer(
+  filename: string,
+  semanticExtensions?: ReadonlySet<string>,
+): FileDiffViewerComponent {
+  if (semanticExtensions?.has(extensionForFilename(filename))) {
+    return FhrFileDiffViewer;
+  }
+  return resolveBaseFileDiffViewer(filename);
+}
+
+// ─── default registrations (base viewers only) ─────────────────────────────────
+// NOTE: no semantic-format list lives here. Which extensions have a rich diff is
+// decided entirely by the FHR manifest (API /fhr/formats), never hardcoded.
 
 registerFileDiffViewer(
   [
@@ -51,6 +87,3 @@ registerFileDiffViewer(
   ["zip", "tar", "gz", "bz2", "7z", "rar", "wasm"],
   FallbackFileDiffViewer,
 );
-// glTF/GLB get a format-aware change tree from the FHR renderer bundle,
-// falling back gracefully to a message if the repo hasn't opted the format in.
-registerFileDiffViewer(["glb", "gltf"], SceneFileDiffViewer);
