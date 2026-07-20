@@ -73,20 +73,52 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       // drift in #59). The built-in TS handler is consulted only as an offline
       // fallback when the FHR release is unreachable or rejects the input; it is
       // being retired (#74) and is never the authority.
+      // The base/head commit SHAs are returned so a client renderer (e.g. the 3D
+      // scene) can fetch the raw blobs via /rawblob to build geometry.
+      const shas = { baseSha: baseSha ?? null, headSha: sha };
       try {
         const official = await officialWasmDiff(filePath, activeExts, baseBlob, headBlob);
         if (official) {
-          return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm" };
+          return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm", ...shas };
         }
         const fallback = firstHandlerForPathAndFormats(filePath, activeExts);
         if (!fallback) {
           return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
         }
         const diff = await fallback.diff(baseBlob, headBlob);
-        return { ...diff, handlerId: fallback.id, path: filePath, engine: "builtin" };
+        return { ...diff, handlerId: fallback.id, path: filePath, engine: "builtin", ...shas };
       } catch (e) {
         return reply.status(500).send({ error: `diff failed: ${String(e)}` });
       }
+    },
+  );
+
+  // Raw file bytes at a commit, as application/octet-stream — used by client
+  // renderers that need the actual file (the gltf-scene 3D viewport fetches the
+  // head blob to build its mesh). readBlobAsBuffer preserves binary content,
+  // unlike the utf-8 /blob endpoints.
+  app.get(
+    "/repos/:handle/:name/rawblob",
+    { preHandler: [app.optionalAuthenticate] },
+    async (request, reply) => {
+      const { handle, name } = request.params as { handle: string; name: string };
+      const { path: filePath, sha } = request.query as { path?: string; sha?: string };
+      const userId = (request as { user?: { sub: string } }).user?.sub;
+
+      if (!filePath || !sha) {
+        return reply.status(400).send({ error: "'path' and 'sha' query params are required" });
+      }
+      const repo = await resolveRepo(handle, name);
+      if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
+      if (!repo.storageKey) return reply.status(404).send({ error: "Repository has no storage" });
+
+      const buf = await readBlobAsBuffer(repo.storageKey, sha, filePath);
+      if (!buf) return reply.status(404).send({ error: "File not found at this commit" });
+
+      return reply
+        .header("Content-Type", "application/octet-stream")
+        .header("Cache-Control", "public, max-age=3600")
+        .send(buf);
     },
   );
 }
