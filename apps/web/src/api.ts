@@ -4,6 +4,31 @@ import type {
   Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
+/**
+ * An error carrying the HTTP status of a failed API response, so callers can
+ * distinguish "not found / not supported" (404) from a genuine failure
+ * (500, network). Extends Error, so existing `instanceof Error` / `.message`
+ * handling keeps working unchanged.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * True when a semantic-diff request failed because the format isn't supported
+ * for this repo — a 404 from /filediff (no handler registered / repo hasn't
+ * opted the format in). Such files should fall back to their base text/binary
+ * viewer rather than show an error. Any other failure is genuine.
+ */
+export function isFormatNotSupported(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
 /** Result of GET /repos/:h/:n/filediff — a format-aware diff for one file blob pair. */
 export type SemanticFileDiff = {
   version: string;
@@ -33,6 +58,19 @@ export async function getFileSemanticDiff(
 }
 
 /**
+ * The public FHR format manifest mirrored by the API: maps a lowercase extension
+ * WITH its leading dot (e.g. ".gltf") to the handler id that serves it. No auth
+ * required. May 503 while the API has never fetched a manifest — callers degrade
+ * gracefully (render base viewers) rather than surface the error. ForgeHub holds
+ * no per-format list of its own; this endpoint is the sole source of truth for
+ * which extensions have semantic support.
+ */
+export async function getFhrFormats(): Promise<Record<string, string>> {
+  const { formats } = await req<{ formats: Record<string, string> }>("/fhr/formats");
+  return formats ?? {};
+}
+
+/**
  * Fetch the raw bytes of a file at a commit as a Blob (auth-aware).
  * Used by client renderers that need the actual file — the gltf-scene 3D
  * viewport fetches the head/base blobs to build its mesh. The caller wraps the
@@ -52,7 +90,7 @@ export async function fetchRawBlob(
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   return res.blob();
 }
@@ -75,7 +113,7 @@ async function req<T>(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
