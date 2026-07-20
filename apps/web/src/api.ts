@@ -11,6 +11,11 @@ export type SemanticFileDiff = {
   handlerId: string;
   path: string;
   changes: DiffChange[];
+  // The commit SHAs the diff was computed from, so a client renderer (e.g. the
+  // gltf-scene 3D viewport) can fetch the raw blobs to build geometry. baseSha
+  // is null for an added file / root commit.
+  baseSha: string | null;
+  headSha: string;
 };
 
 /** Compute a semantic diff for one file at a commit (base defaults to its parent). */
@@ -25,6 +30,31 @@ export async function getFileSemanticDiff(
     `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
     { token: token ?? undefined },
   );
+}
+
+/**
+ * Fetch the raw bytes of a file at a commit as a Blob (auth-aware).
+ * Used by client renderers that need the actual file — the gltf-scene 3D
+ * viewport fetches the head/base blobs to build its mesh. The caller wraps the
+ * result in an object URL and hands *that* to the renderer, because the renderer
+ * fetch()es the url without an Authorization header (SPEC-RENDERING blobs).
+ */
+export async function fetchRawBlob(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+): Promise<Blob> {
+  const res = await fetch(
+    `${BASE}/repos/${handle}/${repoName}/rawblob?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.blob();
 }
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
