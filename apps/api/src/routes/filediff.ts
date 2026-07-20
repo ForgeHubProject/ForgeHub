@@ -2,7 +2,6 @@ import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { git, readBlobAsBuffer, activeFormatsAtCommit } from "../git-utils.js";
-import { firstHandlerForPathAndFormats } from "../handlers/index.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
@@ -31,17 +30,24 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       const storageKey = repo.storageKey;
       if (!storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      // FHR is the authority on what is semantically diffable: a file qualifies
-      // iff an *official* FHR handler covers its extension AND the repo opted the
-      // extension in (its .forge/formats at this commit). ForgeHub no longer
-      // consults its own built-in handler registry to make this decision — the
-      // built-in handler is only an offline fallback for computing the diff when
-      // the FHR release is unreachable (retirement tracked in #74). A community
-      // (non-official) handler resolves to null here and is never run
+      // FHR's manifest is the single source of truth for what is semantically
+      // diffable: a file qualifies iff the manifest maps its extension to an
+      // official handler AND the repo opted the extension in (its .forge/formats
+      // at this commit). ForgeHub holds no format knowledge of its own and no
+      // longer consults its built-in handler registry to decide this — that
+      // built-in TS fallback has been retired from this path (#74). A community
+      // (non-official) extension resolves to null here and is never run
       // server-side; that path belongs to the consented client sandbox (#70).
       const activeExts = await activeFormatsAtCommit(storageKey, sha);
       const ext = extname(filePath).toLowerCase();
-      if (!activeExts.has(ext) || !officialHandlerId(ext)) {
+      let handlerId: string | null;
+      try {
+        handlerId = await officialHandlerId(ext);
+      } catch {
+        // Manifest unreachable with no cached copy — can't authorize a diff.
+        return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
+      }
+      if (!activeExts.has(ext) || !handlerId) {
         return reply.status(404).send({ error: "No semantic handler for this file" });
       }
 
@@ -68,25 +74,21 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       const baseBlob = baseBuf ?? Buffer.alloc(0);
       const headBlob = headBuf ?? Buffer.alloc(0);
 
-      // The official FHR wasm handler is the engine — the exact binary forge
-      // runs, so ForgeHub's diff matches the CLI's (closes the producer/consumer
-      // drift in #59). The built-in TS handler is consulted only as an offline
-      // fallback when the FHR release is unreachable or rejects the input; it is
-      // being retired (#74) and is never the authority.
+      // The official FHR wasm handler (resolved from the manifest) is the only
+      // engine — the exact binary forge runs, so ForgeHub's diff matches the
+      // CLI's (closes the producer/consumer drift in #59). The built-in TS
+      // handler has been retired from this path (#74): when the official wasm
+      // handler can't run (release unreachable or the input is rejected), we
+      // return 503 rather than substituting a different engine's answer.
       // The base/head commit SHAs are returned so a client renderer (e.g. the 3D
       // scene) can fetch the raw blobs via /rawblob to build geometry.
       const shas = { baseSha: baseSha ?? null, headSha: sha };
       try {
         const official = await officialWasmDiff(filePath, activeExts, baseBlob, headBlob);
-        if (official) {
-          return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm", ...shas };
-        }
-        const fallback = firstHandlerForPathAndFormats(filePath, activeExts);
-        if (!fallback) {
+        if (!official) {
           return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
         }
-        const diff = await fallback.diff(baseBlob, headBlob);
-        return { ...diff, handlerId: fallback.id, path: filePath, engine: "builtin", ...shas };
+        return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm", ...shas };
       } catch (e) {
         return reply.status(500).send({ error: `diff failed: ${String(e)}` });
       }

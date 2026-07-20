@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { getCommit, getCommitDiff, listCommits } from "../../api";
 import type { CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { useSemanticExtensions } from "../../lib/fhrFormats";
 
 type Props = {
   token: string;
@@ -44,7 +45,8 @@ function FileDiffCard({ file, sha, base, token }: { file: FileDiff; sha: string;
     : file.status === "deleted" ? file.oldPath : file.newPath;
   const blobPath = file.status === "deleted" ? file.oldPath : file.newPath;
   const filename = blobPath.split("/").pop() ?? "";
-  const Viewer = resolveFileDiffViewer(filename);
+  const semanticExtensions = useSemanticExtensions();
+  const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
 
   return (
     <div className="card overflow-hidden">
