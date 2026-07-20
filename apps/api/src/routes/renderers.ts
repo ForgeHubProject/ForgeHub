@@ -1,15 +1,16 @@
 import type { FastifyInstance } from "fastify";
+import { rendererIds, rendererUrl } from "../fhr/manifest.js";
 
 // Same-origin proxy + cache for FHR renderer bundles. The web app can't
 // `import()` a bundle straight from GitHub releases — those are served as
 // application/octet-stream, which browsers reject for ES modules — so ForgeHub
 // fetches it once and re-serves it with a JS MIME type (SPEC-RENDERING.md §3a).
 //
-// The upstream base is configurable; it defaults to the fhr-official rolling
-// release, whose renderer asset is named `renderer-<handlerId>.js`.
-const RENDERER_BASE =
-  process.env["FHR_RENDERER_BASE"] ??
-  "https://github.com/forgehubproject/fhr/releases/download/gltf-scene-latest";
+// Where each bundle lives comes from the FHR manifest (the single source of
+// truth, #74): ForgeHub embeds no renderer URLs of its own. FHR_RENDERER_BASE
+// is an explicit self-hosting override; when set, the manifest is skipped and
+// assets are read from `<base>/renderer-<id>.js`.
+const RENDERER_BASE = process.env["FHR_RENDERER_BASE"];
 
 const HANDLER_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 // A full renderer asset filename, e.g. "renderer-gltf-scene.js" or the lazy 3D
@@ -29,7 +30,7 @@ export function __clearRendererCache(): void {
 // a bare handler id ("gltf-scene" → renderer-gltf-scene.js), and a full renderer
 // filename ("renderer-gltf-scene-3d.js") which a lite bundle lazy-imports as a
 // sibling — served verbatim. Returns null for anything unsafe, so the value can
-// never escape the fixed RENDERER_BASE (no dots or slashes get through).
+// never escape the resolved base URL (no dots or slashes get through).
 function assetFilename(raw: string): string | null {
   if (RENDERER_ASSET_RE.test(raw)) return raw;
   const id = raw.replace(/\.js$/, "");
@@ -37,9 +38,42 @@ function assetFilename(raw: string): string | null {
   return null;
 }
 
-async function fetchRendererAsset(filename: string): Promise<string | null> {
+// The "<id>" part of a "renderer-<id>.js" filename (already validated safe).
+function idPartOf(filename: string): string {
+  return filename.slice("renderer-".length, -".js".length);
+}
+
+// Resolve the upstream URL for a renderer asset via the manifest. The manifest
+// keys renderers by handler id ("gltf-scene" → renderer-gltf-scene.js). A lite
+// bundle's lazy sibling ("renderer-gltf-scene-3d.js") is not itself a manifest
+// key, so we find the manifest renderer whose id is the longest prefix of the
+// requested id part and fetch that bundle's directory sibling. Returns null when
+// no manifest renderer covers the asset.
+async function resolveUpstreamUrl(filename: string): Promise<string | null> {
+  const idPart = idPartOf(filename);
+
+  const exact = await rendererUrl(idPart);
+  if (exact) return exact;
+
+  // Not itself a manifest key (e.g. the lazy "gltf-scene-3d" chunk): serve it
+  // from the directory of the manifest renderer whose id is the longest prefix.
+  let bestId: string | null = null;
+  for (const id of await rendererIds()) {
+    if (idPart === id || idPart.startsWith(`${id}-`)) {
+      if (!bestId || id.length > bestId.length) bestId = id;
+    }
+  }
+  if (!bestId) return null;
+
+  const baseUrl = await rendererUrl(bestId);
+  if (!baseUrl) return null;
+  const dir = baseUrl.slice(0, baseUrl.lastIndexOf("/"));
+  return `${dir}/${filename}`;
+}
+
+async function fetchRendererAsset(url: string): Promise<string | null> {
   try {
-    const res = await fetch(`${RENDERER_BASE}/${filename}`);
+    const res = await fetch(url);
     if (!res.ok) return null;
     return await res.text();
   } catch {
@@ -60,7 +94,18 @@ export async function rendererRoutes(app: FastifyInstance) {
     if (hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
       js = hit.js;
     } else {
-      js = await fetchRendererAsset(filename);
+      let url: string | null;
+      if (RENDERER_BASE) {
+        // Self-hosting override: fixed release-layout URL, manifest skipped.
+        url = `${RENDERER_BASE}/${filename}`;
+      } else {
+        try {
+          url = await resolveUpstreamUrl(filename);
+        } catch {
+          url = null; // manifest unreachable with no cache — treat as missing
+        }
+      }
+      js = url ? await fetchRendererAsset(url) : null;
       cache.set(filename, { js, fetchedAt: Date.now() });
     }
 
