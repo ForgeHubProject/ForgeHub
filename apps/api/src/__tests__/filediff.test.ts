@@ -90,6 +90,13 @@ describe("GET /repos/:handle/:name/filediff", () => {
     expect(res.json().format).toBe("gltf-scene");
   });
 
+  it("returns the base/head commit SHAs so a client renderer can fetch raw blobs", async () => {
+    const res = await get(`path=model.gltf&sha=${headSha}`);
+    const body = res.json();
+    expect(body.headSha).toBe(headSha);
+    expect(body.baseSha).toBe(baseSha);
+  });
+
   it("400s without required params", async () => {
     expect((await get(`sha=${headSha}`)).statusCode).toBe(400);
     expect((await get(`path=model.gltf`)).statusCode).toBe(400);
@@ -111,6 +118,36 @@ describe("GET /repos/:handle/:name/filediff", () => {
   it("404s for a private repo the caller cannot read", async () => {
     vi.mocked(prisma.repo.findFirst).mockResolvedValue({ ...MOCK_REPO, visibility: "PRIVATE" } as never);
     const res = await get(`path=model.gltf&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+function rawblob(query: string) {
+  return app.inject({ method: "GET", url: `/repos/alice/scene/rawblob?${query}` });
+}
+
+describe("GET /repos/:handle/:name/rawblob", () => {
+  it("returns the raw file bytes as application/octet-stream", async () => {
+    const res = await rawblob(`path=model.gltf&sha=${headSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/octet-stream");
+    // The bytes are the committed blob verbatim — a client renderer parses them.
+    expect(res.body).toBe(gltf(5));
+  });
+
+  it("400s without required params", async () => {
+    expect((await rawblob(`sha=${headSha}`)).statusCode).toBe(400);
+    expect((await rawblob(`path=model.gltf`)).statusCode).toBe(400);
+  });
+
+  it("404s for a path absent at that commit", async () => {
+    const res = await rawblob(`path=does-not-exist.gltf&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("404s for a private repo the caller cannot read", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({ ...MOCK_REPO, visibility: "PRIVATE" } as never);
+    const res = await rawblob(`path=model.gltf&sha=${headSha}`);
     expect(res.statusCode).toBe(404);
   });
 });
