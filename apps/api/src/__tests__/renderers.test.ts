@@ -28,7 +28,7 @@ beforeEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe("GET /renderers/:handlerId", () => {
+describe("GET /renderers/:asset", () => {
   it("proxies the bundle and serves it with a JS MIME type", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response("export default { mount(){} };", { status: 200 }),
@@ -44,6 +44,21 @@ describe("GET /renderers/:handlerId", () => {
     globalThis.fetch = vi.fn(async () => new Response("export default {};", { status: 200 })) as unknown as typeof fetch;
     const res = await app.inject({ method: "GET", url: "/renderers/gltf-scene.js" });
     expect(res.statusCode).toBe(200);
+  });
+
+  it("serves a full renderer asset filename verbatim (the lazy 3D chunk)", async () => {
+    // A lite bundle dynamic-imports its 3D chunk as a sibling by full filename.
+    // The proxy must fetch that name as-is, not re-prefix it to
+    // renderer-renderer-gltf-scene-3d.js (the bug that 404'd the 3D view).
+    const fetchMock = vi.fn(async () => new Response("export default { mount3d(){} };", { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await app.inject({ method: "GET", url: "/renderers/renderer-gltf-scene-3d.js" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/javascript");
+    const requestedUrl = String((fetchMock.mock.calls[0] as unknown[])[0]);
+    expect(requestedUrl.endsWith("/renderer-gltf-scene-3d.js")).toBe(true);
+    expect(requestedUrl).not.toContain("renderer-renderer-");
   });
 
   it("404s when the upstream has no such bundle", async () => {
