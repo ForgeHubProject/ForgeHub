@@ -1,13 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { RepoListPage } from "./pages/RepoListPage";
 import { RepoPage } from "./pages/RepoPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsTokensPage } from "./pages/SettingsTokensPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
+import { DEFAULT_TITLE } from "./pages/useDocumentTitle";
 import type { User } from "./types";
+
+/**
+ * Seeds the app-level default document title on first paint. Rendered before
+ * the route tree so a page that claims its own title via `useDocumentTitle`
+ * (its effect runs after this one) still wins, while any route that sets no
+ * title falls back to `DEFAULT_TITLE`.
+ */
+function DefaultTitle() {
+  useEffect(() => {
+    document.title = DEFAULT_TITLE;
+  }, []);
+  return null;
+}
 
 function AppRoutes() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("fh_token"));
@@ -36,7 +51,9 @@ function AppRoutes() {
   const authed = !!token && !!user;
 
   return (
-    <Routes>
+    <>
+      <DefaultTitle />
+      <Routes>
       <Route
         path="/login"
         element={authed ? <Navigate to="/" replace /> : <LoginPage onAuth={handleAuth} />}
@@ -108,8 +125,9 @@ function AppRoutes() {
           )
         }
       />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </>
   );
 }
 
