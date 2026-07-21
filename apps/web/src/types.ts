@@ -299,6 +299,26 @@ export type Notification = {
   updatedAt: string;
 };
 
+/** One slice of the format/domain composition bar. */
+export type CompositionSegment = {
+  /** Stable key for deterministic coloring: handler id, ".ext", or "other". */
+  format: string;
+  label: string;
+  bytes: number;
+  fileCount: number;
+  pct: number;
+  /** Semantic diffing is opted in for this format (`.forge/formats`). */
+  optedIn: boolean;
+};
+
+export type Composition = {
+  ref: string;
+  sha: string | null;
+  totalBytes: number;
+  totalFiles: number;
+  segments: CompositionSegment[];
+};
+
 export type SearchRepoResult = {
   id: string;
   name: string;
