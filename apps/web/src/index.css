@@ -210,6 +210,8 @@
 }
 .gh-prose pre code { background: none; padding: 0; font-size: inherit; }
 .gh-prose ul, .gh-prose ol { margin-bottom: 16px; padding-left: 2em; }
+.gh-prose ul { list-style: disc; }
+.gh-prose ol { list-style: decimal; }
 .gh-prose li + li { margin-top: 4px; }
 .gh-prose blockquote {
   border-left: 3px solid rgb(var(--fh-border-strong));
