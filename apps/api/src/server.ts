@@ -27,6 +27,7 @@ import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
+import { timelineRoutes } from "./routes/timeline.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -84,6 +85,7 @@ export async function buildServer() {
   await app.register(issueRoutes);
   await app.register(labelRoutes);
   await app.register(notificationRoutes);
+  await app.register(timelineRoutes);
   await app.register(searchRoutes);
   await app.register(gitHttpRoutes);
 

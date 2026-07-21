@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { notifyUser } from "../notifications-service.js";
+import { syncBodyReferences } from "../references-service.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -174,6 +175,13 @@ export async function prCommentRoutes(app: FastifyInstance) {
         include: { author: { select: { handle: true } } },
       });
 
+      await syncBodyReferences({
+        repo: ctx.repo, actorId: userId,
+        source: { type: "PR_COMMENT", id: comment.id },
+        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+        body: comment.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr comment)"));
+
       return reply.status(201).send(formatPRComment(comment));
     },
   );
@@ -208,6 +216,13 @@ export async function prCommentRoutes(app: FastifyInstance) {
         data: { body: body.trim() },
         include: { author: { select: { handle: true } } },
       });
+
+      await syncBodyReferences({
+        repo: ctx.repo, actorId: userId,
+        source: { type: "PR_COMMENT", id: comment.id },
+        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+        body: updated.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr comment edit)"));
 
       return formatPRComment(updated);
     },
@@ -525,6 +540,13 @@ export async function prCommentRoutes(app: FastifyInstance) {
         include: { author: { select: { handle: true } } },
       });
 
+      await syncBodyReferences({
+        repo: ctx.repo, actorId: userId,
+        source: { type: "PR_REVIEW_COMMENT", id: comment.id },
+        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+        body: comment.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr review comment)"));
+
       return reply.status(201).send(formatReviewComment(comment));
     },
   );
@@ -560,6 +582,13 @@ export async function prCommentRoutes(app: FastifyInstance) {
         data: { body: body.trim() },
         include: { author: { select: { handle: true } } },
       });
+
+      await syncBodyReferences({
+        repo: ctx.repo, actorId: userId,
+        source: { type: "PR_REVIEW_COMMENT", id: comment.id },
+        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+        body: updated.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr review comment edit)"));
 
       return formatReviewComment(updated);
     },
