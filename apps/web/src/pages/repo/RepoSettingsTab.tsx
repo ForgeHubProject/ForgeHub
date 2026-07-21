@@ -84,7 +84,7 @@ function GeneralSection({ token, handle, repoName }: { token: string; handle: st
             <div className="min-w-0">
               <p className="text-fh-lg font-semibold text-fh-fg flex items-center gap-2">
                 <span className="truncate">{repo.fullName}</span>
-                <Badge tone={repo.visibility === "public" ? "success" : "warning"}>
+                <Badge tone="neutral">
                   {repo.visibility === "public" ? "Public" : "Private"}
                 </Badge>
               </p>
