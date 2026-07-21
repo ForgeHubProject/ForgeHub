@@ -69,7 +69,7 @@ export function LoginPage({ onAuth }: Props) {
             </div>
           )}
 
-          <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+          <form onSubmit={submit} className="flex flex-col gap-4">
             {!isLogin && (
               <>
                 <Field label="Username" required>
