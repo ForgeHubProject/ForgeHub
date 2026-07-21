@@ -1,6 +1,6 @@
 import type {
-  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, Repo,
+  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
+  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult, Release, Repo,
   Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
@@ -568,6 +568,93 @@ export async function getReadme(
   if (path) qs.set("path", path);
   const q = qs.toString() ? `?${qs}` : "";
   return req(`/repos/${handle}/${repoName}/readme${q}`, { token: token ?? undefined });
+}
+
+// ─── code navigation: blame / permalinks / archive / ref-compare ───────────────
+
+/** Line-level authorship for a file at a ref, as contiguous commit hunks. */
+export async function getBlame(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  path: string,
+  ref?: string,
+): Promise<{ ref: string; path: string; hunks: BlameHunk[] }> {
+  const qs = new URLSearchParams({ path });
+  if (ref) qs.set("ref", ref);
+  return req(`/repos/${handle}/${repoName}/blame?${qs}`, { token: token ?? undefined });
+}
+
+/** Resolve a ref (branch/tag/sha) to its canonical 40-char commit SHA — for permalinks. */
+export async function resolveRef(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+): Promise<{ ref: string; sha: string }> {
+  return req(`/repos/${handle}/${repoName}/resolve-ref?ref=${encodeURIComponent(ref)}`, { token: token ?? undefined });
+}
+
+/** URL of the streaming source archive for a ref (used for direct links on public repos). */
+export function archiveUrl(handle: string, repoName: string, ref: string, format: "zip" | "tar.gz" = "zip"): string {
+  const qs = new URLSearchParams({ ref, format });
+  return `${BASE}/repos/${handle}/${repoName}/archive?${qs}`;
+}
+
+/**
+ * Download the source archive for a ref via an authenticated fetch, so private
+ * repos work too, then trigger a browser download of the resulting blob.
+ */
+export async function downloadArchive(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+  format: "zip" | "tar.gz" = "zip",
+): Promise<void> {
+  const res = await fetch(archiveUrl(handle, repoName, ref), {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const refLabel = ref.replace(/[^\w.-]+/g, "-");
+  a.href = url;
+  a.download = `${repoName}-${refLabel}.${format === "tar.gz" ? "tar.gz" : "zip"}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Compare any two refs — ahead/behind, head-introduced commits, changed-file stats. */
+export async function getRefCompare(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  base: string,
+  head: string,
+): Promise<RefCompareResult> {
+  const qs = new URLSearchParams({ base, head });
+  return req(`/repos/${handle}/${repoName}/ref-compare?${qs}`, { token: token ?? undefined });
+}
+
+/** Full per-file diffs (with hunks) for a ref comparison, optionally one path. */
+export async function getRefCompareDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  base: string,
+  head: string,
+  path?: string,
+): Promise<{ files: FileDiff[] }> {
+  const qs = new URLSearchParams({ base, head });
+  if (path) qs.set("path", path);
+  return req(`/repos/${handle}/${repoName}/ref-compare/diff?${qs}`, { token: token ?? undefined });
 }
 
 // ─── issues ─────────────────────────────────────────────────────────────────────────────
