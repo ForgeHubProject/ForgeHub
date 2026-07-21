@@ -132,6 +132,23 @@ export type MergeResult =
 
 export type MergeStrategy = "ours" | "theirs" | "none";
 
+export type MergeMethod = "merge" | "squash" | "rebase";
+
+/** Identity used to author generated commits (squash commit, revert commit). */
+export type CommitAuthor = { name: string; email: string };
+
+function identityArgs(author: CommitAuthor): string[] {
+  return [
+    "-c", `user.name=${author.name}`,
+    "-c", `user.email=${author.email}`,
+    "-c", "commit.gpgsign=false",
+  ];
+}
+
+export type RevertResult =
+  | { ok: true; branch: string; sha: string }
+  | { ok: false; conflicts: true };
+
 const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
 
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
@@ -253,6 +270,168 @@ export async function performMerge(
 
     const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
     return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Squash-merge: collapse every commit unique to `fromBranch` into a single new
+ * commit on `toBranch`, authored/committed as `author`. No merge commit is
+ * created — the result has exactly one new commit whose parent is the prior
+ * `toBranch` tip. Conflicts route through the same semantic-resolve path as
+ * `performMerge`; unresolved conflicts yield `{ ok:false, conflicts:true }`.
+ */
+export async function performSquashMerge(
+  storageKey: string,
+  fromBranch: string,
+  toBranch: string,
+  message: string,
+  author: CommitAuthor,
+): Promise<MergeResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-squash-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    // Already merged? (from is an ancestor of the base tip)
+    try {
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      return { ok: false, alreadyMerged: true };
+    } catch { /* not merged — proceed */ }
+
+    let clean = true;
+    try {
+      await execFile("git", [...MERGE_IDENTITY, "merge", "--squash", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      clean = false;
+    }
+
+    if (!clean) {
+      const resolved = await trySemanticResolve(tmpDir);
+      if (!resolved) return { ok: false, conflicts: true };
+    }
+
+    // --squash stages the changes without committing; author the single commit as the merger.
+    try {
+      await execFile("git", [...identityArgs(author), "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      // Nothing staged (empty squash) or commit failed — treat as a conflict/no-op.
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Rebase-merge: replay the commits unique to `fromBranch` on top of `toBranch`,
+ * then fast-forward `toBranch` to the replayed tip — no merge commit, original
+ * commit subjects/authors preserved. If the replay conflicts, the rebase is
+ * aborted and `toBranch` is left completely untouched (`{ ok:false, conflicts:true }`).
+ */
+export async function performRebaseMerge(
+  storageKey: string,
+  fromBranch: string,
+  toBranch: string,
+): Promise<MergeResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-rebase-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      return { ok: false, alreadyMerged: true };
+    } catch { /* not merged — proceed */ }
+
+    // Replay fromBranch's commits onto toBranch on a scratch branch.
+    await execFile("git", ["checkout", "-B", "_fh_replay", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
+    try {
+      await execFile("git", [...MERGE_IDENTITY, "rebase", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      await execFile("git", ["rebase", "--abort"], { cwd: tmpDir, maxBuffer: MAX }).catch(() => {});
+      return { ok: false, conflicts: true };
+    }
+
+    // Fast-forward the base branch to the replayed tip and push.
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    try {
+      await execFile("git", ["merge", "--ff-only", "_fh_replay"], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Create `newBranch` off `baseBranch`'s tip and `git revert` the commit at
+ * `targetSha` onto it, then push. Merge commits (2+ parents) are reverted with
+ * `-m 1`; squash/rebase single-parent commits are reverted plainly. On a revert
+ * conflict the operation is aborted and nothing is pushed (`baseBranch`
+ * untouched), returning `{ ok:false, conflicts:true }`.
+ */
+export async function performRevert(
+  storageKey: string,
+  baseBranch: string,
+  targetSha: string,
+  newBranch: string,
+  author: CommitAuthor,
+): Promise<RevertResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-revert-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", baseBranch], { cwd: tmpDir, maxBuffer: MAX });
+    await execFile("git", ["checkout", "-b", newBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    // Merge commits need a mainline (-m 1); ordinary commits are reverted directly.
+    const { stdout: parentsOut } = await execFile("git", ["rev-list", "--parents", "-n", "1", targetSha], { cwd: tmpDir, maxBuffer: MAX });
+    const parentCount = parentsOut.trim().split(/\s+/).length - 1;
+    const revertArgs = parentCount >= 2
+      ? ["revert", "-m", "1", "--no-edit", targetSha]
+      : ["revert", "--no-edit", targetSha];
+
+    try {
+      await execFile("git", [...identityArgs(author), ...revertArgs], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      await execFile("git", ["revert", "--abort"], { cwd: tmpDir, maxBuffer: MAX }).catch(() => {});
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", newBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, branch: newBranch, sha: sha.trim() };
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
