@@ -1,162 +1,181 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { search } from "../api";
 import { Header } from "../components/Header";
+import { Footer } from "../components/Footer";
 import type { SearchIssueResult, SearchRepoResult, SearchUserResult, User } from "../types";
+import { Avatar, Badge, Button, EmptyState, Icons, RelativeTime, Skeleton, TextInput, cx } from "../ui";
+import { IssueClosedIcon, IssueOpenIcon, PersonIcon, RepoIcon, RepoRow, RowList } from "./listShared";
 
 type Props = { token: string; user: User; onLogout: () => void };
 type SearchType = "repos" | "issues" | "users";
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const d = Math.floor(diff / 86400000);
-  if (d < 1) return "today";
-  if (d === 1) return "yesterday";
-  if (d < 30) return `${d}d ago`;
-  return new Date(dateStr).toLocaleDateString();
-}
+type SearchData = {
+  repos: SearchRepoResult[];
+  issues: SearchIssueResult[];
+  users: SearchUserResult[];
+};
 
-function RepoIcon() {
+const EMPTY: SearchData = { repos: [], issues: [], users: [] };
+
+const TYPES: { key: SearchType; label: string; icon: React.ReactNode }[] = [
+  { key: "repos", label: "Repositories", icon: <RepoIcon size={16} /> },
+  { key: "issues", label: "Issues", icon: <IssueOpenIcon size={16} /> },
+  { key: "users", label: "Users", icon: <PersonIcon size={16} /> },
+];
+
+function TypeItem({
+  active,
+  icon,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
-    </svg>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active || undefined}
+      className={cx(
+        "flex h-8 w-full items-center gap-2 rounded-md px-3 text-left text-fh-sm transition-colors",
+        active
+          ? "bg-fh-accent-muted font-semibold text-fh-fg"
+          : "text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg",
+      )}
+    >
+      <span className={cx("inline-flex shrink-0", active ? "text-fh-fg" : "text-fh-fg-muted")}>{icon}</span>
+      <span className="flex-1 truncate">{label}</span>
+      <span className="inline-flex h-[18px] min-w-[20px] items-center justify-center rounded-full bg-fh-neutral-muted px-1.5 text-fh-xs font-semibold text-fh-fg-muted">
+        {count}
+      </span>
+    </button>
   );
 }
 
-function IssueIcon({ state }: { state: string }) {
+function IssueRow({ issue }: { issue: SearchIssueResult }) {
+  const open = issue.state === "open";
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className={`flex-shrink-0 ${state === "open" ? "text-gh-success" : "text-gh-muted"}`}>
-      <path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z" />
-      <path fillRule="evenodd" d="M8 0a8 8 0 100 16A8 8 0 008 0zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="inline text-gh-muted">
-      <path fillRule="evenodd" d="M4 4v2h-.25A1.75 1.75 0 002 7.75v5.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0014 13.25v-5.5A1.75 1.75 0 0012.25 6H12V4a4 4 0 10-8 0zm6.5 2V4a2.5 2.5 0 00-5 0v2h5z" />
-    </svg>
-  );
-}
-
-function RepoResults({ results }: { results: SearchRepoResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-sm text-gh-muted py-8 text-center">No repositories matched your search.</p>;
-  }
-  return (
-    <div className="card divide-y divide-gh-border overflow-hidden">
-      {results.map((r) => (
-        <div key={r.id} className="px-4 py-3 hover:bg-gh-bg flex items-start gap-3">
-          <RepoIcon />
-          <div className="flex-1 min-w-0">
-            <Link
-              to={`/${r.ownerHandle}/${r.name}`}
-              className="text-sm font-semibold text-gh-accent hover:underline no-underline"
-            >
-              {r.ownerHandle}/{r.name}
-            </Link>
-            {r.visibility === "private" && (
-              <span className="ml-2 text-xs text-gh-muted"><LockIcon /> Private</span>
-            )}
-            {r.description && (
-              <p className="text-xs text-gh-muted mt-0.5 truncate">{r.description}</p>
-            )}
-            <p className="text-xs text-gh-muted mt-1">Updated {timeAgo(r.updatedAt)}</p>
-          </div>
-        </div>
-      ))}
+    <div className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-fh-surface-muted">
+      <span className={cx("mt-0.5 shrink-0", open ? "text-fh-success-fg" : "text-fh-purple-fg")}>
+        {open ? <IssueOpenIcon /> : <IssueClosedIcon />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <Link
+          to={`/${issue.repo.ownerHandle}/${issue.repo.name}/issues/${issue.number}`}
+          className="text-fh-base font-semibold text-fh-fg hover:text-fh-accent-fg hover:underline"
+        >
+          {issue.title}
+        </Link>
+        <p className="mt-1 text-fh-xs text-fh-fg-subtle">
+          <Link
+            to={`/${issue.repo.ownerHandle}/${issue.repo.name}`}
+            className="text-fh-fg-muted hover:text-fh-accent-fg hover:underline"
+          >
+            {issue.repo.ownerHandle}/{issue.repo.name}
+          </Link>{" "}
+          #{issue.number} · opened <RelativeTime date={issue.createdAt} /> by @{issue.author}
+        </p>
+      </div>
+      <Badge tone={open ? "success" : "purple"}>{open ? "Open" : "Closed"}</Badge>
     </div>
   );
 }
 
-function IssueResults({ results }: { results: SearchIssueResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-sm text-gh-muted py-8 text-center">No issues matched your search.</p>;
-  }
+function UserRow({ result }: { result: SearchUserResult }) {
+  const name = result.displayName || result.handle;
   return (
-    <div className="card divide-y divide-gh-border overflow-hidden">
-      {results.map((i) => (
-        <div key={i.id} className="px-4 py-3 hover:bg-gh-bg flex items-start gap-3">
-          <IssueIcon state={i.state} />
-          <div className="flex-1 min-w-0">
-            <Link
-              to={`/${i.repo.ownerHandle}/${i.repo.name}/issues/${i.number}`}
-              className="text-sm font-semibold text-gh-text hover:text-gh-accent hover:underline no-underline"
-            >
-              {i.title}
-            </Link>
-            <p className="text-xs text-gh-muted mt-0.5">
-              <Link
-                to={`/${i.repo.ownerHandle}/${i.repo.name}`}
-                className="text-gh-accent hover:underline no-underline"
-              >
-                {i.repo.ownerHandle}/{i.repo.name}
-              </Link>
-              {" "}#{i.number} · opened {timeAgo(i.createdAt)} by @{i.author}
-            </p>
-          </div>
-          <span className={`badge text-xs flex-shrink-0 ${i.state === "open" ? "text-gh-success border-gh-success" : "text-gh-muted"}`}>
-            {i.state}
-          </span>
-        </div>
-      ))}
+    <div className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-fh-surface-muted">
+      <Avatar name={name} size={40} />
+      <div className="min-w-0 flex-1">
+        <Link
+          to={`/${result.handle}`}
+          className="text-fh-base font-semibold text-fh-fg hover:text-fh-accent-fg hover:underline"
+        >
+          {name}
+        </Link>
+        <p className="text-fh-sm text-fh-fg-muted">@{result.handle}</p>
+      </div>
+      <span className="shrink-0 text-fh-xs text-fh-fg-subtle">
+        Joined <RelativeTime date={result.createdAt} />
+      </span>
     </div>
   );
 }
 
-function UserResults({ results }: { results: SearchUserResult[] }) {
-  if (results.length === 0) {
-    return <p className="text-sm text-gh-muted py-8 text-center">No users matched your search.</p>;
-  }
+function ResultsSkeleton() {
   return (
-    <div className="card divide-y divide-gh-border overflow-hidden">
-      {results.map((u) => (
-        <div key={u.id} className="px-4 py-3 hover:bg-gh-bg flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-gh-accent flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-            {(u.displayName || u.handle)[0].toUpperCase()}
+    <RowList aria-hidden="true">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3">
+          <Skeleton variant="circle" width={16} height={16} />
+          <div className="flex-1 space-y-1.5">
+            <Skeleton variant="text" width="40%" />
+            <Skeleton variant="text" width="60%" />
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gh-text">{u.displayName || u.handle}</p>
-            <p className="text-xs text-gh-muted">@{u.handle}</p>
-          </div>
-          <span className="text-xs text-gh-muted">Joined {timeAgo(u.createdAt)}</span>
         </div>
       ))}
-    </div>
+    </RowList>
   );
 }
 
 export function SearchPage({ token, user, onLogout }: Props) {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
 
   const q = params.get("q") ?? "";
   const type = (params.get("type") ?? "repos") as SearchType;
+  const activeQuery = q.trim().length >= 2 ? q.trim() : "";
 
   const [inputValue, setInputValue] = useState(q);
-  const [results, setResults] = useState<unknown[]>([]);
+  const [data, setData] = useState<SearchData>(EMPTY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setInputValue(q);
   }, [q]);
 
   useEffect(() => {
-    if (!q || q.trim().length < 2) {
-      setResults([]);
+    if (!activeQuery) {
+      setData(EMPTY);
+      setError(null);
+      setLoading(false);
       return;
     }
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    search(token, q, type)
-      .then((d) => setResults(d.results))
-      .catch((e) => setError(e instanceof Error ? e.message : "Search failed"))
-      .finally(() => setLoading(false));
-  }, [q, type, token]);
+    Promise.allSettled([
+      search(token, activeQuery, "repos"),
+      search(token, activeQuery, "issues"),
+      search(token, activeQuery, "users"),
+    ])
+      .then(([repos, issues, users]) => {
+        if (cancelled) return;
+        if (repos.status === "rejected" && issues.status === "rejected" && users.status === "rejected") {
+          const reason = repos.reason;
+          setError(reason instanceof Error ? reason.message : "Search failed");
+          setData(EMPTY);
+          return;
+        }
+        setData({
+          repos: repos.status === "fulfilled" ? (repos.value.results as SearchRepoResult[]) : [],
+          issues: issues.status === "fulfilled" ? (issues.value.results as SearchIssueResult[]) : [],
+          users: users.status === "fulfilled" ? (users.value.results as SearchUserResult[]) : [],
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeQuery, token]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -169,108 +188,145 @@ export function SearchPage({ token, user, onLogout }: Props) {
     setParams({ q, type: t });
   }
 
-  const tabs: { key: SearchType; label: string }[] = [
-    { key: "repos", label: "Repositories" },
-    { key: "issues", label: "Issues" },
-    { key: "users", label: "Users" },
-  ];
+  const counts: Record<SearchType, number> = {
+    repos: data.repos.length,
+    issues: data.issues.length,
+    users: data.users.length,
+  };
+  const activeCount = counts[type];
 
   return (
-    <div className="min-h-screen bg-gh-bg">
+    <div className="flex min-h-screen flex-col bg-fh-canvas">
       <Header user={user} onLogout={onLogout} token={token} />
 
-      <div className="max-w-[1280px] mx-auto px-4 py-6">
+      <div className="mx-auto w-full max-w-[1280px] flex-1 px-4 py-6">
         {/* Search bar */}
-        <form onSubmit={submit} className="mb-6">
-          <div className="flex gap-2">
-            <div className="relative flex-1 max-w-2xl">
-              <svg
-                width="16" height="16" viewBox="0 0 16 16" fill="currentColor"
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gh-muted pointer-events-none"
-              >
-                <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06L10.68 11.74z" />
-              </svg>
-              <input
-                ref={inputRef}
-                className="input pl-9 w-full"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Search ForgeHub…"
-                autoFocus
-              />
-            </div>
-            <button type="submit" className="btn-primary px-5">Search</button>
+        <form onSubmit={submit} className="mb-6 flex gap-2">
+          <div className="relative w-full max-w-2xl flex-1">
+            <Icons.SearchIcon
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fh-fg-muted"
+            />
+            <TextInput
+              className="pl-9"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="Search ForgeHub"
+              aria-label="Search ForgeHub"
+              autoFocus
+            />
           </div>
+          <Button type="submit" variant="primary">
+            Search
+          </Button>
         </form>
 
-        {q && q.trim().length >= 2 ? (
-          <div className="flex gap-6">
-            {/* Sidebar type filter */}
-            <aside className="w-44 flex-shrink-0">
-              <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide px-3 mb-2">Type</p>
-              <ul className="space-y-0.5">
-                {tabs.map((t) => (
-                  <li key={t.key}>
-                    <button
-                      className={`w-full text-left px-3 py-1.5 text-sm rounded-md transition-colors ${
-                        type === t.key
-                          ? "font-semibold text-gh-text bg-gh-bg border border-gh-border"
-                          : "text-gh-muted hover:text-gh-text hover:bg-gh-bg"
-                      }`}
-                      onClick={() => switchType(t.key)}
-                    >
-                      {t.label}
-                    </button>
-                  </li>
+        {activeQuery ? (
+          <div className="flex flex-col gap-6 md:flex-row">
+            {/* Type filter sidebar */}
+            <aside className="w-full flex-shrink-0 md:w-52">
+              <p className="mb-2 px-3 text-fh-xs font-semibold uppercase tracking-wide text-fh-fg-subtle">
+                Filter by
+              </p>
+              <nav className="flex flex-col gap-0.5">
+                {TYPES.map((t) => (
+                  <TypeItem
+                    key={t.key}
+                    active={type === t.key}
+                    icon={t.icon}
+                    label={t.label}
+                    count={counts[t.key]}
+                    onClick={() => switchType(t.key)}
+                  />
                 ))}
-              </ul>
+              </nav>
             </aside>
 
             {/* Results */}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-gh-muted mb-3">
-                {loading ? "Searching…" : error ? "" : `${results.length} result${results.length !== 1 ? "s" : ""} for "${q}"`}
+            <div className="min-w-0 flex-1">
+              <p className="mb-3 text-fh-sm text-fh-fg-muted" aria-live="polite">
+                {loading
+                  ? "Searching…"
+                  : error
+                    ? ""
+                    : `${activeCount} ${activeCount === 1 ? "result" : "results"} for “${activeQuery}”`}
               </p>
 
-              {error && (
-                <div className="card p-4 text-sm text-gh-danger">{error}</div>
-              )}
+              {loading && <ResultsSkeleton />}
 
-              {!loading && !error && type === "repos" && (
-                <RepoResults results={results as SearchRepoResult[]} />
-              )}
-              {!loading && !error && type === "issues" && (
-                <IssueResults results={results as SearchIssueResult[]} />
-              )}
-              {!loading && !error && type === "users" && (
-                <UserResults results={results as SearchUserResult[]} />
-              )}
-
-              {loading && (
-                <div className="card divide-y divide-gh-border overflow-hidden animate-pulse">
-                  {[...Array(5)].map((_, i) => (
-                    <div key={i} className="flex items-center gap-3 px-4 py-3">
-                      <div className="w-4 h-4 bg-gray-200 rounded" />
-                      <div className="flex-1 space-y-1.5">
-                        <div className="h-4 bg-gray-200 rounded w-2/5" />
-                        <div className="h-3 bg-gray-100 rounded w-3/5" />
-                      </div>
-                    </div>
-                  ))}
+              {!loading && error && (
+                <div className="rounded-md border border-fh-border bg-fh-surface px-4 py-4 text-fh-sm text-fh-danger-fg">
+                  {error}
                 </div>
               )}
+
+              {!loading && !error && type === "repos" &&
+                (data.repos.length === 0 ? (
+                  <EmptyState
+                    bordered
+                    icon={<RepoIcon size={28} />}
+                    title="No repositories found"
+                    description={`No repository matches “${activeQuery}”. Try a different term or search issues and users instead.`}
+                  />
+                ) : (
+                  <RowList aria-label="Repository results">
+                    {data.repos.map((r) => (
+                      <RepoRow
+                        key={r.id}
+                        to={`/${r.ownerHandle}/${r.name}`}
+                        name={`${r.ownerHandle}/${r.name}`}
+                        description={r.description}
+                        visibility={r.visibility}
+                        updatedAt={r.updatedAt}
+                      />
+                    ))}
+                  </RowList>
+                ))}
+
+              {!loading && !error && type === "issues" &&
+                (data.issues.length === 0 ? (
+                  <EmptyState
+                    bordered
+                    icon={<IssueOpenIcon size={28} />}
+                    title="No issues found"
+                    description={`No issue matches “${activeQuery}”. Check the wording, or search repositories and users instead.`}
+                  />
+                ) : (
+                  <RowList aria-label="Issue results">
+                    {data.issues.map((i) => (
+                      <IssueRow key={i.id} issue={i} />
+                    ))}
+                  </RowList>
+                ))}
+
+              {!loading && !error && type === "users" &&
+                (data.users.length === 0 ? (
+                  <EmptyState
+                    bordered
+                    icon={<PersonIcon size={28} />}
+                    title="No users found"
+                    description={`No user matches “${activeQuery}”. Try their handle, or search repositories and issues instead.`}
+                  />
+                ) : (
+                  <RowList aria-label="User results">
+                    {data.users.map((u) => (
+                      <UserRow key={u.id} result={u} />
+                    ))}
+                  </RowList>
+                ))}
             </div>
           </div>
         ) : (
-          <div className="text-center py-16 text-gh-muted">
-            <svg width="48" height="48" viewBox="0 0 16 16" fill="currentColor" className="mx-auto mb-4 opacity-30">
-              <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06L10.68 11.74z" />
-            </svg>
-            <p className="text-base font-semibold text-gh-text">Search ForgeHub</p>
-            <p className="text-sm mt-1">Find repositories, issues, and users.</p>
-          </div>
+          <EmptyState
+            className="py-20"
+            icon={<Icons.SearchIcon size={40} />}
+            title="Search ForgeHub"
+            description="Find repositories, issues, and users. Type at least two characters to begin."
+          />
         )}
       </div>
+
+      <Footer />
     </div>
   );
 }
