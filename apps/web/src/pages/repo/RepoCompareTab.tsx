@@ -128,22 +128,26 @@ export function RepoCompareTab({ token, handle, repoName, branches, defaultBranc
       </p>
 
       {/* Ref pickers */}
-      <div className="flex items-center gap-2 flex-wrap mb-5 rounded-md border border-fh-border bg-fh-surface px-3 py-2.5">
-        <span className="text-fh-sm text-fh-fg-muted">base:</span>
-        <div className="w-[180px]">
-          <Select value={baseRef} onChange={(e) => setRefs(e.target.value, headRef)} sizing="sm">
-            {!branchNames.includes(baseRef) && <option value={baseRef}>{baseRef}</option>}
-            {branches.map((b) => <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>)}
-          </Select>
+      <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-5 rounded-md border border-fh-border bg-fh-surface px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="text-fh-sm text-fh-fg-muted">base:</span>
+          <div className="w-[170px]">
+            <Select value={baseRef} onChange={(e) => setRefs(e.target.value, headRef)} sizing="sm">
+              {!branchNames.includes(baseRef) && <option value={baseRef}>{baseRef}</option>}
+              {branches.map((b) => <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>)}
+            </Select>
+          </div>
         </div>
-        <span className="text-fh-fg-subtle select-none px-1" aria-hidden="true">←</span>
-        <span className="text-fh-sm text-fh-fg-muted">compare:</span>
-        <div className="w-[180px]">
-          <Select value={headRef} onChange={(e) => setRefs(baseRef, e.target.value)} sizing="sm">
-            {!branchNames.includes(headRef) && headRef && <option value={headRef}>{headRef}</option>}
-            {!headRef && <option value="">Select a branch…</option>}
-            {branches.map((b) => <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>)}
-          </Select>
+        <span className="text-fh-fg-subtle select-none" aria-hidden="true">←</span>
+        <div className="flex items-center gap-2">
+          <span className="text-fh-sm text-fh-fg-muted">compare:</span>
+          <div className="w-[170px]">
+            <Select value={headRef} onChange={(e) => setRefs(baseRef, e.target.value)} sizing="sm">
+              {!branchNames.includes(headRef) && headRef && <option value={headRef}>{headRef}</option>}
+              {!headRef && <option value="">Select a branch…</option>}
+              {branches.map((b) => <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>)}
+            </Select>
+          </div>
         </div>
 
         <div className="flex-1" />
