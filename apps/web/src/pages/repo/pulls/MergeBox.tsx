@@ -143,10 +143,9 @@ export function MergeBox({
                   loading={resolving === "theirs"}
                   disabled={busy}
                   onClick={() => doResolve("theirs")}
-                  className="justify-start"
                 >
                   <span className="inline-flex items-center gap-1.5 min-w-0">
-                    Keep <BranchChip name={pr.fromBranch} className="max-w-[120px]" />
+                    Keep <BranchChip name={pr.fromBranch} className="max-w-[130px]" />
                   </span>
                 </Button>
                 <Button
@@ -155,10 +154,9 @@ export function MergeBox({
                   loading={resolving === "ours"}
                   disabled={busy}
                   onClick={() => doResolve("ours")}
-                  className="justify-start"
                 >
                   <span className="inline-flex items-center gap-1.5 min-w-0">
-                    Keep <BranchChip name={pr.toBranch} className="max-w-[120px]" />
+                    Keep <BranchChip name={pr.toBranch} className="max-w-[130px]" />
                   </span>
                 </Button>
               </div>
