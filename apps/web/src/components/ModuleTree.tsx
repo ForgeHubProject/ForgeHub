@@ -31,7 +31,7 @@ export function ModuleTree({ entities, constraints, selectedIds, onSelect, diffT
   const roots = buildTree(entities);
 
   if (roots.length === 0) {
-    return <div style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>No entities found.</div>;
+    return <div style={{ padding: 16, color: "rgb(var(--fh-fg-muted))", fontSize: 13 }}>No entities found.</div>;
   }
 
   return (
