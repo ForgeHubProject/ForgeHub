@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRepo, getCollaboratingRepos, getMyRepos } from "../api";
 import { Header } from "../components/Header";
+import { Footer } from "../components/Footer";
 import type { Repo, User } from "../types";
 
 type Props = {
@@ -96,10 +97,10 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-gh-bg">
+    <div className="min-h-screen bg-gh-bg flex flex-col">
       <Header user={user} onLogout={onLogout} token={token} />
 
-      <div className="max-w-[1200px] mx-auto px-4 py-8">
+      <div className="flex-1 max-w-[1200px] w-full mx-auto px-4 py-8">
         <div className="flex flex-col sm:flex-row gap-6">
           {/* Left sidebar */}
           <aside className="w-full sm:w-[296px] flex-shrink-0">
@@ -180,6 +181,8 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
           </main>
         </div>
       </div>
+
+      <Footer />
 
       {/* Create repo modal */}
       {showCreate && (

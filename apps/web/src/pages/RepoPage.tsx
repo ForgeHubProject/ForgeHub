@@ -160,14 +160,11 @@ export function RepoPage({ token, user, onLogout }: Props) {
     return (
       <Link
         to={tab === "code" ? base : `${base}/${tab}`}
-        className="flex items-center gap-1.5 px-4 py-3 text-sm border-b-2 transition-colors whitespace-nowrap no-underline"
-        style={{
-          borderBottomColor: isActive ? "#fd8c73" : "transparent",
-          color: isActive ? "#1f2328" : "#656d76",
-          fontWeight: isActive ? 600 : 400,
-        }}
-        onMouseEnter={(e) => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = "#1f2328"; (e.currentTarget as HTMLElement).style.borderBottomColor = "#d0d7de"; } }}
-        onMouseLeave={(e) => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = "#656d76"; (e.currentTarget as HTMLElement).style.borderBottomColor = "transparent"; } }}
+        className={`flex items-center gap-1.5 px-4 py-3 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap no-underline ${
+          isActive
+            ? "text-fh-fg font-semibold border-fh-accent-emphasis"
+            : "text-fh-fg-muted border-transparent hover:text-fh-fg hover:border-fh-border-strong"
+        }`}
       >
         {icon}
         {label}

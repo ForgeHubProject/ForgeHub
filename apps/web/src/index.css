@@ -2,25 +2,178 @@
 @tailwind components;
 @tailwind utilities;
 
-/* highlight.js github theme (inlined subset) */
-.hljs { background: #f6f8fa; color: #24292e; }
-.hljs-comment, .hljs-punctuation { color: #6a737d; }
-.hljs-keyword, .hljs-selector-tag { color: #d73a49; font-weight: 500; }
-.hljs-string, .hljs-attr { color: #032f62; }
-.hljs-number, .hljs-literal { color: #005cc5; }
-.hljs-title, .hljs-class .hljs-title, .hljs-function { color: #6f42c1; }
-.hljs-type, .hljs-built_in { color: #e36209; }
-.hljs-variable, .hljs-template-variable { color: #24292e; }
-.hljs-addition { color: #22863a; background: #f0fff4; }
-.hljs-deletion { color: #b31d28; background: #ffeef0; }
-.hljs-meta { color: #005cc5; }
-.hljs-tag { color: #22863a; }
-.hljs-name { color: #22863a; }
-.hljs-attribute { color: #6f42c1; }
+/* ============================================================================
+   ForgeHub design tokens — a cool, cyan-leaning blue identity.
 
-/* Markdown prose tweaks — make it match GitHub */
+   Values are space-separated RGB triples so Tailwind's
+   `rgb(var(--fh-x) / <alpha-value>)` opacity syntax works everywhere.
+   Light theme lives on :root, dark theme on `.dark` (toggled on <html> by
+   src/ui/theme.tsx and the no-flash script in index.html).
+   Header tokens are theme-independent — the top bar is a dense dark surface in
+   both themes. Every text/border/accent pair is WCAG-AA verified; the ratios
+   and hex values are documented in apps/web/DESIGN.md.
+   ============================================================================ */
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --fh-canvas: 246 248 251;
+  --fh-surface: 255 255 255;
+  --fh-surface-muted: 238 242 247;
+  --fh-surface-inset: 241 244 248;
+  /* borders */
+  --fh-border: 213 221 230;
+  --fh-border-muted: 230 235 241;
+  --fh-border-strong: 194 204 214;
+  /* text */
+  --fh-fg: 17 24 32;
+  --fh-fg-muted: 88 102 117;
+  --fh-fg-subtle: 107 120 133;
+  --fh-fg-placeholder: 139 151 164;
+  /* accent (cyan-blue) */
+  --fh-accent-fg: 11 111 150;
+  --fh-accent-emphasis: 11 127 171;
+  --fh-accent-emphasis-hover: 9 95 128;
+  --fh-accent-muted: 226 242 249;
+  --fh-accent-subtle: 239 247 251;
+  --fh-on-emphasis: 255 255 255;
+  /* semantic */
+  --fh-success-fg: 19 122 75;
+  --fh-success-emphasis: 26 127 82;
+  --fh-success-muted: 223 243 232;
+  --fh-danger-fg: 194 53 47;
+  --fh-danger-emphasis: 200 52 52;
+  --fh-danger-muted: 252 228 226;
+  --fh-warning-fg: 143 98 0;
+  --fh-warning-emphasis: 176 125 10;
+  --fh-warning-muted: 251 239 208;
+  --fh-purple-fg: 122 68 214;
+  --fh-purple-emphasis: 130 80 223;
+  --fh-purple-muted: 239 232 252;
+  --fh-neutral-muted: 234 238 243;
+
+  /* header — dark bar in both themes */
+  --fh-header-bg: 13 18 25;
+  --fh-header-text: 231 237 243;
+  --fh-header-muted: 154 167 180;
+  --fh-header-border: 33 42 53;
+  --fh-header-accent: 57 192 232;
+
+  /* effects */
+  --fh-radius: 6px;
+  --fh-shadow-overlay: 0 8px 24px -8px rgb(17 24 32 / 0.24), 0 2px 6px -3px rgb(17 24 32 / 0.14);
+  --fh-shadow-sm: 0 1px 2px rgb(17 24 32 / 0.08);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --fh-canvas: 11 15 20;
+  --fh-surface: 17 22 29;
+  --fh-surface-muted: 22 29 38;
+  --fh-surface-inset: 13 18 25;
+  --fh-border: 36 46 58;
+  --fh-border-muted: 28 36 46;
+  --fh-border-strong: 50 65 82;
+  --fh-fg: 230 237 243;
+  --fh-fg-muted: 147 161 176;
+  --fh-fg-subtle: 125 139 154;
+  --fh-fg-placeholder: 106 120 135;
+  --fh-accent-fg: 57 192 232;
+  --fh-accent-emphasis: 57 192 232;
+  --fh-accent-emphasis-hover: 90 204 239;
+  --fh-accent-muted: 16 48 61;
+  --fh-accent-subtle: 14 34 44;
+  --fh-on-emphasis: 4 20 29;
+  --fh-success-fg: 63 178 127;
+  --fh-success-emphasis: 47 158 110;
+  --fh-success-muted: 18 48 36;
+  --fh-danger-fg: 240 115 107;
+  --fh-danger-emphasis: 224 90 82;
+  --fh-danger-muted: 58 31 30;
+  --fh-warning-fg: 216 166 58;
+  --fh-warning-emphasis: 200 153 47;
+  --fh-warning-muted: 51 40 19;
+  --fh-purple-fg: 168 132 243;
+  --fh-purple-emphasis: 145 102 230;
+  --fh-purple-muted: 36 26 58;
+  --fh-neutral-muted: 28 36 46;
+
+  --fh-shadow-overlay: 0 10px 30px -6px rgb(0 0 0 / 0.6), 0 2px 8px -2px rgb(0 0 0 / 0.5);
+  --fh-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-fh-canvas text-fh-fg;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  a {
+    color: rgb(var(--fh-accent-fg));
+    text-decoration: none;
+  }
+  a:hover { text-decoration: underline; }
+
+  button { font-family: inherit; }
+
+  ::selection { background: rgb(var(--fh-accent-emphasis) / 0.22); }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--fh-accent-emphasis));
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* subtle theme-aware scrollbars */
+  * { scrollbar-color: rgb(var(--fh-border-strong)) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--fh-border-strong));
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--fh-fg-subtle)); background-clip: content-box; }
+}
+
+/* ── Syntax highlighting (theme-aware) ─────────────────────────────────────── */
+.hljs { background: rgb(var(--fh-surface-muted)); color: rgb(var(--fh-fg)); }
+.hljs-comment, .hljs-punctuation { color: rgb(var(--fh-fg-subtle)); }
+.hljs-keyword, .hljs-selector-tag { color: #cf222e; font-weight: 500; }
+.hljs-string, .hljs-attr { color: #0a3069; }
+.hljs-number, .hljs-literal { color: #0550ae; }
+.hljs-title, .hljs-class .hljs-title, .hljs-function { color: #6639ba; }
+.hljs-type, .hljs-built_in { color: #953800; }
+.hljs-variable, .hljs-template-variable { color: rgb(var(--fh-fg)); }
+.hljs-addition { color: #116329; background: #d8fadf; }
+.hljs-deletion { color: #a40e26; background: #ffd7d5; }
+.hljs-meta { color: #0550ae; }
+.hljs-tag, .hljs-name { color: #116329; }
+.hljs-attribute { color: #6639ba; }
+
+.dark .hljs-keyword, .dark .hljs-selector-tag { color: #ff7b72; }
+.dark .hljs-string, .dark .hljs-attr { color: #a5d6ff; }
+.dark .hljs-number, .dark .hljs-literal, .dark .hljs-meta { color: #79c0ff; }
+.dark .hljs-title, .dark .hljs-class .hljs-title, .dark .hljs-function, .dark .hljs-attribute { color: #d2a8ff; }
+.dark .hljs-type, .dark .hljs-built_in { color: #ffa657; }
+.dark .hljs-tag, .dark .hljs-name { color: #7ee787; }
+.dark .hljs-addition { color: #aff5b4; background: rgb(46 160 67 / 0.15); }
+.dark .hljs-deletion { color: #ffdcd7; background: rgb(248 81 73 / 0.15); }
+
+/* ── Markdown prose (theme-aware) ──────────────────────────────────────────── */
 .gh-prose {
-  color: #1f2328;
+  color: rgb(var(--fh-fg));
   font-size: 14px;
   line-height: 1.6;
 }
@@ -30,25 +183,25 @@
   margin-top: 24px;
   margin-bottom: 12px;
   padding-bottom: 0.3em;
-  color: #1f2328;
+  color: rgb(var(--fh-fg));
 }
-.gh-prose h1 { font-size: 2em; border-bottom: 1px solid #d0d7de; }
-.gh-prose h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; }
-.gh-prose h3 { font-size: 1.25em; }
+.gh-prose h1 { font-size: 1.75em; border-bottom: 1px solid rgb(var(--fh-border)); }
+.gh-prose h2 { font-size: 1.4em; border-bottom: 1px solid rgb(var(--fh-border)); }
+.gh-prose h3 { font-size: 1.2em; }
 .gh-prose p { margin: 0 0 16px; }
-.gh-prose a { color: #ea580c; text-decoration: none; }
+.gh-prose a { color: rgb(var(--fh-accent-fg)); text-decoration: none; }
 .gh-prose a:hover { text-decoration: underline; }
 .gh-prose code:not(.hljs) {
-  background: rgba(175,184,193,0.2);
+  background: rgb(var(--fh-neutral-muted));
   border-radius: 6px;
   font-size: 85%;
   padding: .2em .4em;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 .gh-prose pre {
-  background: #f6f8fa;
+  background: rgb(var(--fh-surface-muted));
   border-radius: 6px;
-  border: 1px solid #d0d7de;
+  border: 1px solid rgb(var(--fh-border));
   font-size: 85%;
   overflow: auto;
   padding: 16px;
@@ -57,154 +210,84 @@
 }
 .gh-prose pre code { background: none; padding: 0; font-size: inherit; }
 .gh-prose ul, .gh-prose ol { margin-bottom: 16px; padding-left: 2em; }
+.gh-prose ul { list-style: disc; }
+.gh-prose ol { list-style: decimal; }
 .gh-prose li + li { margin-top: 4px; }
 .gh-prose blockquote {
-  border-left: 4px solid #d0d7de;
-  color: #656d76;
+  border-left: 3px solid rgb(var(--fh-border-strong));
+  color: rgb(var(--fh-fg-muted));
   margin: 0 0 16px;
   padding: 0 1em;
 }
 .gh-prose table { border-collapse: collapse; margin-bottom: 16px; width: 100%; }
-.gh-prose th, .gh-prose td { border: 1px solid #d0d7de; padding: 6px 13px; }
-.gh-prose th { background: #f6f8fa; font-weight: 600; }
-.gh-prose tr:nth-child(even) { background: #f6f8fa; }
+.gh-prose th, .gh-prose td { border: 1px solid rgb(var(--fh-border)); padding: 6px 13px; }
+.gh-prose th { background: rgb(var(--fh-surface-muted)); font-weight: 600; }
+.gh-prose tr:nth-child(even) { background: rgb(var(--fh-surface-muted)); }
 .gh-prose img { max-width: 100%; border-radius: 6px; }
 
-@layer base {
-  *, *::before, *::after {
-    box-sizing: border-box;
-  }
-
-  html {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
-  body {
-    @apply bg-gh-bg text-gh-text;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    margin: 0;
-  }
-
-  a {
-    @apply text-gh-accent;
-    text-decoration: none;
-  }
-
-  a:hover {
-    text-decoration: underline;
-  }
-
-  button {
-    font-family: inherit;
-  }
-
-  :focus-visible {
-    outline: 2px solid #ea580c;
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-}
-
+/* ── Component classes ─────────────────────────────────────────────────────
+   These back the legacy `.btn` / `.input` / `.card` / `.badge` / `.tab-*`
+   markup still used by not-yet-migrated pages, now wired to FH tokens so they
+   pick up dark mode and the new palette for free. New code should prefer the
+   typed primitives in src/ui/. ───────────────────────────────────────────── */
 @layer components {
-  /* ── Buttons ── */
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-[5px] text-sm font-medium
-           rounded-md border cursor-pointer select-none transition-all duration-100;
+    @apply inline-flex items-center justify-center gap-1.5 px-3 text-sm font-medium
+           rounded-md border cursor-pointer select-none transition-colors duration-100;
     line-height: 20px;
+    padding-top: 5px;
+    padding-bottom: 5px;
   }
+  .btn:disabled { @apply opacity-60 cursor-not-allowed pointer-events-none; }
 
-  .btn:disabled {
-    @apply opacity-60 cursor-not-allowed pointer-events-none;
-  }
+  .btn-primary { @apply btn border-transparent bg-fh-accent-emphasis text-fh-on-emphasis; }
+  .btn-primary:hover:not(:disabled) { @apply bg-fh-accent-emphasis-hover; }
 
-  .btn-primary {
-    @apply btn text-white border-transparent bg-gh-accent;
-  }
+  .btn-default { @apply btn text-fh-fg border-fh-border bg-fh-surface; }
+  .btn-default:hover:not(:disabled) { @apply bg-fh-surface-muted border-fh-border-strong; }
 
-  .btn-primary:hover:not(:disabled) {
-    @apply bg-gh-accent-hover;
-  }
+  .btn-danger { @apply btn text-fh-danger-fg border-fh-border bg-fh-surface; }
+  .btn-danger:hover:not(:disabled) { @apply bg-fh-danger-emphasis text-white border-transparent; }
 
-  .btn-default {
-    @apply btn text-gh-text border-gh-border bg-gh-canvas;
-  }
-
-  .btn-default:hover:not(:disabled) {
-    @apply bg-gh-bg border-gray-300;
-  }
-
-  .btn-danger {
-    @apply btn text-gh-danger border-gh-border bg-gh-canvas;
-  }
-
-  .btn-danger:hover:not(:disabled) {
-    @apply bg-gh-danger text-white border-transparent;
-  }
-
-  /* ── Inputs ── */
   .input {
-    @apply w-full px-3 py-[5px] text-sm bg-gh-canvas border border-gh-border rounded-md
-           placeholder-gh-muted outline-none;
+    @apply w-full px-3 text-sm bg-fh-surface border border-fh-border rounded-md
+           text-fh-fg outline-none;
     line-height: 20px;
-    transition: border-color 0.1s, box-shadow 0.1s;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    transition: border-color 0.12s, box-shadow 0.12s;
   }
-
+  .input::placeholder { color: rgb(var(--fh-fg-placeholder)); }
   .input:focus {
-    border-color: #ea580c;
-    box-shadow: inset 0 0 0 1px #ea580c;
+    border-color: rgb(var(--fh-accent-emphasis));
+    box-shadow: 0 0 0 3px rgb(var(--fh-accent-emphasis) / 0.3);
   }
 
-  .label {
-    @apply block text-sm font-semibold text-gh-text mb-1;
-  }
+  .label { @apply block text-sm font-semibold text-fh-fg mb-1; }
 
-  /* ── Cards ── */
-  .card {
-    @apply bg-gh-canvas border border-gh-border rounded-md;
-  }
+  .card { @apply bg-fh-surface border border-fh-border rounded-md; }
 
-  /* ── Badges ── */
-  .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border;
-  }
+  .badge { @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border; }
+  .badge-public { @apply badge text-fh-success-fg bg-fh-success-muted border-transparent; }
+  .badge-private { @apply badge text-fh-warning-fg bg-fh-warning-muted border-transparent; }
 
-  .badge-public {
-    @apply badge text-gh-success bg-gh-success-muted border-transparent;
-  }
-
-  .badge-private {
-    @apply badge text-gh-warning bg-gh-warning-muted border-transparent;
-  }
-
-  /* ── Counters ── */
   .counter {
     @apply inline-flex items-center justify-center px-1.5 text-xs font-semibold
-           bg-gray-100 text-gh-muted rounded-full border border-gh-border;
+           bg-fh-neutral-muted text-fh-fg-muted rounded-full;
     min-width: 20px;
     height: 18px;
   }
 
-  /* ── Tab navigation ── */
-  .tab-nav {
-    @apply flex items-stretch border-b border-gh-border;
-  }
-
+  .tab-nav { @apply flex items-stretch border-b border-fh-border; }
   .tab-item {
-    @apply flex items-center gap-1.5 px-4 py-2 text-sm text-gh-muted
+    @apply flex items-center gap-1.5 px-3 py-2 text-sm text-fh-fg-muted
            border-b-2 border-transparent cursor-pointer
-           hover:text-gh-text hover:border-gh-border transition-colors duration-100;
+           hover:text-fh-fg transition-colors duration-100;
   }
+  .tab-item-active { @apply tab-item text-fh-fg font-semibold; border-bottom-color: rgb(var(--fh-accent-emphasis)); }
 
-  .tab-item-active {
-    @apply tab-item text-gh-text font-semibold border-b-gh-accent;
-  }
-
-  /* ── Avatar ── */
   .avatar {
     @apply inline-flex items-center justify-center rounded-full
-           bg-gh-accent text-white font-semibold overflow-hidden flex-shrink-0;
+           bg-fh-accent-emphasis text-fh-on-emphasis font-semibold overflow-hidden flex-shrink-0;
   }
 }
