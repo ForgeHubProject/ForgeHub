@@ -82,20 +82,25 @@ function FileDiffCard({
   return (
     <div id={`diff-${index}`} className="scroll-mt-4 rounded-md border border-fh-border bg-fh-surface">
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={expanded ? `Collapse ${displayPath}` : `Expand ${displayPath}`}
+        onClick={() => setExpanded((e) => !e)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((x) => !x);
+          }
+        }}
         className={cx(
-          "sticky top-0 z-10 flex items-center gap-2 border-b border-fh-border bg-fh-surface-muted px-2.5 py-2",
+          "sticky top-0 z-10 flex cursor-pointer select-none items-center gap-2 border-b border-fh-border bg-fh-surface-muted px-2.5 py-2",
           expanded ? "rounded-t-md" : "rounded-md border-b-transparent",
         )}
       >
-        <button
-          type="button"
-          onClick={() => setExpanded((e) => !e)}
-          aria-expanded={expanded}
-          aria-label={expanded ? "Collapse file" : "Expand file"}
-          className="flex flex-shrink-0 items-center justify-center rounded p-0.5 text-fh-fg-subtle hover:text-fh-fg"
-        >
+        <span className="flex flex-shrink-0 items-center justify-center text-fh-fg-subtle">
           <ChevronRightIcon size={14} className={cx("transition-transform", expanded && "rotate-90")} />
-        </button>
+        </span>
         <FileIcon size={14} className="flex-shrink-0 text-fh-fg-subtle" />
         <Link
           to={`${base}/blob/${sha}/${blobPath}`}
