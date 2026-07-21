@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, Collaborator, createLabel, deleteLabel,
+  addCollaborator, Collaborator, createLabel, deleteLabel, getRepo,
   listCollaborators, listLabels, removeCollaborator, updateLabel,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
-import type { Label, SearchUserResult, User } from "../../types";
+import type { Label, Repo, SearchUserResult, User } from "../../types";
+import {
+  Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
+  RelativeTime, Select, Skeleton, TextInput, cx, useToast,
+} from "../../ui";
 
 type Props = {
   token: string;
@@ -13,28 +17,277 @@ type Props = {
   user: User;
 };
 
-// ─── Predefined label colors (GitHub palette) ─────────────────────────────────
+// ── local Octicon-style marks ─────────────────────────────────────────────────
+
+function Icon({ path, size = 16 }: { path: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d={path} />
+    </svg>
+  );
+}
+const GEAR = "M8 0a8.2 8.2 0 00-.701.031C6.444.095 5.99.645 5.99 1.16v.702c0 .132-.052.263-.157.365a.855.855 0 01-.36.209l-.61.163a.86.86 0 01-.415-.001.844.844 0 01-.352-.211l-.496-.496a1.03 1.03 0 00-1.319-.111 8.02 8.02 0 00-.99.99 1.03 1.03 0 00.111 1.319l.496.496c.093.092.16.216.209.351a.86.86 0 010 .416l-.163.61a.855.855 0 01-.209.36.855.855 0 01-.365.157h-.702C.645 6.99.095 7.444.031 8.299a8.2 8.2 0 000 1.402c.064.855.614 1.309 1.129 1.309h.702c.132 0 .263.052.365.157.102.102.16.228.209.36l.163.61a.86.86 0 010 .416.844.844 0 01-.209.351l-.496.496a1.03 1.03 0 00-.111 1.319c.298.373.63.703.99.99a1.03 1.03 0 001.319-.111l.496-.496a.844.844 0 01.351-.209.86.86 0 01.416 0l.61.163c.132.049.258.107.36.209.105.102.157.233.157.365v.702c0 .515.454 1.065 1.309 1.129a8.2 8.2 0 001.402 0c.855-.064 1.309-.614 1.309-1.129v-.702c0-.132.052-.263.157-.365a.855.855 0 01.36-.209l.61-.163a.86.86 0 01.416 0c.135.049.259.116.351.209l.496.496a1.03 1.03 0 001.319.111c.373-.298.703-.63.99-.99a1.03 1.03 0 00-.111-1.319l-.496-.496a.844.844 0 01-.209-.351.86.86 0 010-.416l.163-.61a.855.855 0 01.209-.36.855.855 0 01.365-.157h.702c.515 0 1.065-.454 1.129-1.309a8.2 8.2 0 000-1.402c-.064-.855-.614-1.309-1.129-1.309h-.702a.855.855 0 01-.365-.157.855.855 0 01-.209-.36l-.163-.61a.86.86 0 010-.416.844.844 0 01.209-.351l.496-.496a1.03 1.03 0 00.111-1.319 8.02 8.02 0 00-.99-.99 1.03 1.03 0 00-1.319.111l-.496.496a.844.844 0 01-.351.209.86.86 0 01-.416 0l-.61-.163a.855.855 0 01-.36-.209.855.855 0 01-.157-.365V1.16c0-.515-.454-1.065-1.309-1.129A8.2 8.2 0 008 0zm0 4.5a3.5 3.5 0 110 7 3.5 3.5 0 010-7z";
+const PEOPLE = "M5.5 3.5a2 2 0 100 4 2 2 0 000-4zM2 5.5a3.5 3.5 0 115.898 2.549 5.508 5.508 0 013.034 4.084.75.75 0 11-1.482.235 4 4 0 00-7.9 0 .75.75 0 01-1.482-.236A5.507 5.507 0 013.102 8.05 3.49 3.49 0 012 5.5zM11 4a.75.75 0 100 1.5 1.5 1.5 0 01.666 2.844.75.75 0 00-.416.672c0 .29.163.56.416.672a4.5 4.5 0 012.415 4.058.75.75 0 001.5.001c0-1.883-.911-3.552-2.319-4.599A3 3 0 0011 4z";
+const LABEL = "M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25 6.25a.25.25 0 010 .354l-5.025 5.025a.25.25 0 01-.354 0l-6.25-6.25a.25.25 0 01-.073-.177zm-1.5 0V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 010 2.474l-5.026 5.026a1.75 1.75 0 01-2.474 0l-6.25-6.25A1.75 1.75 0 011 7.775zM6 5a1 1 0 100 2 1 1 0 000-2z";
+const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
+
+const ROLE_LABEL: Record<Collaborator["role"], string> = {
+  reader: "Reader", writer: "Writer", admin: "Admin",
+};
+
+// ── section shell ─────────────────────────────────────────────────────────────
+
+function SectionHeader({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className="pb-3 mb-4 border-b border-fh-border">
+      <h2 className="text-fh-lg font-semibold text-fh-fg">{title}</h2>
+      {description && <p className="text-fh-sm text-fh-fg-muted mt-0.5">{description}</p>}
+    </div>
+  );
+}
+
+// ── General ───────────────────────────────────────────────────────────────────
+
+function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-1 sm:gap-4 px-4 py-3">
+      <dt className="text-fh-sm font-semibold text-fh-fg">{label}</dt>
+      <dd className="text-fh-base text-fh-fg-muted min-w-0">{children}</dd>
+    </div>
+  );
+}
+
+function GeneralSection({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const [repo, setRepo] = useState<Repo | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getRepo(token, handle, repoName)
+      .then(setRepo)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, handle, repoName]);
+
+  return (
+    <div>
+      <SectionHeader title="General" description="Details about this repository." />
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+          <Skeleton className="h-5 w-1/3" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      ) : repo ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <div className="flex items-center gap-3 px-4 py-4 border-b border-fh-border">
+            <Avatar name={repo.name} size={40} square />
+            <div className="min-w-0">
+              <p className="text-fh-lg font-semibold text-fh-fg flex items-center gap-2">
+                <span className="truncate">{repo.fullName}</span>
+                <Badge tone="neutral">
+                  {repo.visibility === "public" ? "Public" : "Private"}
+                </Badge>
+              </p>
+              <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+                {repo.description || <span className="italic text-fh-fg-subtle">No description</span>}
+              </p>
+            </div>
+          </div>
+          <dl className="divide-y divide-fh-border">
+            <InfoRow label="Repository name"><span className="font-mono text-fh-fg">{repo.name}</span></InfoRow>
+            <InfoRow label="Owner"><span className="font-mono text-fh-fg">@{repo.ownerHandle}</span></InfoRow>
+            <InfoRow label="Visibility">{repo.visibility === "public" ? "Public — anyone can see this repository." : "Private — only you and collaborators can see it."}</InfoRow>
+            <InfoRow label="Created"><RelativeTime date={repo.createdAt} /></InfoRow>
+            <InfoRow label="Last updated"><RelativeTime date={repo.updatedAt} /></InfoRow>
+          </dl>
+        </div>
+      ) : (
+        <p className="text-fh-sm text-fh-fg-muted">Could not load repository details.</p>
+      )}
+    </div>
+  );
+}
+
+// ── Collaborators ─────────────────────────────────────────────────────────────
+
+function CollaboratorsSection({ token, repoName }: { token: string; repoName: string }) {
+  const [collabs, setCollabs] = useState<Collaborator[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<SearchUserResult | null>(null);
+  const [role, setRole] = useState<Collaborator["role"]>("writer");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<Collaborator | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    listCollaborators(token, repoName)
+      .then((d) => setCollabs(d.collaborators))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, repoName]);
+
+  function upsert(c: Collaborator) {
+    setCollabs((prev) => {
+      const i = prev.findIndex((x) => x.user.handle === c.user.handle);
+      if (i >= 0) { const next = [...prev]; next[i] = c; return next; }
+      return [...prev, c];
+    });
+  }
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const c = await addCollaborator(token, repoName, selected.handle, role);
+      upsert(c);
+      setSelected(null);
+      toast(`Added @${c.user.handle}`, { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add collaborator");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function changeRole(c: Collaborator, next: Collaborator["role"]) {
+    if (next === c.role) return;
+    setSavingId(c.id);
+    try {
+      const updated = await addCollaborator(token, repoName, c.user.handle, next);
+      upsert(updated);
+      toast(`@${c.user.handle} is now a ${ROLE_LABEL[next].toLowerCase()}`, { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to change role", { tone: "danger" });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function confirmRemove() {
+    if (!pendingRemove) return;
+    setRemoving(true);
+    try {
+      await removeCollaborator(token, repoName, pendingRemove.user.handle);
+      setCollabs((prev) => prev.filter((c) => c.id !== pendingRemove.id));
+      toast(`Removed @${pendingRemove.user.handle}`, { tone: "success" });
+      setPendingRemove(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to remove collaborator", { tone: "danger" });
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <div>
+      <SectionHeader title="Collaborators" description="People with access to this repository beyond you." />
+
+      {/* Add collaborator */}
+      <form onSubmit={add} className="bg-fh-surface border border-fh-border rounded-md p-4 mb-4">
+        <p className="text-fh-sm font-semibold text-fh-fg mb-3">Add a collaborator</p>
+        {selected ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-2 bg-fh-surface-muted border border-fh-border rounded-full pl-1 pr-2 py-1">
+              <Avatar name={selected.displayName || selected.handle} size={22} />
+              <span className="text-fh-sm font-medium text-fh-fg">{selected.displayName || selected.handle}</span>
+              <span className="text-fh-xs text-fh-fg-muted">@{selected.handle}</span>
+              <button type="button" aria-label="Clear selection" onClick={() => setSelected(null)}
+                className="ml-0.5 text-fh-fg-muted hover:text-fh-danger-fg cursor-pointer">
+                <Icon size={12} path="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
+              </button>
+            </span>
+            <div className="w-32">
+              <Select value={role} onChange={(e) => setRole(e.target.value as Collaborator["role"])} aria-label="Role">
+                <option value="reader">Reader</option>
+                <option value="writer">Writer</option>
+                <option value="admin">Admin</option>
+              </Select>
+            </div>
+            <Button variant="primary" type="submit" loading={adding}>Add collaborator</Button>
+          </div>
+        ) : (
+          <UserSearchInput token={token} onSelect={setSelected} />
+        )}
+        {error && <p className="text-fh-sm text-fh-danger-fg mt-2">{error}</p>}
+        <p className="text-fh-xs text-fh-fg-muted mt-3">
+          <span className="font-semibold text-fh-fg-muted">Reader</span> can view ·{" "}
+          <span className="font-semibold text-fh-fg-muted">Writer</span> can push and open issues/PRs ·{" "}
+          <span className="font-semibold text-fh-fg-muted">Admin</span> can manage settings.
+        </p>
+      </form>
+
+      {/* List */}
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton variant="block" width={32} height={32} className="rounded-full" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
+        </div>
+      ) : collabs.length === 0 ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState
+            icon={<Icon path={PEOPLE} size={28} />}
+            title="No collaborators yet"
+            description="Add someone above to give them access to this repository."
+          />
+        </div>
+      ) : (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {collabs.map((c) => (
+            <div key={c.id} className="flex items-center gap-3 px-4 py-3">
+              <Avatar name={c.user.displayName || c.user.handle} size={32} />
+              <div className="flex-1 min-w-0">
+                <p className="text-fh-sm font-semibold text-fh-fg truncate">{c.user.displayName || c.user.handle}</p>
+                <p className="text-fh-xs text-fh-fg-muted truncate">@{c.user.handle}</p>
+              </div>
+              <div className="w-28">
+                <Select
+                  sizing="sm"
+                  value={c.role}
+                  disabled={savingId === c.id}
+                  onChange={(e) => void changeRole(c, e.target.value as Collaborator["role"])}
+                  aria-label={`Role for ${c.user.handle}`}
+                >
+                  <option value="reader">Reader</option>
+                  <option value="writer">Writer</option>
+                  <option value="admin">Admin</option>
+                </Select>
+              </div>
+              <Button variant="danger" size="sm" onClick={() => setPendingRemove(c)}>Remove</Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pendingRemove && (
+        <ConfirmDialog
+          title="Remove collaborator"
+          message={<>Remove <span className="font-semibold">@{pendingRemove.user.handle}</span> from this repository? They will immediately lose access.</>}
+          confirmLabel="Remove"
+          loading={removing}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => setPendingRemove(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Labels ────────────────────────────────────────────────────────────────────
 
 const PRESET_COLORS = [
-  "d73a4a", "0075ca", "cfd3d7", "e4e669", "a2eeef",
-  "7057ff", "008672", "e11d48", "fb923c", "84cc16",
+  "d73a4a", "0b7fab", "0b6f96", "e4e669", "a2eeef",
+  "7a44d6", "137a4b", "e11d48", "fb923c", "84cc16",
   "06b6d4", "8b5cf6",
 ];
-
-function hexToRgb(hex: string) {
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return { r, g, b };
-}
-
-function labelTextColor(bgHex: string): string {
-  const { r, g, b } = hexToRgb(bgHex);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.5 ? "#1f2328" : "#ffffff";
-}
-
-// ─── Labels ───────────────────────────────────────────────────────────────────
 
 function LabelForm({ initial, onSave, onCancel }: {
   initial?: Label;
@@ -55,74 +308,49 @@ function LabelForm({ initial, onSave, onCancel }: {
     try {
       await onSave(name.trim(), color, desc.trim());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
+      setError(err instanceof Error ? err.message : "Failed to save label");
       setSaving(false);
     }
   }
 
-  const preview = { backgroundColor: `#${color}`, color: labelTextColor(color) };
-
   return (
-    <form onSubmit={submit} className="card p-4 space-y-3">
-      <div className="flex items-start gap-3 flex-wrap">
-        {/* Preview */}
-        <div className="flex-shrink-0 mt-5">
-          <span className="badge font-medium text-xs px-3 py-1" style={preview}>
-            {name || "Label preview"}
-          </span>
-        </div>
-
-        {/* Name */}
-        <div className="flex-1 min-w-[140px]">
-          <label className="label text-xs">Label name</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="bug, enhancement…" required />
-        </div>
-
-        {/* Description */}
-        <div className="flex-1 min-w-[160px]">
-          <label className="label text-xs">Description</label>
-          <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Optional" />
-        </div>
-
-        {/* Color */}
-        <div className="min-w-[120px]">
-          <label className="label text-xs">Color</label>
-          <div className="flex items-center gap-2">
-            <input
-              className="input w-28 font-mono text-sm"
-              value={color}
-              onChange={(e) => setColor(e.target.value.replace("#", "").slice(0, 6))}
-              maxLength={6}
-              placeholder="d73a4a"
-            />
-            <button
-              type="button"
-              className="w-7 h-7 rounded border border-gh-border flex-shrink-0"
-              style={{ backgroundColor: `#${color}` }}
-              title="Pick color"
-            />
-          </div>
-          <div className="flex gap-1 mt-1 flex-wrap">
-            {PRESET_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className="w-5 h-5 rounded-sm border-2 transition-transform hover:scale-110"
-                style={{ backgroundColor: `#${c}`, borderColor: color === c ? "#ea580c" : "transparent" }}
-                onClick={() => setColor(c)}
-              />
-            ))}
-          </div>
-        </div>
+    <form onSubmit={submit} className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-fh-sm font-semibold text-fh-fg">Preview</span>
+        <LabelChip name={name || "label preview"} color={color.length === 6 ? color : "cccccc"} />
       </div>
-
-      {error && <p className="text-gh-danger text-sm">{error}</p>}
-
-      <div className="flex justify-end gap-2 pt-1 border-t border-gh-border">
-        <button type="button" className="btn-default text-sm" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn-primary text-sm px-4" disabled={saving || !name.trim() || color.length !== 6}>
-          {saving ? "Saving…" : initial ? "Save changes" : "Create label"}
-        </button>
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+        <Field label="Name" required>
+          {(id) => <TextInput id={id} value={name} onChange={(e) => setName(e.target.value)} placeholder="bug, enhancement…" />}
+        </Field>
+        <Field label="Description">
+          {(id) => <TextInput id={id} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Optional" />}
+        </Field>
+        <Field label="Color">
+          {(id) => (
+            <div className="flex items-center gap-2">
+              <TextInput id={id} value={color} maxLength={6} className="w-24 font-mono"
+                onChange={(e) => setColor(e.target.value.replace("#", "").slice(0, 6))} placeholder="d73a4a" />
+              <span className="w-8 h-8 rounded-md border border-fh-border shrink-0"
+                style={{ backgroundColor: `#${color.length === 6 ? color : "cccccc"}` }} aria-hidden="true" />
+            </div>
+          )}
+        </Field>
+      </div>
+      <div className="flex gap-1.5 flex-wrap">
+        {PRESET_COLORS.map((c) => (
+          <button key={c} type="button" onClick={() => setColor(c)} aria-label={`Use #${c}`}
+            className={cx("w-6 h-6 rounded-md border-2 transition-transform hover:scale-110",
+              color === c ? "border-fh-fg" : "border-transparent")}
+            style={{ backgroundColor: `#${c}` }} />
+        ))}
+      </div>
+      {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+      <div className="flex justify-end gap-2 pt-1 border-t border-fh-border">
+        <Button variant="default" onClick={onCancel} disabled={saving}>Cancel</Button>
+        <Button variant="primary" type="submit" loading={saving} disabled={!name.trim() || color.length !== 6}>
+          {initial ? "Save changes" : "Create label"}
+        </Button>
       </div>
     </form>
   );
@@ -133,7 +361,9 @@ function LabelsSection({ token, handle, repoName }: { token: string; handle: str
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Label | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     listLabels(token, handle, repoName)
@@ -146,283 +376,215 @@ function LabelsSection({ token, handle, repoName }: { token: string; handle: str
     const lbl = await createLabel(token, handle, repoName, name, color, description || undefined);
     setLabels((prev) => [...prev, lbl]);
     setShowNew(false);
+    toast("Label created", { tone: "success" });
   }
 
   async function handleUpdate(id: string, name: string, color: string, description: string) {
     const lbl = await updateLabel(token, handle, repoName, id, { name, color, description: description || undefined });
-    setLabels((prev) => prev.map((l) => l.id === id ? lbl : l));
+    setLabels((prev) => prev.map((l) => (l.id === id ? lbl : l)));
     setEditing(null);
+    toast("Label updated", { tone: "success" });
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this label? It will be removed from all issues.")) return;
-    await deleteLabel(token, handle, repoName, id);
-    setLabels((prev) => prev.filter((l) => l.id !== id));
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await deleteLabel(token, handle, repoName, pendingDelete.id);
+      setLabels((prev) => prev.filter((l) => l.id !== pendingDelete.id));
+      toast("Label deleted", { tone: "success" });
+      setPendingDelete(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete label", { tone: "danger" });
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-end justify-between gap-4 pb-3 mb-4 border-b border-fh-border">
         <div>
-          <h2 className="text-base font-semibold text-gh-text">Labels</h2>
-          <p className="text-sm text-gh-muted mt-0.5">Organize and categorize issues with labels.</p>
+          <h2 className="text-fh-lg font-semibold text-fh-fg">Labels</h2>
+          <p className="text-fh-sm text-fh-fg-muted mt-0.5">Organize and categorize issues and pull requests.</p>
         </div>
-        <button className="btn-primary text-sm" onClick={() => setShowNew(true)}>New label</button>
+        {!showNew && <Button variant="primary" onClick={() => setShowNew(true)}>New label</Button>}
       </div>
 
-      {showNew && (
-        <div className="mb-4">
-          <LabelForm onSave={handleCreate} onCancel={() => setShowNew(false)} />
-        </div>
-      )}
+      {showNew && <div className="mb-4"><LabelForm onSave={handleCreate} onCancel={() => setShowNew(false)} /></div>}
 
       {loading ? (
-        <div className="card divide-y divide-gh-border animate-pulse">
-          {[...Array(4)].map((_, i) => (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <div className="w-20 h-6 bg-gray-200 rounded-full" />
-              <div className="flex-1 h-4 bg-gray-100 rounded" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+              <Skeleton className="h-4 flex-1" />
             </div>
           ))}
         </div>
       ) : labels.length === 0 && !showNew ? (
-        <div className="card p-12 text-center text-gh-muted text-sm">
-          No labels yet. Create your first label to organize issues.
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState icon={<Icon path={LABEL} size={28} />} title="No labels yet"
+            description="Create your first label to triage issues and pull requests." />
         </div>
       ) : (
-        <div className="card divide-y divide-gh-border overflow-hidden">
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
           {labels.map((label) => (
             <div key={label.id}>
-              <div className="flex items-center gap-3 px-4 py-3 hover:bg-gh-bg">
-                <span
-                  className="badge font-medium text-xs px-2.5 py-1 min-w-[64px] justify-center"
-                  style={{ backgroundColor: `#${label.color}`, color: labelTextColor(label.color), borderColor: "transparent" }}
-                >
-                  {label.name}
+              <div className="flex items-center gap-3 px-4 py-3">
+                <div className="w-40 shrink-0"><LabelChip name={label.name} color={label.color} /></div>
+                <span className="text-fh-sm text-fh-fg-muted flex-1 min-w-0 truncate">
+                  {label.description || <span className="italic text-fh-fg-subtle">No description</span>}
                 </span>
-                <span className="text-sm text-gh-muted flex-1 min-w-0 truncate">
-                  {label.description ?? <span className="italic text-gh-muted opacity-60">No description</span>}
-                </span>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    className="text-xs text-gh-muted hover:text-gh-accent px-2 py-1 rounded-md hover:bg-gh-bg border border-transparent hover:border-gh-border transition-colors"
-                    onClick={() => setEditing(label.id)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="text-xs text-gh-danger hover:text-white hover:bg-gh-danger px-2 py-1 rounded-md border border-transparent hover:border-gh-danger transition-colors"
-                    onClick={() => void handleDelete(label.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+                <Button variant="invisible" size="sm" onClick={() => setEditing(editing === label.id ? null : label.id)}>Edit</Button>
+                <Button variant="danger" size="sm" onClick={() => setPendingDelete(label)}>Delete</Button>
               </div>
               {editing === label.id && (
                 <div className="px-4 pb-4">
-                  <LabelForm
-                    initial={label}
+                  <LabelForm initial={label}
                     onSave={(name, color, desc) => handleUpdate(label.id, name, color, desc)}
-                    onCancel={() => setEditing(null)}
-                  />
+                    onCancel={() => setEditing(null)} />
                 </div>
               )}
             </div>
           ))}
         </div>
       )}
-    </div>
-  );
-}
 
-// ─── Collaborators ────────────────────────────────────────────────────────────
-
-function CollaboratorsSection({ token, repoName }: { token: string; repoName: string }) {
-  const [collabs, setCollabs] = useState<Collaborator[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<SearchUserResult | null>(null);
-  const [role, setRole] = useState<"reader" | "writer" | "admin">("writer");
-  const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    listCollaborators(token, repoName)
-      .then((d) => setCollabs(d.collaborators))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [token, repoName]);
-
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selected) return;
-    setAdding(true);
-    setError(null);
-    try {
-      const c = await addCollaborator(token, repoName, selected.handle, role);
-      setCollabs((prev) => {
-        const exists = prev.findIndex((x) => x.user.handle === c.user.handle);
-        if (exists >= 0) {
-          const next = [...prev];
-          next[exists] = c;
-          return next;
-        }
-        return [...prev, c];
-      });
-      setSelected(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add collaborator");
-    } finally {
-      setAdding(false);
-    }
-  }
-
-  async function remove(collab: Collaborator) {
-    if (!confirm(`Remove @${collab.user.handle} as a collaborator?`)) return;
-    await removeCollaborator(token, repoName, collab.user.handle);
-    setCollabs((prev) => prev.filter((c) => c.id !== collab.id));
-  }
-
-  const roleColors: Record<string, string> = {
-    reader: "bg-blue-50 text-blue-700 border-blue-200",
-    writer: "bg-green-50 text-green-700 border-green-200",
-    admin: "bg-purple-50 text-purple-700 border-purple-200",
-  };
-
-  return (
-    <div>
-      <div className="mb-4">
-        <h2 className="text-base font-semibold text-gh-text">Collaborators</h2>
-        <p className="text-sm text-gh-muted mt-0.5">Manage who has access to this repository.</p>
-      </div>
-
-      {/* Add collaborator */}
-      <form onSubmit={add} className="card p-4 mb-4">
-        <p className="text-sm font-semibold text-gh-text mb-3">Add a collaborator</p>
-
-        {selected ? (
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            {/* Selected user chip */}
-            <div className="flex items-center gap-2 bg-gh-bg border border-gh-border rounded-full pl-1 pr-3 py-1">
-              <div className="w-6 h-6 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold">
-                {(selected.displayName || selected.handle)[0].toUpperCase()}
-              </div>
-              <span className="text-sm font-medium text-gh-text">{selected.displayName || selected.handle}</span>
-              <span className="text-xs text-gh-muted">@{selected.handle}</span>
-              <button
-                type="button"
-                className="ml-1 text-gh-muted hover:text-gh-danger transition-colors"
-                onClick={() => setSelected(null)}
-                title="Clear selection"
-              >
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                  <path fillRule="evenodd" d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
-                </svg>
-              </button>
-            </div>
-
-            <select
-              className="input w-28"
-              value={role}
-              onChange={(e) => setRole(e.target.value as "reader" | "writer" | "admin")}
-            >
-              <option value="reader">Reader</option>
-              <option value="writer">Writer</option>
-              <option value="admin">Admin</option>
-            </select>
-
-            <button type="submit" className="btn-primary px-4" disabled={adding}>
-              {adding ? "Adding…" : "Add collaborator"}
-            </button>
-          </div>
-        ) : (
-          <UserSearchInput token={token} onSelect={setSelected} />
-        )}
-
-        {error && <p className="text-gh-danger text-sm mt-2">{error}</p>}
-        <p className="text-xs text-gh-muted mt-2">
-          <strong>Reader</strong> — view · <strong>Writer</strong> — push, create issues/PRs · <strong>Admin</strong> — manage settings
-        </p>
-      </form>
-
-      {/* Collaborator list */}
-      {loading ? (
-        <div className="card animate-pulse divide-y divide-gh-border">
-          {[...Array(2)].map((_, i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <div className="w-8 h-8 bg-gray-200 rounded-full" />
-              <div className="flex-1 h-4 bg-gray-100 rounded w-40" />
-            </div>
-          ))}
-        </div>
-      ) : collabs.length === 0 ? (
-        <div className="card p-8 text-center text-sm text-gh-muted">No collaborators yet.</div>
-      ) : (
-        <div className="card divide-y divide-gh-border overflow-hidden">
-          {collabs.map((c) => (
-            <div key={c.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gh-bg">
-              <div className="w-8 h-8 rounded-full bg-gh-accent flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                {c.user.handle[0].toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gh-text">{c.user.displayName || c.user.handle}</p>
-                <p className="text-xs text-gh-muted">@{c.user.handle}</p>
-              </div>
-              <span className={`badge text-xs ${roleColors[c.role] ?? ""}`}>{c.role}</span>
-              <button
-                className="text-xs text-gh-danger hover:text-white hover:bg-gh-danger px-2 py-1 rounded-md border border-transparent hover:border-gh-danger transition-colors ml-2"
-                onClick={() => void remove(c)}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </div>
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete label"
+          message={<>Delete the <LabelChip name={pendingDelete.name} color={pendingDelete.color} /> label? It will be removed from every issue and pull request.</>}
+          confirmLabel="Delete label"
+          loading={deleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
     </div>
   );
 }
 
-// ─── Main export ──────────────────────────────────────────────────────────────
+// ── Danger zone ───────────────────────────────────────────────────────────────
 
-export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
-  const isOwner = user.handle === handle;
-  const [section, setSection] = useState<"labels" | "collaborators">("labels");
+function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState("");
+  const { toast } = useToast();
+  const matches = typed.trim() === repoName;
 
-  const sections = [
-    { key: "labels" as const, label: "Labels" },
-    ...(isOwner ? [{ key: "collaborators" as const, label: "Collaborators" }] : []),
+  function close() { setConfirming(false); setTyped(""); }
+
+  function requestDelete() {
+    if (!matches) return;
+    // Repository deletion needs a server wrapper that isn't exposed in this
+    // build (src/api.ts has no deleteRepo). Keep the flow honest.
+    toast("Repository deletion isn't available in this build yet.", { tone: "warning" });
+    close();
+  }
+
+  return (
+    <div>
+      <SectionHeader title="Danger zone" description="Irreversible and destructive actions." />
+      <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
+          <div className="min-w-0">
+            <p className="text-fh-base font-semibold text-fh-fg">Delete this repository</p>
+            <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+              Once deleted, there is no going back. This permanently removes the code, issues, and releases.
+            </p>
+          </div>
+          <Button variant="danger" leadingIcon={<Icon path={ALERT} size={14} />} onClick={() => setConfirming(true)}>
+            Delete this repository
+          </Button>
+        </div>
+      </div>
+
+      <Dialog
+        open={confirming}
+        onClose={close}
+        size="sm"
+        title="Delete this repository?"
+        footer={
+          <>
+            <Button variant="default" onClick={close}>Cancel</Button>
+            <Button variant="danger" disabled={!matches} onClick={requestDelete}>Delete this repository</Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-fh-base text-fh-fg leading-normal">
+            This permanently deletes <span className="font-mono font-semibold">{fullName}</span>,
+            along with its issues, releases, and history. This cannot be undone.
+          </p>
+          <div className="flex items-start gap-2 rounded-md border border-fh-warning-emphasis/30 bg-fh-warning-muted px-3 py-2 text-fh-sm text-fh-warning-fg">
+            <span aria-hidden className="mt-px font-bold">!</span>
+            <span>Deleting a repository removes it for every collaborator, permanently.</span>
+          </div>
+          <Field label="Confirm the repository name" hint={<>Type <span className="font-mono font-semibold text-fh-fg">{repoName}</span> to enable deletion.</>}>
+            {(id) => <TextInput id={id} value={typed} onChange={(e) => setTyped(e.target.value)} className="font-mono" autoComplete="off" autoFocus />}
+          </Field>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+type SectionKey = "general" | "collaborators" | "labels" | "danger";
+
+export function RepoSettingsTab({ token, handle, repoName }: Props) {
+  const [section, setSection] = useState<SectionKey>("general");
+  const fullName = `${handle}/${repoName}`;
+
+  const nav: { key: SectionKey; label: string; icon: string; danger?: boolean }[] = [
+    { key: "general", label: "General", icon: GEAR },
+    { key: "collaborators", label: "Collaborators", icon: PEOPLE },
+    { key: "labels", label: "Labels", icon: LABEL },
+    { key: "danger", label: "Danger zone", icon: ALERT, danger: true },
   ];
 
   return (
-    <div className="flex gap-6">
-      {/* Sidebar nav */}
-      <nav className="w-44 flex-shrink-0">
-        <ul className="space-y-0.5">
-          {sections.map((s) => (
-            <li key={s.key}>
-              <button
-                className={`w-full text-left px-3 py-1.5 text-sm rounded-md transition-colors ${
-                  section === s.key
-                    ? "font-semibold text-gh-text bg-gh-bg"
-                    : "text-gh-muted hover:text-gh-text hover:bg-gh-bg"
-                }`}
-                onClick={() => setSection(s.key)}
-              >
-                {s.label}
-              </button>
-            </li>
-          ))}
+    <div className="flex flex-col md:flex-row gap-6">
+      {/* Section nav */}
+      <nav className="md:w-52 shrink-0" aria-label="Settings">
+        <ul className="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible">
+          {nav.map((s) => {
+            const active = section === s.key;
+            return (
+              <li key={s.key} className="shrink-0">
+                <button
+                  onClick={() => setSection(s.key)}
+                  aria-current={active ? "page" : undefined}
+                  className={cx(
+                    "w-full flex items-center gap-2 px-3 py-1.5 text-fh-base rounded-md whitespace-nowrap transition-colors cursor-pointer text-left",
+                    active
+                      ? s.danger
+                        ? "font-semibold text-fh-danger-fg bg-fh-danger-muted"
+                        : "font-semibold text-fh-fg bg-fh-surface-muted"
+                      : s.danger
+                        ? "text-fh-danger-fg hover:bg-fh-danger-muted"
+                        : "text-fh-fg-muted hover:text-fh-fg hover:bg-fh-surface-muted",
+                  )}
+                >
+                  <span className={cx("inline-flex shrink-0", active && !s.danger ? "text-fh-fg" : undefined)}>
+                    <Icon path={s.icon} size={16} />
+                  </span>
+                  {s.label}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </nav>
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        {section === "labels" && (
-          <LabelsSection token={token} handle={handle} repoName={repoName} />
-        )}
-        {section === "collaborators" && isOwner && (
-          <CollaboratorsSection token={token} repoName={repoName} />
-        )}
+        {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} />}
+        {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
+        {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
+        {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}
       </div>
     </div>
   );
