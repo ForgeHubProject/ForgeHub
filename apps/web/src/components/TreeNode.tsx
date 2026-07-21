@@ -12,10 +12,10 @@ type Props = {
 };
 
 const DIFF_TREE_ACCENT: Record<Exclude<DiffChangeType, "unchanged">, string> = {
-  added: "#22c55e",
-  removed: "#ef4444",
-  modified: "#ca8a04",
-  moved: "#6366f1",
+  added: "rgb(var(--fh-success-emphasis))",
+  removed: "rgb(var(--fh-danger-emphasis))",
+  modified: "rgb(var(--fh-warning-emphasis))",
+  moved: "rgb(var(--fh-purple-emphasis))",
 };
 
 const DIFF_TREE_ICON: Record<Exclude<DiffChangeType, "unchanged">, string> = {
@@ -60,7 +60,11 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
           padding: "3px 8px",
           borderRadius: 4,
           cursor: onSelect ? "pointer" : "default",
-          backgroundColor: isSelected ? "#dbeafe" : hovered ? "#f9fafb" : "transparent",
+          backgroundColor: isSelected
+            ? "rgb(var(--fh-accent-muted))"
+            : hovered
+            ? "rgb(var(--fh-surface-muted))"
+            : "transparent",
           userSelect: "none",
           boxShadow: diffAccent ? `inset 4px 0 0 0 ${diffAccent}` : undefined,
         }}
@@ -69,21 +73,21 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
           onClick={(e) => { e.stopPropagation(); if (hasChildren) setExpanded((v) => !v); }}
           style={{
             width: 14, fontSize: 10,
-            color: hasChildren ? "#6b7280" : "transparent",
+            color: hasChildren ? "rgb(var(--fh-fg-subtle))" : "transparent",
             cursor: hasChildren ? "pointer" : "default",
           }}
         >
           {hasChildren ? (expanded ? "▾" : "▸") : "·"}
         </span>
 
-        <span style={{ fontSize: 11, color: "#6b7280" }}>
+        <span style={{ fontSize: 11, color: "rgb(var(--fh-fg-subtle))" }}>
           {KIND_ICON[node.kind] ?? "◆"}
         </span>
 
         <span
           style={{
             fontSize: 13,
-            color: "#111827",
+            color: "rgb(var(--fh-fg))",
             flex: 1,
             fontWeight: diffAccent ? 600 : 400,
           }}
@@ -97,7 +101,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
             style={{
               fontSize: 9,
               fontWeight: 800,
-              color: "#fff",
+              color: "rgb(var(--fh-on-emphasis))",
               backgroundColor: diffAccent,
               borderRadius: 4,
               padding: "2px 6px",
@@ -109,8 +113,8 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
           </span>
         )}
 
-        {posFixed && <span title="Position fixed" style={badgeStyle("#3b82f6")}>P</span>}
-        {rotFixed && <span title="Rotation fixed" style={badgeStyle("#8b5cf6")}>R</span>}
+        {posFixed && <span title="Position fixed" style={badgeStyle("rgb(var(--fh-accent-emphasis))")}>P</span>}
+        {rotFixed && <span title="Rotation fixed" style={badgeStyle("rgb(var(--fh-purple-emphasis))")}>R</span>}
       </div>
 
       {hasChildren && expanded && (
@@ -134,7 +138,7 @@ export function TreeNode({ node, constraints, selectedIds, onSelect, depth = 0, 
 
 function badgeStyle(color: string): CSSProperties {
   return {
-    fontSize: 9, fontWeight: 700, color: "#fff",
+    fontSize: 9, fontWeight: 700, color: "rgb(var(--fh-on-emphasis))",
     backgroundColor: color, borderRadius: 3,
     padding: "1px 4px", lineHeight: 1.5,
   };

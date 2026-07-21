@@ -977,7 +977,7 @@ export function SnapshotPage({ token, user }: Props) {
           >
             ⑂ Fork
           </button>
-          {forkMsg && <span style={{ fontSize: 11, color: "#22c55e" }}>{forkMsg}</span>}
+          {forkMsg && <span style={{ fontSize: 11, color: "rgb(var(--fh-success-fg))" }}>{forkMsg}</span>}
         </div>
       </header>
 
@@ -1077,7 +1077,7 @@ export function SnapshotPage({ token, user }: Props) {
                     ))}
 
                     {filteredBranches.length === 0 && branchFilter && (
-                      <div style={{ padding: "8px 12px", fontSize: 12, color: "#9ca3af" }}>No branches match</div>
+                      <div style={{ padding: "8px 12px", fontSize: 12, color: "rgb(var(--fh-fg-subtle))" }}>No branches match</div>
                     )}
                   </div>
 
@@ -1119,11 +1119,11 @@ export function SnapshotPage({ token, user }: Props) {
                           {creatingBranch ? "…" : "Create"}
                         </button>
                       </div>
-                      {branchError && <div style={{ padding: "0 10px 8px", fontSize: 11, color: "#ef4444" }}>{branchError}</div>}
+                      {branchError && <div style={{ padding: "0 10px 8px", fontSize: 11, color: "rgb(var(--fh-danger-fg))" }}>{branchError}</div>}
                     </div>
                   )}
                   {isOwner && branches.length === 0 && (
-                    <div style={{ padding: "10px 12px", fontSize: 12, color: "#9ca3af", borderTop: "1px solid #f3f4f6" }}>
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: "rgb(var(--fh-fg-subtle))", borderTop: "1px solid rgb(var(--fh-border-muted))" }}>
                       Push a commit first to create branches.
                     </div>
                   )}
@@ -1160,7 +1160,7 @@ export function SnapshotPage({ token, user }: Props) {
                 <span style={{ fontWeight: 600, fontSize: 14 }}>Pull Requests</span>
                 <button style={styles.newPrBtn} onClick={() => { setPrError(null); setShowNewPr(true); }}>+ New</button>
               </div>
-              <div style={{ display: "flex", gap: 4, padding: "6px 12px", borderBottom: "1px solid #f3f4f6" }}>
+              <div style={{ display: "flex", gap: 4, padding: "6px 12px", borderBottom: "1px solid rgb(var(--fh-border-muted))" }}>
                 {(["open", "merged", "closed", "all"] as const).map((f) => (
                   <button
                     key={f}
@@ -1181,12 +1181,12 @@ export function SnapshotPage({ token, user }: Props) {
                   style={{ ...styles.prItem, ...(selectedPr?.id === pr.id ? styles.prItemActive : {}) }}
                   onClick={() => { setSelectedPr(pr); setPrConflict(false); setPrError(null); }}
                 >
-                  <span style={{ ...styles.prStateDot, backgroundColor: pr.state === "open" ? "#22c55e" : pr.state === "merged" ? "#a78bfa" : "#9ca3af" }} />
+                  <span style={{ ...styles.prStateDot, backgroundColor: pr.state === "open" ? "rgb(var(--fh-success-emphasis))" : pr.state === "merged" ? "rgb(var(--fh-purple-emphasis))" : "rgb(var(--fh-fg-subtle))" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: "rgb(var(--fh-fg))", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       #{pr.number} {pr.title}
                     </div>
-                    <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                    <div style={{ fontSize: 11, color: "rgb(var(--fh-fg-subtle))" }}>
                       {pr.fromBranch} → {pr.toBranch} · {pr.author}
                     </div>
                   </div>
@@ -1250,11 +1250,11 @@ export function SnapshotPage({ token, user }: Props) {
                     />
                   </label>
                   {branches.length < 2 && (
-                    <p style={{ color: "#9ca3af", fontSize: 12, margin: 0 }}>
+                    <p style={{ color: "rgb(var(--fh-fg-subtle))", fontSize: 12, margin: 0 }}>
                       You need at least two branches to open a pull request.
                     </p>
                   )}
-                  {prError && <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>}
+                  {prError && <p style={{ color: "rgb(var(--fh-danger-fg))", fontSize: 12, margin: 0 }}>{prError}</p>}
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       style={styles.mergeBtn}
@@ -1276,29 +1276,29 @@ export function SnapshotPage({ token, user }: Props) {
               ) : selectedPr ? (
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ ...styles.prStateDot, width: 10, height: 10, backgroundColor: selectedPr.state === "open" ? "#22c55e" : selectedPr.state === "merged" ? "#a78bfa" : "#9ca3af" }} />
+                    <span style={{ ...styles.prStateDot, width: 10, height: 10, backgroundColor: selectedPr.state === "open" ? "rgb(var(--fh-success-emphasis))" : selectedPr.state === "merged" ? "rgb(var(--fh-purple-emphasis))" : "rgb(var(--fh-fg-subtle))" }} />
                     <h3 style={{ margin: 0, fontSize: 15, flex: 1 }}>#{selectedPr.number} {selectedPr.title}</h3>
                   </div>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  <div style={{ fontSize: 12, color: "rgb(var(--fh-fg-muted))" }}>
                     <strong>{selectedPr.fromBranch}</strong> → <strong>{selectedPr.toBranch}</strong>
                     {" · "} by {selectedPr.author}
                     {" · "} {new Date(selectedPr.createdAt).toLocaleDateString()}
                   </div>
                   {selectedPr.description && (
-                    <p style={{ fontSize: 13, color: "#374151", margin: 0, lineHeight: 1.5 }}>{selectedPr.description}</p>
+                    <p style={{ fontSize: 13, color: "rgb(var(--fh-fg-muted))", margin: 0, lineHeight: 1.5 }}>{selectedPr.description}</p>
                   )}
                   {selectedPr.mergedAt && (
-                    <div style={{ fontSize: 12, color: "#7c3aed" }}>Merged {new Date(selectedPr.mergedAt).toLocaleString()}</div>
+                    <div style={{ fontSize: 12, color: "rgb(var(--fh-purple-fg))" }}>Merged {new Date(selectedPr.mergedAt).toLocaleString()}</div>
                   )}
                   {prError && !prConflict && (
-                    <p style={{ color: "#ef4444", fontSize: 12, margin: 0 }}>{prError}</p>
+                    <p style={{ color: "rgb(var(--fh-danger-fg))", fontSize: 12, margin: 0 }}>{prError}</p>
                   )}
                   {prConflict && selectedPr.state === "open" && (
-                    <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-                      <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#b91c1c" }}>
+                    <div style={{ background: "rgb(var(--fh-danger-muted))", border: "1px solid rgb(var(--fh-danger-emphasis) / 0.4)", borderRadius: 6, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "rgb(var(--fh-danger-fg))" }}>
                         ⚠ Merge conflict — the branches have conflicting changes to the same files or entities.
                       </p>
-                      <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                      <p style={{ margin: 0, fontSize: 12, color: "rgb(var(--fh-fg-muted))" }}>
                         Choose which branch&apos;s version wins for all conflicting paths, or open the diff viewer to compare <strong>{selectedPr.toBranch}</strong> (current) vs <strong>{selectedPr.fromBranch}</strong> (incoming) per file:
                       </p>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -1311,7 +1311,7 @@ export function SnapshotPage({ token, user }: Props) {
                           {mergeReviewFromLoading ? "Loading…" : "Resolve in editor"}
                         </button>
                         <button
-                          style={{ ...styles.closeBtn, background: "#1e3a5f", color: "#fff", fontSize: 12 }}
+                          style={{ ...styles.closeBtn, background: "rgb(var(--fh-accent-emphasis))", color: "rgb(var(--fh-on-emphasis))", fontSize: 12 }}
                           disabled={prActionLoading}
                           onClick={() => handleResolveConflict(selectedPr, "theirs")}
                           title={`Keep ${selectedPr.fromBranch}'s version of conflicting entities`}
@@ -1357,7 +1357,7 @@ export function SnapshotPage({ token, user }: Props) {
                   )}
                 </div>
               ) : (
-                <div style={{ padding: 24, color: "#9ca3af", fontSize: 13 }}>Select a pull request to view details.</div>
+                <div style={{ padding: 24, color: "rgb(var(--fh-fg-subtle))", fontSize: 13 }}>Select a pull request to view details.</div>
               )}
             </div>
           </div>
@@ -1388,7 +1388,7 @@ export function SnapshotPage({ token, user }: Props) {
                     <>
                       <button
                         type="button"
-                        style={{ ...styles.mergeReviewBannerBtn, background: "#1e3a5f" }}
+                        style={{ ...styles.mergeReviewBannerBtn, background: "rgb(var(--fh-accent-emphasis))", color: "rgb(var(--fh-on-emphasis))" }}
                         disabled={prActionLoading}
                         onClick={() => void handleResolveConflict(mergeReviewPr, "theirs")}
                       >
@@ -1464,55 +1464,55 @@ export function SnapshotPage({ token, user }: Props) {
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
 const styles: Record<string, CSSProperties> = {
-  shell: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#f9fafb" },
+  shell: { display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "rgb(var(--fh-canvas))" },
 
   // Row 1
-  topbar: { display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", backgroundColor: "#fff", borderBottom: "1px solid #e5e7eb", flexShrink: 0 },
-  backBtn: { fontSize: 16, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
+  topbar: { display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", backgroundColor: "rgb(var(--fh-surface))", borderBottom: "1px solid rgb(var(--fh-border))", flexShrink: 0 },
+  backBtn: { fontSize: 16, color: "rgb(var(--fh-fg-muted))", background: "none", border: "none", cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
   breadcrumb: { display: "flex", alignItems: "center", gap: 4 },
-  breadcrumbOwner: { fontSize: 14, color: "#6b7280", fontWeight: 500, cursor: "default" },
-  breadcrumbSep:   { fontSize: 14, color: "#d1d5db" },
-  breadcrumbRepo:  { fontSize: 14, color: "#111827", fontWeight: 700 },
-  visibilityBadge: { fontSize: 11, color: "#6b7280", border: "1px solid #d1d5db", borderRadius: 10, padding: "1px 8px", fontWeight: 500 },
+  breadcrumbOwner: { fontSize: 14, color: "rgb(var(--fh-fg-muted))", fontWeight: 500, cursor: "default" },
+  breadcrumbSep:   { fontSize: 14, color: "rgb(var(--fh-border-strong))" },
+  breadcrumbRepo:  { fontSize: 14, color: "rgb(var(--fh-fg))", fontWeight: 700 },
+  visibilityBadge: { fontSize: 11, color: "rgb(var(--fh-fg-muted))", border: "1px solid rgb(var(--fh-border))", borderRadius: 10, padding: "1px 8px", fontWeight: 500 },
   actionBtns: { display: "flex", alignItems: "center", gap: 8 },
-  actionBtn:  { display: "flex", alignItems: "center", gap: 5, fontSize: 13, fontWeight: 500, color: "#374151", background: "#f9fafb", border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 12px", cursor: "pointer" },
+  actionBtn:  { display: "flex", alignItems: "center", gap: 5, fontSize: 13, fontWeight: 500, color: "rgb(var(--fh-fg-muted))", background: "rgb(var(--fh-surface-muted))", border: "1px solid rgb(var(--fh-border))", borderRadius: 6, padding: "5px 12px", cursor: "pointer" },
   actionBtnDisabled: { opacity: 0.45, cursor: "not-allowed" },
 
   // Row 2
-  subnav: { display: "flex", alignItems: "center", gap: 0, padding: "0 20px", backgroundColor: "#fff", borderBottom: "1px solid #e5e7eb", flexShrink: 0 },
+  subnav: { display: "flex", alignItems: "center", gap: 0, padding: "0 20px", backgroundColor: "rgb(var(--fh-surface))", borderBottom: "1px solid rgb(var(--fh-border))", flexShrink: 0 },
   navTabs: { display: "flex", gap: 0 },
-  navTab:  { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "#6b7280", background: "none", border: "none", borderBottom: "2px solid transparent", padding: "10px 14px", cursor: "pointer", whiteSpace: "nowrap" as const },
-  navTabActive: { color: "#111827", borderBottomColor: "#f97316", fontWeight: 600 },
+  navTab:  { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "rgb(var(--fh-fg-muted))", background: "none", border: "none", borderBottom: "2px solid transparent", padding: "10px 14px", cursor: "pointer", whiteSpace: "nowrap" as const },
+  navTabActive: { color: "rgb(var(--fh-fg))", borderBottomColor: "rgb(var(--fh-accent-emphasis))", fontWeight: 600 },
   navTabIcon:   { fontSize: 12, fontFamily: MONO },
-  navTabBadge:  { fontSize: 11, fontWeight: 600, background: "#f97316", color: "#fff", borderRadius: 10, padding: "0 6px", minWidth: 18, textAlign: "center" as const },
+  navTabBadge:  { fontSize: 11, fontWeight: 600, background: "rgb(var(--fh-accent-emphasis))", color: "rgb(var(--fh-on-emphasis))", borderRadius: 10, padding: "0 6px", minWidth: 18, textAlign: "center" as const },
   codeToolbar: { display: "flex", alignItems: "center", gap: 10, padding: "8px 0" },
 
   // Branch dropdown
-  branchBtn: { display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#111827", background: "#f6f8fa", border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" as const },
+  branchBtn: { display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "rgb(var(--fh-fg))", background: "rgb(var(--fh-surface-muted))", border: "1px solid rgb(var(--fh-border))", borderRadius: 6, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" as const },
   branchBtnIcon: { fontSize: 14 },
-  branchMenu: { position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 100, width: 280, background: "#fff", border: "1px solid #d1d5db", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", overflow: "hidden" },
-  branchMenuHeader: { padding: "10px 12px", fontSize: 12, fontWeight: 600, color: "#6b7280", borderBottom: "1px solid #f3f4f6", textAlign: "center" as const },
-  branchMenuSearch: { padding: "8px 10px", borderBottom: "1px solid #f3f4f6" },
-  branchMenuInput:  { width: "100%", fontSize: 13, border: "1px solid #d1d5db", borderRadius: 6, padding: "5px 8px", outline: "none", boxSizing: "border-box" as const, fontFamily: "inherit" },
+  branchMenu: { position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 100, width: 280, background: "rgb(var(--fh-surface))", border: "1px solid rgb(var(--fh-border))", borderRadius: 10, boxShadow: "var(--fh-shadow-overlay)", overflow: "hidden" },
+  branchMenuHeader: { padding: "10px 12px", fontSize: 12, fontWeight: 600, color: "rgb(var(--fh-fg-muted))", borderBottom: "1px solid rgb(var(--fh-border-muted))", textAlign: "center" as const },
+  branchMenuSearch: { padding: "8px 10px", borderBottom: "1px solid rgb(var(--fh-border-muted))" },
+  branchMenuInput:  { width: "100%", fontSize: 13, color: "rgb(var(--fh-fg))", background: "rgb(var(--fh-surface))", border: "1px solid rgb(var(--fh-border))", borderRadius: 6, padding: "5px 8px", outline: "none", boxSizing: "border-box" as const, fontFamily: "inherit" },
   branchMenuList:   { maxHeight: 220, overflowY: "auto" as const },
-  branchMenuGroupLabel: { fontSize: 11, fontWeight: 600, color: "#9ca3af", padding: "6px 12px 2px", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
+  branchMenuGroupLabel: { fontSize: 11, fontWeight: 600, color: "rgb(var(--fh-fg-subtle))", padding: "6px 12px 2px", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
   branchMenuRow:    { display: "flex", alignItems: "center" },
-  branchMenuItem:   { display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "7px 12px", fontSize: 13, color: "#111827", background: "none", border: "none", cursor: "pointer", textAlign: "left" as const },
-  branchMenuItemActive: { background: "#f0f9ff", fontWeight: 600 },
-  branchMenuCheck:  { width: 14, fontSize: 12, color: "#3b82f6", flexShrink: 0 },
-  branchDefaultBadge: { fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontWeight: 600 },
-  branchDeleteBtn:  { fontSize: 12, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "6px 10px", flexShrink: 0 },
-  branchMenuCreate: { borderTop: "1px solid #f3f4f6" },
-  branchCreateBtn:  { fontSize: 12, fontWeight: 600, color: "#fff", background: "#2563eb", border: "none", borderRadius: 5, padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" as const },
+  branchMenuItem:   { display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "7px 12px", fontSize: 13, color: "rgb(var(--fh-fg))", background: "none", border: "none", cursor: "pointer", textAlign: "left" as const },
+  branchMenuItemActive: { background: "rgb(var(--fh-accent-muted))", fontWeight: 600 },
+  branchMenuCheck:  { width: 14, fontSize: 12, color: "rgb(var(--fh-accent-fg))", flexShrink: 0 },
+  branchDefaultBadge: { fontSize: 10, background: "rgb(var(--fh-accent-muted))", color: "rgb(var(--fh-accent-fg))", borderRadius: 4, padding: "1px 5px", fontWeight: 600 },
+  branchDeleteBtn:  { fontSize: 12, color: "rgb(var(--fh-fg-subtle))", background: "none", border: "none", cursor: "pointer", padding: "6px 10px", flexShrink: 0 },
+  branchMenuCreate: { borderTop: "1px solid rgb(var(--fh-border-muted))" },
+  branchCreateBtn:  { fontSize: 12, fontWeight: 600, color: "rgb(var(--fh-on-emphasis))", background: "rgb(var(--fh-accent-emphasis))", border: "none", borderRadius: 5, padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" as const },
 
   // Repo stats
-  repoStats: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" as const },
+  repoStats: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "rgb(var(--fh-fg-muted))", whiteSpace: "nowrap" as const },
 
   // Clone
-  cloneRow:   { display: "flex", alignItems: "center", gap: 6, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px" },
-  cloneLabel: { fontSize: 10, color: "#94a3b8", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
-  cloneUrl:   { fontSize: 12, color: "#334155", fontFamily: MONO, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
-  copyBtn:    { fontSize: 14, color: "#64748b", background: "none", border: "none", cursor: "pointer", padding: "0 2px", lineHeight: 1 },
+  cloneRow:   { display: "flex", alignItems: "center", gap: 6, background: "rgb(var(--fh-surface-muted))", border: "1px solid rgb(var(--fh-border))", borderRadius: 6, padding: "3px 8px" },
+  cloneLabel: { fontSize: 10, color: "rgb(var(--fh-fg-subtle))", textTransform: "uppercase" as const, letterSpacing: "0.05em" },
+  cloneUrl:   { fontSize: 12, color: "rgb(var(--fh-fg-muted))", fontFamily: MONO, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
+  copyBtn:    { fontSize: 14, color: "rgb(var(--fh-fg-subtle))", background: "none", border: "none", cursor: "pointer", padding: "0 2px", lineHeight: 1 },
 
   body: { display: "flex", flex: 1, overflow: "hidden" },
   mergeReviewBanner: {
@@ -1523,15 +1523,15 @@ const styles: Record<string, CSSProperties> = {
     padding: "10px 16px",
     fontSize: 13,
     lineHeight: 1.45,
-    color: "#78350f",
-    background: "#fffbeb",
-    borderBottom: "1px solid #fcd34d",
+    color: "rgb(var(--fh-warning-fg))",
+    background: "rgb(var(--fh-warning-muted))",
+    borderBottom: "1px solid rgb(var(--fh-warning-emphasis) / 0.5)",
   },
   mergeReviewBannerBtn: {
     fontSize: 12,
     fontWeight: 600,
-    color: "#fff",
-    background: "#b45309",
+    color: "rgb(var(--fh-on-emphasis))",
+    background: "rgb(var(--fh-warning-emphasis))",
     border: "none",
     borderRadius: 6,
     padding: "6px 12px",
@@ -1541,33 +1541,33 @@ const styles: Record<string, CSSProperties> = {
   mergeReviewBannerBtnSecondary: {
     fontSize: 12,
     fontWeight: 500,
-    color: "#78350f",
-    background: "#fff",
-    border: "1px solid #d97706",
+    color: "rgb(var(--fh-warning-fg))",
+    background: "rgb(var(--fh-surface))",
+    border: "1px solid rgb(var(--fh-warning-emphasis) / 0.6)",
     borderRadius: 6,
     padding: "6px 12px",
     cursor: "pointer",
     whiteSpace: "nowrap" as const,
   },
 
-  muted: { fontSize: 12, color: "#9ca3af", margin: 0 },
+  muted: { fontSize: 12, color: "rgb(var(--fh-fg-subtle))", margin: 0 },
 
-  errorMsg: { fontSize: 12, color: "#ef4444", padding: "8px 12px", margin: 0, borderTop: "1px solid #fee2e2", backgroundColor: "#fff1f2" },
+  errorMsg: { fontSize: 12, color: "rgb(var(--fh-danger-fg))", padding: "8px 12px", margin: 0, borderTop: "1px solid rgb(var(--fh-danger-muted))", backgroundColor: "rgb(var(--fh-danger-muted))" },
 
 
   // PR panel
   pullsPanel:   { display: "flex", flex: 1, overflow: "hidden" },
-  prList:       { width: 320, borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column", overflow: "hidden" },
-  prListHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px 8px", borderBottom: "1px solid #f3f4f6" },
-  newPrBtn:     { fontSize: 12, fontWeight: 600, color: "#3b82f6", background: "none", border: "1px solid #bfdbfe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
-  filterBtn:    { fontSize: 11, color: "#6b7280", background: "none", border: "1px solid transparent", borderRadius: 4, padding: "2px 8px", cursor: "pointer" },
-  filterBtnActive: { color: "#111827", background: "#f1f5f9", border: "1px solid #e5e7eb" },
-  prItem:       { display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer", textAlign: "left", width: "100%" },
-  prItemActive: { backgroundColor: "#f0f9ff" },
+  prList:       { width: 320, borderRight: "1px solid rgb(var(--fh-border))", display: "flex", flexDirection: "column", overflow: "hidden" },
+  prListHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px 8px", borderBottom: "1px solid rgb(var(--fh-border-muted))" },
+  newPrBtn:     { fontSize: 12, fontWeight: 600, color: "rgb(var(--fh-accent-fg))", background: "none", border: "1px solid rgb(var(--fh-accent-emphasis) / 0.4)", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  filterBtn:    { fontSize: 11, color: "rgb(var(--fh-fg-muted))", background: "none", border: "1px solid transparent", borderRadius: 4, padding: "2px 8px", cursor: "pointer" },
+  filterBtnActive: { color: "rgb(var(--fh-fg))", background: "rgb(var(--fh-surface-muted))", border: "1px solid rgb(var(--fh-border))" },
+  prItem:       { display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid rgb(var(--fh-border-muted))", cursor: "pointer", textAlign: "left", width: "100%" },
+  prItemActive: { backgroundColor: "rgb(var(--fh-accent-muted))" },
   prStateDot:   { width: 8, height: 8, borderRadius: "50%", flexShrink: 0, marginTop: 4 },
   prDetail:     { flex: 1, overflowY: "auto" },
-  prFormLabel:  { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#374151", fontWeight: 500 },
-  prFormInput:  { fontSize: 13, border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 10px", outline: "none", width: "100%", boxSizing: "border-box" },
-  mergeBtn:     { fontSize: 13, fontWeight: 600, color: "#fff", background: "#22c55e", border: "none", borderRadius: 6, padding: "7px 18px", cursor: "pointer" },
-  closeBtn:     { fontSize: 13, fontWeight: 600, color: "#6b7280", background: "#f3f4f6", border: "none", borderRadius: 6, padding: "7px 14px", cursor: "pointer" },
+  prFormLabel:  { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "rgb(var(--fh-fg-muted))", fontWeight: 500 },
+  prFormInput:  { fontSize: 13, color: "rgb(var(--fh-fg))", background: "rgb(var(--fh-surface))", border: "1px solid rgb(var(--fh-border))", borderRadius: 6, padding: "6px 10px", outline: "none", width: "100%", boxSizing: "border-box" },
+  mergeBtn:     { fontSize: 13, fontWeight: 600, color: "rgb(var(--fh-on-emphasis))", background: "rgb(var(--fh-success-emphasis))", border: "none", borderRadius: 6, padding: "7px 18px", cursor: "pointer" },
+  closeBtn:     { fontSize: 13, fontWeight: 600, color: "rgb(var(--fh-fg-muted))", background: "rgb(var(--fh-surface-muted))", border: "none", borderRadius: 6, padding: "7px 14px", cursor: "pointer" },
 };
