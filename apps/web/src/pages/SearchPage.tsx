@@ -278,6 +278,7 @@ export function SearchPage({ token, user, onLogout }: Props) {
                         description={r.description}
                         visibility={r.visibility}
                         updatedAt={r.updatedAt}
+                        topics={r.topics}
                       />
                     ))}
                   </RowList>

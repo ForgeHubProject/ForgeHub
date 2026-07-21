@@ -132,6 +132,23 @@ export type MergeResult =
 
 export type MergeStrategy = "ours" | "theirs" | "none";
 
+export type MergeMethod = "merge" | "squash" | "rebase";
+
+/** Identity used to author generated commits (squash commit, revert commit). */
+export type CommitAuthor = { name: string; email: string };
+
+function identityArgs(author: CommitAuthor): string[] {
+  return [
+    "-c", `user.name=${author.name}`,
+    "-c", `user.email=${author.email}`,
+    "-c", "commit.gpgsign=false",
+  ];
+}
+
+export type RevertResult =
+  | { ok: true; branch: string; sha: string }
+  | { ok: false; conflicts: true };
+
 const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forgehub.io", "-c", "commit.gpgsign=false"] as const;
 
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
@@ -253,6 +270,168 @@ export async function performMerge(
 
     const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
     return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Squash-merge: collapse every commit unique to `fromBranch` into a single new
+ * commit on `toBranch`, authored/committed as `author`. No merge commit is
+ * created — the result has exactly one new commit whose parent is the prior
+ * `toBranch` tip. Conflicts route through the same semantic-resolve path as
+ * `performMerge`; unresolved conflicts yield `{ ok:false, conflicts:true }`.
+ */
+export async function performSquashMerge(
+  storageKey: string,
+  fromBranch: string,
+  toBranch: string,
+  message: string,
+  author: CommitAuthor,
+): Promise<MergeResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-squash-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    // Already merged? (from is an ancestor of the base tip)
+    try {
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      return { ok: false, alreadyMerged: true };
+    } catch { /* not merged — proceed */ }
+
+    let clean = true;
+    try {
+      await execFile("git", [...MERGE_IDENTITY, "merge", "--squash", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      clean = false;
+    }
+
+    if (!clean) {
+      const resolved = await trySemanticResolve(tmpDir);
+      if (!resolved) return { ok: false, conflicts: true };
+    }
+
+    // --squash stages the changes without committing; author the single commit as the merger.
+    try {
+      await execFile("git", [...identityArgs(author), "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      // Nothing staged (empty squash) or commit failed — treat as a conflict/no-op.
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Rebase-merge: replay the commits unique to `fromBranch` on top of `toBranch`,
+ * then fast-forward `toBranch` to the replayed tip — no merge commit, original
+ * commit subjects/authors preserved. If the replay conflicts, the rebase is
+ * aborted and `toBranch` is left completely untouched (`{ ok:false, conflicts:true }`).
+ */
+export async function performRebaseMerge(
+  storageKey: string,
+  fromBranch: string,
+  toBranch: string,
+): Promise<MergeResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-rebase-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", ["merge-base", "--is-ancestor", `origin/${fromBranch}`, "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      return { ok: false, alreadyMerged: true };
+    } catch { /* not merged — proceed */ }
+
+    // Replay fromBranch's commits onto toBranch on a scratch branch.
+    await execFile("git", ["checkout", "-B", "_fh_replay", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
+    try {
+      await execFile("git", [...MERGE_IDENTITY, "rebase", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      await execFile("git", ["rebase", "--abort"], { cwd: tmpDir, maxBuffer: MAX }).catch(() => {});
+      return { ok: false, conflicts: true };
+    }
+
+    // Fast-forward the base branch to the replayed tip and push.
+    await execFile("git", ["checkout", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    try {
+      await execFile("git", ["merge", "--ff-only", "_fh_replay"], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Create `newBranch` off `baseBranch`'s tip and `git revert` the commit at
+ * `targetSha` onto it, then push. Merge commits (2+ parents) are reverted with
+ * `-m 1`; squash/rebase single-parent commits are reverted plainly. On a revert
+ * conflict the operation is aborted and nothing is pushed (`baseBranch`
+ * untouched), returning `{ ok:false, conflicts:true }`.
+ */
+export async function performRevert(
+  storageKey: string,
+  baseBranch: string,
+  targetSha: string,
+  newBranch: string,
+  author: CommitAuthor,
+): Promise<RevertResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-revert-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", baseBranch], { cwd: tmpDir, maxBuffer: MAX });
+    await execFile("git", ["checkout", "-b", newBranch], { cwd: tmpDir, maxBuffer: MAX });
+
+    // Merge commits need a mainline (-m 1); ordinary commits are reverted directly.
+    const { stdout: parentsOut } = await execFile("git", ["rev-list", "--parents", "-n", "1", targetSha], { cwd: tmpDir, maxBuffer: MAX });
+    const parentCount = parentsOut.trim().split(/\s+/).length - 1;
+    const revertArgs = parentCount >= 2
+      ? ["revert", "-m", "1", "--no-edit", targetSha]
+      : ["revert", "--no-edit", targetSha];
+
+    try {
+      await execFile("git", [...identityArgs(author), ...revertArgs], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      await execFile("git", ["revert", "--abort"], { cwd: tmpDir, maxBuffer: MAX }).catch(() => {});
+      return { ok: false, conflicts: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", newBranch], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      return { ok: false, conflicts: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir });
+    return { ok: true, branch: newBranch, sha: sha.trim() };
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -673,6 +852,34 @@ export async function listTree(
   }
 }
 
+export type BlobSize = { path: string; size: number };
+
+/**
+ * Every blob reachable from a ref with its byte size, via `git ls-tree -r -l`.
+ * Output rows are `<mode> blob <sha> <size>\t<path>` (size right-aligned/padded);
+ * trees are excluded by -r. Drives the format composition bar. Empty on error.
+ */
+export async function listBlobSizes(storageKey: string, ref: string): Promise<BlobSize[]> {
+  try {
+    const out = await git(storageKey, ["ls-tree", "-r", "-l", ref]);
+    if (!out) return [];
+    const result: BlobSize[] = [];
+    for (const line of out.split("\n")) {
+      if (!line) continue;
+      const tab = line.indexOf("\t");
+      if (tab < 0) continue;
+      // meta = [mode, type, sha, size]; size is padded so split on runs of space
+      const meta = line.slice(0, tab).trim().split(/\s+/);
+      if (meta[1] !== "blob") continue;
+      const size = parseInt(meta[3] ?? "0", 10);
+      result.push({ path: line.slice(tab + 1), size: Number.isFinite(size) ? size : 0 });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 /** Paths changed between two branch tips (merge-base..from, plus to-only). */
 export async function listFilesDifferingBetweenBranches(
   storageKey: string,
@@ -784,4 +991,202 @@ export function readBlobAsBuffer(
       },
     );
   });
+}
+
+// ─── ref resolution ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve any ref-ish (branch, tag, short/long SHA) to its full 40-char commit
+ * SHA — the canonical id a permalink pins to so it never rots. Returns null when
+ * the ref can't be resolved. Unlike `resolveBranchSha`, this accepts any revision.
+ */
+export async function resolveRefSha(storageKey: string, ref: string): Promise<string | null> {
+  try {
+    const sha = await git(storageKey, ["rev-parse", "--verify", `${ref}^{commit}`]);
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── blame ───────────────────────────────────────────────────────────────────
+
+/** A contiguous run of lines attributed to a single commit. */
+export type BlameHunk = {
+  sha: string;
+  shortSha: string;
+  author: string;
+  authorMail: string;
+  date: string; // ISO 8601, from the author time
+  summary: string;
+  startLine: number; // 1-based, inclusive (final file line numbers)
+  endLine: number; // 1-based, inclusive
+  lines: string[]; // the source lines in this hunk, in order
+};
+
+type BlameCommitMeta = {
+  author?: string;
+  authorMail?: string;
+  authorTime?: string;
+  summary?: string;
+};
+
+/**
+ * Parse `git blame --porcelain` output into contiguous per-commit hunks. The
+ * porcelain format emits, for each result line, a header
+ * `<sha> <origLine> <finalLine> [<groupSize>]` followed (only the first time a
+ * commit is seen) by its metadata block, then a TAB-prefixed content line.
+ */
+export function parseBlamePorcelain(raw: string): BlameHunk[] {
+  const rawLines = raw.split("\n");
+  const commits = new Map<string, BlameCommitMeta>();
+  type LineEntry = { sha: string; finalLine: number; content: string };
+  const entries: LineEntry[] = [];
+
+  let i = 0;
+  while (i < rawLines.length) {
+    const header = rawLines[i].match(/^([0-9a-f]{40}) \d+ (\d+)(?: \d+)?$/);
+    if (!header) { i++; continue; }
+    const sha = header[1];
+    const finalLine = parseInt(header[2], 10);
+    if (!commits.has(sha)) commits.set(sha, {});
+    const meta = commits.get(sha)!;
+    i++;
+    // Metadata block (present only the first time this commit appears), until the
+    // TAB-prefixed content line.
+    while (i < rawLines.length && !rawLines[i].startsWith("\t")) {
+      const line = rawLines[i];
+      const sp = line.indexOf(" ");
+      const key = sp === -1 ? line : line.slice(0, sp);
+      const val = sp === -1 ? "" : line.slice(sp + 1);
+      if (key === "author") meta.author = val;
+      else if (key === "author-mail") meta.authorMail = val.replace(/^<|>$/g, "");
+      else if (key === "author-time") meta.authorTime = val;
+      else if (key === "summary") meta.summary = val;
+      i++;
+    }
+    if (i < rawLines.length && rawLines[i].startsWith("\t")) {
+      entries.push({ sha, finalLine, content: rawLines[i].slice(1) });
+      i++;
+    }
+  }
+
+  // Coalesce consecutive same-commit lines into hunks.
+  const hunks: BlameHunk[] = [];
+  for (const e of entries) {
+    const prev = hunks[hunks.length - 1];
+    if (prev && prev.sha === e.sha && e.finalLine === prev.endLine + 1) {
+      prev.endLine = e.finalLine;
+      prev.lines.push(e.content);
+      continue;
+    }
+    const meta = commits.get(e.sha) ?? {};
+    const t = meta.authorTime ? parseInt(meta.authorTime, 10) : NaN;
+    hunks.push({
+      sha: e.sha,
+      shortSha: e.sha.slice(0, 7),
+      author: meta.author ?? "",
+      authorMail: meta.authorMail ?? "",
+      date: Number.isFinite(t) ? new Date(t * 1000).toISOString() : "",
+      summary: meta.summary ?? "",
+      startLine: e.finalLine,
+      endLine: e.finalLine,
+      lines: [e.content],
+    });
+  }
+  return hunks;
+}
+
+/** Line-level authorship for a file at a ref, as contiguous commit hunks. */
+export async function getBlame(
+  storageKey: string,
+  ref: string,
+  filePath: string,
+): Promise<BlameHunk[]> {
+  try {
+    const raw = await git(storageKey, ["blame", "--porcelain", ref, "--", filePath]);
+    return parseBlamePorcelain(raw);
+  } catch {
+    return [];
+  }
+}
+
+// ─── ahead / behind ───────────────────────────────────────────────────────────
+
+export type AheadBehind = { ahead: number; behind: number };
+
+/**
+ * Commits `head` is ahead of / behind `base`, via
+ * `git rev-list --left-right --count base...head` (left = base-only = behind,
+ * right = head-only = ahead). Returns zeros when the refs don't resolve.
+ */
+export async function countAheadBehind(
+  storageKey: string,
+  base: string,
+  head: string,
+): Promise<AheadBehind> {
+  try {
+    const out = await git(storageKey, ["rev-list", "--left-right", "--count", `${base}...${head}`]);
+    const [left, right] = out.trim().split(/\s+/).map((n) => parseInt(n, 10));
+    return { behind: Number.isFinite(left) ? left : 0, ahead: Number.isFinite(right) ? right : 0 };
+  } catch {
+    return { ahead: 0, behind: 0 };
+  }
+}
+
+// ─── ref-to-ref compare ───────────────────────────────────────────────────────
+
+export type RefCompare = {
+  base: string;
+  head: string;
+  baseSha: string | null;
+  headSha: string | null;
+  mergeBaseSha: string | null;
+  ahead: number;
+  behind: number;
+  identical: boolean;
+  commits: CommitInfo[];
+  files: PRFileEntry[];
+};
+
+/**
+ * Compare any two refs the way GitHub's /compare does: the commit list and file
+ * changes are measured from the merge-base of `base` and `head` up to `head`
+ * (three-dot), so only what `head` introduces shows. Ahead/behind is relative to
+ * `base`. Reuses the same merge-base machinery PRs are built on.
+ */
+export async function compareRefs(
+  storageKey: string,
+  base: string,
+  head: string,
+): Promise<RefCompare | null> {
+  const [baseSha, headSha] = await Promise.all([
+    resolveRefSha(storageKey, base),
+    resolveRefSha(storageKey, head),
+  ]);
+  if (!baseSha || !headSha) return null;
+
+  let mergeBaseSha: string | null = null;
+  try {
+    mergeBaseSha = await git(storageKey, ["merge-base", base, head]);
+  } catch { mergeBaseSha = null; }
+
+  const [{ ahead, behind }, commits, files] = await Promise.all([
+    countAheadBehind(storageKey, base, head),
+    listMergeBaseCommits(storageKey, base, head),
+    getMergeBaseFileList(storageKey, base, head),
+  ]);
+
+  return {
+    base,
+    head,
+    baseSha,
+    headSha,
+    mergeBaseSha,
+    ahead,
+    behind,
+    identical: baseSha === headSha,
+    commits,
+    files,
+  };
 }

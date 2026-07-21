@@ -1,7 +1,7 @@
 import type {
-  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, ReleaseAsset, Repo,
-  Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
+  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
+  Release, ReleaseAsset, Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -180,6 +180,43 @@ export async function createRepo(
     method: "POST",
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility }),
+  });
+}
+
+// ─── composition ─────────────────────────────────────────────────────────────
+
+/** Byte-share per format/domain at a ref (default branch when omitted). */
+export async function getComposition(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+): Promise<Composition> {
+  const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  return req(`/repos/${handle}/${repoName}/composition${qs}`, { token: token ?? undefined });
+}
+
+// ─── topics ──────────────────────────────────────────────────────────────────
+
+export async function getTopics(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, { token: token ?? undefined });
+}
+
+/** Replace the whole topic set (writer-gated). Returns the persisted, sorted set. */
+export async function updateTopics(
+  token: string,
+  handle: string,
+  repoName: string,
+  topics: string[],
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ topics }),
   });
 }
 
@@ -381,17 +418,37 @@ export async function getPull(
   return req(`/repos/${handle}/${repoName}/pulls/${number}`, { token: token ?? undefined });
 }
 
+export type MergeMethod = "merge" | "squash" | "rebase";
+
 export async function mergePull(
   token: string,
   handle: string,
   repoName: string,
   number: number,
+  mergeMethod: MergeMethod = "merge",
   commitMessage?: string,
-): Promise<{ merged: boolean; sha: string }> {
+): Promise<{ merged: boolean; sha: string; method: MergeMethod }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge`, {
     method: "POST",
     token,
-    body: JSON.stringify({ commitMessage }),
+    body: JSON.stringify({ mergeMethod, commitMessage }),
+  });
+}
+
+/**
+ * Revert a merged PR: opens a new PR whose branch reverts the merge/squash/
+ * rebase commit. Returns the newly created reverting PR. A 409 (ApiError)
+ * signals the revert conflicts with the base branch.
+ */
+export async function revertPull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<PullRequest> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/revert`, {
+    method: "POST",
+    token,
   });
 }
 
@@ -570,6 +627,93 @@ export async function getReadme(
   return req(`/repos/${handle}/${repoName}/readme${q}`, { token: token ?? undefined });
 }
 
+// ─── code navigation: blame / permalinks / archive / ref-compare ───────────────
+
+/** Line-level authorship for a file at a ref, as contiguous commit hunks. */
+export async function getBlame(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  path: string,
+  ref?: string,
+): Promise<{ ref: string; path: string; hunks: BlameHunk[] }> {
+  const qs = new URLSearchParams({ path });
+  if (ref) qs.set("ref", ref);
+  return req(`/repos/${handle}/${repoName}/blame?${qs}`, { token: token ?? undefined });
+}
+
+/** Resolve a ref (branch/tag/sha) to its canonical 40-char commit SHA — for permalinks. */
+export async function resolveRef(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+): Promise<{ ref: string; sha: string }> {
+  return req(`/repos/${handle}/${repoName}/resolve-ref?ref=${encodeURIComponent(ref)}`, { token: token ?? undefined });
+}
+
+/** URL of the streaming source archive for a ref (used for direct links on public repos). */
+export function archiveUrl(handle: string, repoName: string, ref: string, format: "zip" | "tar.gz" = "zip"): string {
+  const qs = new URLSearchParams({ ref, format });
+  return `${BASE}/repos/${handle}/${repoName}/archive?${qs}`;
+}
+
+/**
+ * Download the source archive for a ref via an authenticated fetch, so private
+ * repos work too, then trigger a browser download of the resulting blob.
+ */
+export async function downloadArchive(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+  format: "zip" | "tar.gz" = "zip",
+): Promise<void> {
+  const res = await fetch(archiveUrl(handle, repoName, ref), {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const refLabel = ref.replace(/[^\w.-]+/g, "-");
+  a.href = url;
+  a.download = `${repoName}-${refLabel}.${format === "tar.gz" ? "tar.gz" : "zip"}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Compare any two refs — ahead/behind, head-introduced commits, changed-file stats. */
+export async function getRefCompare(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  base: string,
+  head: string,
+): Promise<RefCompareResult> {
+  const qs = new URLSearchParams({ base, head });
+  return req(`/repos/${handle}/${repoName}/ref-compare?${qs}`, { token: token ?? undefined });
+}
+
+/** Full per-file diffs (with hunks) for a ref comparison, optionally one path. */
+export async function getRefCompareDiff(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  base: string,
+  head: string,
+  path?: string,
+): Promise<{ files: FileDiff[] }> {
+  const qs = new URLSearchParams({ base, head });
+  if (path) qs.set("path", path);
+  return req(`/repos/${handle}/${repoName}/ref-compare/diff?${qs}`, { token: token ?? undefined });
+}
+
 // ─── issues ─────────────────────────────────────────────────────────────────────────────
 
 export async function listIssues(
@@ -659,6 +803,49 @@ export async function createIssueComment(
   body: string,
 ): Promise<IssueComment> {
   return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+// ─── timelines & PR conversation ─────────────────────────────────────────────────────────
+
+export async function listIssueTimeline(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ events: TimelineEvent[] }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/timeline`, { token: token ?? undefined });
+}
+
+export async function listPullTimeline(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ events: TimelineEvent[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/timeline`, { token: token ?? undefined });
+}
+
+export async function listPullComments(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ comments: IssueComment[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, { token: token ?? undefined });
+}
+
+export async function createPullComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<IssueComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, {
     method: "POST",
     token,
     body: JSON.stringify({ body }),
