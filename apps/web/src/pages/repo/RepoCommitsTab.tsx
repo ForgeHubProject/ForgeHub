@@ -54,7 +54,7 @@ function groupByDate(commits: CommitInfo[]): Array<{ date: string; commits: Comm
 // (text / binary fallback / semantic FHR change-tree + 3D) is resolved and
 // rendered unchanged — this only frames it in the shared card anatomy.
 
-function FileDiffCard({
+export function FileDiffCard({
   file,
   sha,
   base,

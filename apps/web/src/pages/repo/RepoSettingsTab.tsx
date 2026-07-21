@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, Collaborator, createLabel, deleteLabel, getRepo,
-  listCollaborators, listLabels, removeCollaborator, updateLabel,
+  addCollaborator, Collaborator, createLabel, deleteLabel, getRepo, getTopics,
+  listCollaborators, listLabels, removeCollaborator, updateLabel, updateTopics,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type { Label, Repo, SearchUserResult, User } from "../../types";
@@ -29,7 +29,19 @@ function Icon({ path, size = 16 }: { path: string; size?: number }) {
 const GEAR = "M8 0a8.2 8.2 0 00-.701.031C6.444.095 5.99.645 5.99 1.16v.702c0 .132-.052.263-.157.365a.855.855 0 01-.36.209l-.61.163a.86.86 0 01-.415-.001.844.844 0 01-.352-.211l-.496-.496a1.03 1.03 0 00-1.319-.111 8.02 8.02 0 00-.99.99 1.03 1.03 0 00.111 1.319l.496.496c.093.092.16.216.209.351a.86.86 0 010 .416l-.163.61a.855.855 0 01-.209.36.855.855 0 01-.365.157h-.702C.645 6.99.095 7.444.031 8.299a8.2 8.2 0 000 1.402c.064.855.614 1.309 1.129 1.309h.702c.132 0 .263.052.365.157.102.102.16.228.209.36l.163.61a.86.86 0 010 .416.844.844 0 01-.209.351l-.496.496a1.03 1.03 0 00-.111 1.319c.298.373.63.703.99.99a1.03 1.03 0 001.319-.111l.496-.496a.844.844 0 01.351-.209.86.86 0 01.416 0l.61.163c.132.049.258.107.36.209.105.102.157.233.157.365v.702c0 .515.454 1.065 1.309 1.129a8.2 8.2 0 001.402 0c.855-.064 1.309-.614 1.309-1.129v-.702c0-.132.052-.263.157-.365a.855.855 0 01.36-.209l.61-.163a.86.86 0 01.416 0c.135.049.259.116.351.209l.496.496a1.03 1.03 0 001.319.111c.373-.298.703-.63.99-.99a1.03 1.03 0 00-.111-1.319l-.496-.496a.844.844 0 01-.209-.351.86.86 0 010-.416l.163-.61a.855.855 0 01.209-.36.855.855 0 01.365-.157h.702c.515 0 1.065-.454 1.129-1.309a8.2 8.2 0 000-1.402c-.064-.855-.614-1.309-1.129-1.309h-.702a.855.855 0 01-.365-.157.855.855 0 01-.209-.36l-.163-.61a.86.86 0 010-.416.844.844 0 01.209-.351l.496-.496a1.03 1.03 0 00.111-1.319 8.02 8.02 0 00-.99-.99 1.03 1.03 0 00-1.319.111l-.496.496a.844.844 0 01-.351.209.86.86 0 01-.416 0l-.61-.163a.855.855 0 01-.36-.209.855.855 0 01-.157-.365V1.16c0-.515-.454-1.065-1.309-1.129A8.2 8.2 0 008 0zm0 4.5a3.5 3.5 0 110 7 3.5 3.5 0 010-7z";
 const PEOPLE = "M5.5 3.5a2 2 0 100 4 2 2 0 000-4zM2 5.5a3.5 3.5 0 115.898 2.549 5.508 5.508 0 013.034 4.084.75.75 0 11-1.482.235 4 4 0 00-7.9 0 .75.75 0 01-1.482-.236A5.507 5.507 0 013.102 8.05 3.49 3.49 0 012 5.5zM11 4a.75.75 0 100 1.5 1.5 1.5 0 01.666 2.844.75.75 0 00-.416.672c0 .29.163.56.416.672a4.5 4.5 0 012.415 4.058.75.75 0 001.5.001c0-1.883-.911-3.552-2.319-4.599A3 3 0 0011 4z";
 const LABEL = "M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25 6.25a.25.25 0 010 .354l-5.025 5.025a.25.25 0 01-.354 0l-6.25-6.25a.25.25 0 01-.073-.177zm-1.5 0V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 010 2.474l-5.026 5.026a1.75 1.75 0 01-2.474 0l-6.25-6.25A1.75 1.75 0 011 7.775zM6 5a1 1 0 100 2 1 1 0 000-2z";
+const BOOKMARK = "M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 01-1.227.579L8 11.722l-3.773 3.107A.751.751 0 013 14.25V2.75zm1.75-.25a.25.25 0 00-.25.25v9.91l3.023-2.489a.75.75 0 01.954 0l3.023 2.49V2.75a.25.25 0 00-.25-.25h-6.5z";
 const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
+
+/** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
+function normalizeTopic(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 35);
+}
 
 const ROLE_LABEL: Record<Collaborator["role"], string> = {
   reader: "Reader", writer: "Writer", admin: "Admin",
@@ -465,6 +477,139 @@ function LabelsSection({ token, handle, repoName }: { token: string; handle: str
   );
 }
 
+// ── Topics ────────────────────────────────────────────────────────────────────
+
+const MAX_TOPICS = 20;
+
+function TopicsSection({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const [topics, setTopics] = useState<string[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    getTopics(token, handle, repoName)
+      .then((d) => setTopics(d.topics))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, handle, repoName]);
+
+  function addTopic() {
+    const slug = normalizeTopic(input);
+    if (!slug) return;
+    if (topics.includes(slug)) {
+      setInput("");
+      return;
+    }
+    if (topics.length >= MAX_TOPICS) {
+      toast(`Up to ${MAX_TOPICS} topics`, { tone: "warning" });
+      return;
+    }
+    setTopics((prev) => [...prev, slug]);
+    setInput("");
+    setDirty(true);
+  }
+
+  function removeTopic(t: string) {
+    setTopics((prev) => prev.filter((x) => x !== t));
+    setDirty(true);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === "," || (e.key === " " && input.trim())) {
+      e.preventDefault();
+      addTopic();
+    } else if (e.key === "Backspace" && !input && topics.length > 0) {
+      removeTopic(topics[topics.length - 1]);
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const d = await updateTopics(token, handle, repoName, topics);
+      setTopics(d.topics);
+      setDirty(false);
+      toast("Topics saved", { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to save topics", { tone: "danger" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <SectionHeader title="Topics" description="Describe this repository with topics so people can find it. Topics are public and searchable." />
+
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+          <Skeleton className="h-5 w-1/2" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ) : (
+        <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-4">
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-fh-border bg-fh-surface-inset px-2.5 py-2 min-h-[40px]">
+            {topics.length === 0 && !input && (
+              <span className="text-fh-sm text-fh-fg-subtle px-1">No topics yet — add one below.</span>
+            )}
+            {topics.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center gap-1 rounded-full bg-fh-accent-muted pl-2.5 pr-1.5 py-0.5 text-fh-xs font-medium text-fh-accent-fg"
+              >
+                {t}
+                <button
+                  type="button"
+                  aria-label={`Remove ${t}`}
+                  onClick={() => removeTopic(t)}
+                  className="inline-flex items-center justify-center rounded-full text-fh-accent-fg/70 hover:text-fh-danger-fg cursor-pointer"
+                >
+                  <Icon size={12} path="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex-1 min-w-[220px]">
+              <Field label="Add a topic" hint="Lowercase letters, numbers, and single hyphens (e.g. 3d-printing).">
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    value={input}
+                    placeholder="gltf, cad, semantic-diff…"
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    onBlur={() => input.trim() && addTopic()}
+                    disabled={topics.length >= MAX_TOPICS}
+                  />
+                )}
+              </Field>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="default" onClick={addTopic} disabled={!normalizeTopic(input) || topics.length >= MAX_TOPICS}>
+                Add
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 pt-1 border-t border-fh-border">
+            <p className="text-fh-xs text-fh-fg-subtle">
+              {topics.length}/{MAX_TOPICS} topics
+            </p>
+            <Button variant="primary" onClick={save} loading={saving} disabled={!dirty}>
+              Save topics
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
 function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
@@ -532,7 +677,7 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "collaborators" | "labels" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "labels" | "danger";
 
 export function RepoSettingsTab({ token, handle, repoName }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
@@ -540,6 +685,7 @@ export function RepoSettingsTab({ token, handle, repoName }: Props) {
 
   const nav: { key: SectionKey; label: string; icon: string; danger?: boolean }[] = [
     { key: "general", label: "General", icon: GEAR },
+    { key: "topics", label: "Topics", icon: BOOKMARK },
     { key: "collaborators", label: "Collaborators", icon: PEOPLE },
     { key: "labels", label: "Labels", icon: LABEL },
     { key: "danger", label: "Danger zone", icon: ALERT, danger: true },
@@ -582,6 +728,7 @@ export function RepoSettingsTab({ token, handle, repoName }: Props) {
       {/* Content */}
       <div className="flex-1 min-w-0">
         {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} />}
+        {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}

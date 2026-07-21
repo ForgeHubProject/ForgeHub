@@ -78,6 +78,50 @@ export const CalendarIcon = (p: IconProps) => (
   </Svg>
 );
 
+// ── Topic chips ────────────────────────────────────────────────────────────────
+
+/** Link a single topic to a prefilled repository search (`topic:<slug>`). */
+export function topicSearchHref(topic: string): string {
+  return `/search?q=${encodeURIComponent(`topic:${topic}`)}&type=repos`;
+}
+
+/**
+ * A row of clickable topic chips (GitHub-style). Each chip navigates to a repo
+ * search filtered to that topic. Rendered in the repo header and on the
+ * dashboard / profile / search rows. `max` caps the visible chips with a "+N"
+ * overflow marker so long topic sets don't blow out a compact row.
+ */
+export function TopicChips({
+  topics,
+  max,
+  className,
+}: {
+  topics?: string[] | null;
+  max?: number;
+  className?: string;
+}) {
+  if (!topics || topics.length === 0) return null;
+  const shown = max ? topics.slice(0, max) : topics;
+  const overflow = max ? topics.length - shown.length : 0;
+  return (
+    <span className={cx("inline-flex flex-wrap items-center gap-1.5", className)}>
+      {shown.map((t) => (
+        <Link
+          key={t}
+          to={topicSearchHref(t)}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex max-w-full items-center rounded-full bg-fh-accent-muted px-2 py-0.5 text-fh-xs font-medium text-fh-accent-fg hover:bg-fh-accent-emphasis hover:text-fh-on-emphasis"
+        >
+          <span className="truncate">{t}</span>
+        </Link>
+      ))}
+      {overflow > 0 && (
+        <span className="text-fh-xs font-medium text-fh-fg-subtle">+{overflow}</span>
+      )}
+    </span>
+  );
+}
+
 // ── Repository row ─────────────────────────────────────────────────────────────
 type RepoRowProps = {
   /** Route to the repository. */
@@ -87,6 +131,8 @@ type RepoRowProps = {
   description?: string | null;
   visibility?: "public" | "private";
   updatedAt?: string;
+  /** Discovery topics rendered as clickable chips beneath the description. */
+  topics?: string[] | null;
   /** Extra metadata rendered inline after the "Updated" time. */
   meta?: React.ReactNode;
 };
@@ -96,7 +142,7 @@ type RepoRowProps = {
  * relative "updated" time. The single anatomy shared by the dashboard, profile,
  * and search-result lists. Wrap a group of these in {@link RowList}.
  */
-export function RepoRow({ to, name, description, visibility, updatedAt, meta }: RepoRowProps) {
+export function RepoRow({ to, name, description, visibility, updatedAt, topics, meta }: RepoRowProps) {
   return (
     <div className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-fh-surface-muted">
       <RepoIcon className="mt-0.5 shrink-0 text-fh-fg-muted" />
@@ -112,6 +158,7 @@ export function RepoRow({ to, name, description, visibility, updatedAt, meta }: 
           )}
         </div>
         {description && <p className="mt-1 text-fh-sm text-fh-fg-muted line-clamp-2">{description}</p>}
+        {topics && topics.length > 0 && <TopicChips topics={topics} max={8} className="mt-2" />}
         {(updatedAt || meta) && (
           <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-fh-xs text-fh-fg-subtle">
             {updatedAt && (

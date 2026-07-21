@@ -4,11 +4,12 @@ import {
   Avatar, Badge, Button, EmptyState, RelativeTime, Skeleton, Textarea, TextInput,
 } from "../../../ui";
 import {
-  addIssueLabel, createIssueComment, getIssue, listIssueComments, listLabels,
+  addIssueLabel, createIssueComment, getIssue, listIssueComments, listIssueTimeline, listLabels,
   listRepoMembers, removeIssueLabel, RepoMember, updateIssue,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
-import type { Issue, IssueComment, Label, User } from "../../../types";
+import { TimelineEventRow } from "../../../components/TimelineEventRow";
+import type { Issue, IssueComment, Label, TimelineEvent, User } from "../../../types";
 import { StatePill, UserLink } from "./parts";
 import { SidebarLabels, SidebarAssignee } from "./Sidebar";
 import { ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, PencilIcon } from "./icons";
@@ -43,9 +44,11 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
 }) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
+  const repoRef = { owner: handle, name: repoName };
 
   const [issue, setIssue] = useState<Issue | null>(null);
   const [comments, setComments] = useState<IssueComment[]>([]);
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [allLabels, setAllLabels] = useState<Label[]>([]);
   const [members, setMembers] = useState<RepoMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,16 +70,24 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       listIssueComments(token, handle, repoName, number),
       listLabels(token, handle, repoName).catch(() => ({ labels: [] })),
       listRepoMembers(token, handle, repoName).catch(() => ({ members: [] })),
+      listIssueTimeline(token, handle, repoName, number).catch(() => ({ events: [] })),
     ])
-      .then(([iss, cmts, lbl, mem]) => {
+      .then(([iss, cmts, lbl, mem, tl]) => {
         setIssue(iss);
         setComments(cmts.comments);
         setAllLabels(lbl.labels);
         setMembers(mem.members);
+        setEvents(tl.events);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Issue not found"))
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
+
+  function refreshTimeline() {
+    listIssueTimeline(token, handle, repoName, number)
+      .then((tl) => setEvents(tl.events))
+      .catch(() => { /* keep prior events on failure */ });
+  }
 
   async function submitComment(e: React.FormEvent) {
     e.preventDefault();
@@ -86,6 +97,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       const c = await createIssueComment(token, handle, repoName, number, commentBody.trim());
       setComments((prev) => [...prev, c]);
       setCommentBody("");
+      refreshTimeline();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to comment");
     } finally {
@@ -101,6 +113,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
         state: issue.state === "open" ? "closed" : "open",
       });
       setIssue(updated);
+      refreshTimeline();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update");
     } finally {
@@ -118,6 +131,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       const updated = await updateIssue(token, handle, repoName, number, { title: titleDraft.trim() });
       setIssue(updated);
       setEditingTitle(false);
+      refreshTimeline();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to rename");
     } finally {
@@ -136,6 +150,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
         await addIssueLabel(token, handle, repoName, number, label.id);
         setIssue({ ...issue, labels: [...issue.labels, label] });
       }
+      refreshTimeline();
     } catch { /* keep prior state on failure */ }
   }
 
@@ -147,6 +162,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
         assigneeId: member ? member.id : null,
       });
       setIssue(updated);
+      refreshTimeline();
     } catch { /* ignore */ }
   }
 
@@ -173,6 +189,12 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
 
   const isOpen = issue.state === "open";
   const canEdit = issue.author === user.handle || handle === user.handle;
+
+  // Comments and non-comment events, interleaved chronologically.
+  const stream = [
+    ...comments.map((c) => ({ kind: "comment" as const, at: c.createdAt, comment: c })),
+    ...events.map((e) => ({ kind: "event" as const, at: e.createdAt, event: e })),
+  ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
   return (
     <div>
@@ -234,17 +256,21 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             badge={<Badge tone="neutral">Author</Badge>}
           >
             {issue.body ? (
-              <MarkdownRenderer content={issue.body} />
+              <MarkdownRenderer content={issue.body} repo={repoRef} />
             ) : (
               <p className="text-fh-sm text-fh-fg-muted italic">No description provided.</p>
             )}
           </TimelineCard>
 
-          {comments.map((c) => (
-            <TimelineCard key={c.id} author={c.author} date={c.createdAt}>
-              <MarkdownRenderer content={c.body} />
-            </TimelineCard>
-          ))}
+          {stream.map((item) =>
+            item.kind === "comment" ? (
+              <TimelineCard key={`c-${item.comment.id}`} author={item.comment.author} date={item.comment.createdAt}>
+                <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+              </TimelineCard>
+            ) : (
+              <TimelineEventRow key={`e-${item.event.id}`} event={item.event} repo={repoRef} />
+            ),
+          )}
 
           {/* Composer */}
           <form onSubmit={submitComment} className="border border-fh-border rounded-md overflow-hidden">

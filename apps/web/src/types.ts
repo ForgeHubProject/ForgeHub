@@ -28,6 +28,9 @@ export type PublicProfile = {
   createdAt: string;
 };
 
+/** Best-effort license detection (SPDX id + the file it was read from). */
+export type RepoLicense = { spdxId: string; path: string };
+
 export type Repo = {
   id: string;
   name: string;
@@ -35,6 +38,10 @@ export type Repo = {
   visibility: "public" | "private";
   ownerHandle: string;
   fullName: string;
+  /** Lowercase-kebab discovery topics (may be absent on older list payloads). */
+  topics?: string[];
+  /** Detected license — present only on the repo detail payload; null when none. */
+  license?: RepoLicense | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -161,6 +168,36 @@ export type BranchInfo = {
   date: string;
   isDefault: boolean;
   protected: boolean;
+  /** Commits this branch is ahead of / behind the default branch. */
+  ahead?: number;
+  behind?: number;
+};
+
+/** A contiguous run of lines attributed to one commit (git blame). */
+export type BlameHunk = {
+  sha: string;
+  shortSha: string;
+  author: string;
+  authorMail: string;
+  date: string;
+  summary: string;
+  startLine: number;
+  endLine: number;
+  lines: string[];
+};
+
+/** Result of GET /ref-compare — arbitrary ref-to-ref comparison. */
+export type RefCompareResult = {
+  base: string;
+  head: string;
+  baseSha: string | null;
+  headSha: string | null;
+  mergeBaseSha: string | null;
+  ahead: number;
+  behind: number;
+  identical: boolean;
+  commits: CommitInfo[];
+  files: PRFileEntry[];
 };
 
 export type TagInfo = {
@@ -270,6 +307,16 @@ export type IssueComment = {
   updatedAt: string;
 };
 
+/** An append-only conversation event (labeled, closed, merged, referenced, …). */
+export type TimelineEvent = {
+  id: string;
+  kind: string;
+  actor: string;
+  createdAt: string;
+  /** Per-kind denormalized payload (label name/color, assignee, ref source, …). */
+  data: Record<string, unknown>;
+};
+
 export type Release = {
   id: string;
   tagName: string;
@@ -293,12 +340,33 @@ export type Notification = {
   updatedAt: string;
 };
 
+/** One slice of the format/domain composition bar. */
+export type CompositionSegment = {
+  /** Stable key for deterministic coloring: handler id, ".ext", or "other". */
+  format: string;
+  label: string;
+  bytes: number;
+  fileCount: number;
+  pct: number;
+  /** Semantic diffing is opted in for this format (`.forge/formats`). */
+  optedIn: boolean;
+};
+
+export type Composition = {
+  ref: string;
+  sha: string | null;
+  totalBytes: number;
+  totalFiles: number;
+  segments: CompositionSegment[];
+};
+
 export type SearchRepoResult = {
   id: string;
   name: string;
   description: string | null;
   visibility: "public" | "private";
   ownerHandle: string;
+  topics?: string[];
   createdAt: string;
   updatedAt: string;
 };

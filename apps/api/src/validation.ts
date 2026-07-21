@@ -54,3 +54,19 @@ export const addCollaboratorBodySchema = z.object({
   handle: handleSchema,
   role: collaboratorRoleSchema.optional().default("reader"),
 });
+
+/**
+ * A single repo topic: GitHub-style lowercase-kebab (letters/digits/hyphens, no
+ * leading/trailing hyphen, no doubled hyphens), 1–35 chars. Validated on the way
+ * in so the stored set stays clean and click-to-search links are predictable.
+ */
+export const topicSchema = z
+  .string()
+  .min(1)
+  .max(35)
+  .regex(/^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,34}$/, "Topics must be lowercase letters, digits, and single hyphens");
+
+/** PUT /repos/:handle/:name/topics — the full replacement set (max 20, deduped by the route). */
+export const updateTopicsBodySchema = z.object({
+  topics: z.array(topicSchema).max(20),
+});

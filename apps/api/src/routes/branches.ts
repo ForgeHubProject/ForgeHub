@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, createBranch, defaultBranch, deleteBranch, listBranches } from "../git-utils.js";
+import { branchExists, countAheadBehind, createBranch, defaultBranch, deleteBranch, listBranches } from "../git-utils.js";
 
 export async function branchRoutes(app: FastifyInstance) {
   // GET /repos/:handle/:name/branches
@@ -20,7 +20,18 @@ export async function branchRoutes(app: FastifyInstance) {
     // Annotate protected status
     const protected_ = await prisma.protectedBranch.findMany({ where: { repoId: repo.id }, select: { branch: true } });
     const protectedSet = new Set(protected_.map((p) => p.branch));
-    return { branches: branches.map((b) => ({ ...b, protected: protectedSet.has(b.name) })), defaultBranch: resolvedDefault };
+    // Ahead/behind vs the default branch (0/0 for the default itself). Computed in
+    // parallel — one cheap rev-list per branch.
+    const storageKey = repo.storageKey;
+    const enriched = await Promise.all(
+      branches.map(async (b) => {
+        const { ahead, behind } = b.name === resolvedDefault
+          ? { ahead: 0, behind: 0 }
+          : await countAheadBehind(storageKey, resolvedDefault, b.name);
+        return { ...b, protected: protectedSet.has(b.name), ahead, behind };
+      }),
+    );
+    return { branches: enriched, defaultBranch: resolvedDefault };
   });
 
   // POST /repos/:handle/:name/branches
