@@ -35,6 +35,8 @@ export type Repo = {
   visibility: "public" | "private";
   ownerHandle: string;
   fullName: string;
+  /** Lowercase-kebab discovery topics (may be absent on older list payloads). */
+  topics?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -298,6 +300,7 @@ export type SearchRepoResult = {
   description: string | null;
   visibility: "public" | "private";
   ownerHandle: string;
+  topics?: string[];
   createdAt: string;
   updatedAt: string;
 };

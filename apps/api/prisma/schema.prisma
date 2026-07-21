@@ -75,8 +75,24 @@ model Repo {
   labels   Label[]
   releases Release[]
   notifications Notification[]
+  topics   RepoTopic[]
 
   @@unique([ownerId, name])
+}
+
+// Repo discovery tags (GitHub-style topics). Lowercase-kebab, deduped per repo.
+// Rendered as chips in the repo header and on dashboard/profile/search rows, and
+// usable as a `topic:` filter in search. Owner/writer managed via repo settings.
+model RepoTopic {
+  id        String   @id @default(cuid())
+  repoId    String
+  topic     String
+  createdAt DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, topic])
+  @@index([topic])
 }
 
 model RepoCollaborator {
