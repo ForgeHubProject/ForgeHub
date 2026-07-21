@@ -189,6 +189,7 @@ export type PullRequest = {
   state: "open" | "merged" | "closed";
   mergeable?: boolean | null;
   mergedAt: string | null;
+  mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;
   createdAt: string;
   updatedAt: string;
