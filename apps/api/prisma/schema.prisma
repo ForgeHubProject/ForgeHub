@@ -75,7 +75,9 @@ model Repo {
   labels   Label[]
   releases Release[]
   notifications Notification[]
-  topics   RepoTopic[]
+  topics          RepoTopic[]
+  timelineEvents  TimelineEvent[]
+  crossReferences CrossReference[]
 
   @@unique([ownerId, name])
 }
@@ -277,11 +279,77 @@ model IssueComment {
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
 }
 
+// ─── Conversation spine: timeline events + cross-references ──────────────────────
+
+/** Whether a timeline event or cross-reference targets an issue or a pull request. */
+enum ConversationSubjectType {
+  ISSUE
+  PULL_REQUEST
+}
+
+/** Which body-bearing entity a cross-reference was parsed from. */
+enum CrossRefSourceType {
+  ISSUE
+  ISSUE_COMMENT
+  PULL_REQUEST
+  PR_COMMENT
+  PR_REVIEW_COMMENT
+}
+
+/**
+ * Append-only conversation event (labeled, assigned, closed, merged, referenced,
+ * head_pushed, …). Keyed by (repo, subjectType, subjectNumber) so it can be read
+ * straight from the URL without an id lookup. Denormalized display data (actor
+ * handle, label name/color, ref source) lives in `data` (JSON string) so history
+ * survives label/user deletion — no FKs to mutable records. `data` is a JSON
+ * string rather than a Json column because the datasource is SQLite (matching the
+ * repo's existing String-encoded-JSON convention, e.g. DiffCache.result).
+ */
+model TimelineEvent {
+  id            String                  @id @default(cuid())
+  repoId        String
+  subjectType   ConversationSubjectType
+  subjectNumber Int
+  kind          String
+  actorId       String
+  data          String                  @default("{}")
+  createdAt     DateTime                @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId, subjectType, subjectNumber, createdAt])
+}
+
+/**
+ * A `#N` / `!N` reference parsed out of a body, linking a source (issue/PR/comment)
+ * to a target issue or PR. `isClosingRef` marks `closes|fixes|resolves #N` from a
+ * PR description so the target is closed on merge. Re-parsed on every edit; rows
+ * for a source are diffed (added/removed) against the parsed set.
+ */
+model CrossReference {
+  id           String                  @id @default(cuid())
+  repoId       String
+  sourceType   CrossRefSourceType
+  sourceId     String
+  targetType   ConversationSubjectType
+  targetId     String
+  targetNumber Int
+  actorId      String
+  isClosingRef Boolean                 @default(false)
+  createdAt    DateTime                @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceType, sourceId, targetType, targetId])
+  @@index([targetType, targetId])
+}
+
 enum NotificationReason {
   ASSIGNED
   COMMENT
   REVIEW_REQUESTED
   SUBSCRIBED
+  MENTIONED
 }
 
 enum NotificationSubjectType {

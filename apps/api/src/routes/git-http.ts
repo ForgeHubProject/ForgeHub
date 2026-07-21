@@ -6,6 +6,7 @@ import { bareRepoPathFromKey } from "../git-storage.js";
 import { ingestCommitRange } from "../ingest.js";
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
+import { emitHeadPushedForPush } from "../timeline-service.js";
 
 const execFile = promisify(execFileCb);
 
@@ -302,16 +303,21 @@ export async function gitHttpRoutes(app: FastifyInstance) {
         "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)",
       ], { cwd: repoPath });
       const repoId = repo.id;
+      const changed: Array<{ branch: string; oldSha: string; newSha: string }> = [];
       for (const line of stdout.trim().split("\n").filter(Boolean)) {
         const sep = line.indexOf("|");
         const branchName = line.slice(0, sep);
         const newSha = line.slice(sep + 1);
         const oldSha = shasBefore.get(branchName) ?? "0".repeat(40);
         if (newSha !== oldSha) {
+          changed.push({ branch: branchName, oldSha, newSha });
           ingestCommitRange(repoId, repoPath, oldSha, newSha)
             .catch((err: unknown) => app.log.error({ err }, `post-push ingestion failed for ${branchName}`));
         }
       }
+      // Emit head_pushed events on OPEN PRs whose head branch just moved.
+      emitHeadPushedForPush(repoId, actorId, changed)
+        .catch((err: unknown) => app.log.error({ err }, "post-push head_pushed events failed"));
     } catch { /* nothing to ingest */ }
 
     return reply;

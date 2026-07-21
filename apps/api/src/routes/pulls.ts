@@ -3,6 +3,8 @@ import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, resolveBranchSha } from "../git-utils.js";
 import { notifySubscribers } from "../notifications-service.js";
+import { recordEvent } from "../timeline-service.js";
+import { syncBodyReferences, closeIssuesForMergedPull } from "../references-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
@@ -91,6 +93,14 @@ export async function pullRoutes(app: FastifyInstance) {
     });
 
     void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: pr.id, subjectTitle: pr.title, reason: "SUBSCRIBED" });
+
+    // Parse the description: cross-refs, closing keywords (closed on merge), mentions.
+    await syncBodyReferences({
+      repo, actorId: userId,
+      source: { type: "PULL_REQUEST", id: pr.id },
+      container: { subjectType: "PULL_REQUEST", id: pr.id, number: pr.number, title: pr.title },
+      body: pr.description,
+    }).catch((err) => request.log.error({ err }, "syncBodyReferences (pull create)"));
 
     return reply.status(201).send({
       id: pr.id,
@@ -185,6 +195,11 @@ export async function pullRoutes(app: FastifyInstance) {
       data: { state: "MERGED", mergedAt: new Date() },
     });
 
+    await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
+      .catch((err) => request.log.error({ err }, "recordEvent merged"));
+    await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
+      .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
+
     // Fire-and-forget: ingest any new .gltf files introduced by the merge
     if (beforeSha && result.sha) {
       const repoPath = bareRepoPathFromKey(repo.storageKey);
@@ -268,6 +283,11 @@ export async function pullRoutes(app: FastifyInstance) {
       where: { id: pr.id },
       data: { state: "MERGED", mergedAt: new Date() },
     });
+
+    await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
+      .catch((err) => request.log.error({ err }, "recordEvent merged"));
+    await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
+      .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
 
     if (beforeSha && result.sha) {
       const repoPath = bareRepoPathFromKey(repo.storageKey);
@@ -362,6 +382,13 @@ export async function pullRoutes(app: FastifyInstance) {
       where: { id: pr.id },
       data: { state: state === "open" ? "OPEN" : "CLOSED" },
     });
+
+    if (updated.state !== pr.state) {
+      await recordEvent({
+        repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+        kind: updated.state === "CLOSED" ? "closed" : "reopened", actorId: userId,
+      }).catch((err) => request.log.error({ err }, "recordEvent pull state"));
+    }
 
     return { id: updated.id, number: updated.number, state: updated.state.toLowerCase() };
   });
