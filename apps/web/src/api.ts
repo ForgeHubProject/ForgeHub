@@ -183,6 +183,30 @@ export async function createRepo(
   });
 }
 
+// ─── topics ──────────────────────────────────────────────────────────────────
+
+export async function getTopics(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, { token: token ?? undefined });
+}
+
+/** Replace the whole topic set (writer-gated). Returns the persisted, sorted set. */
+export async function updateTopics(
+  token: string,
+  handle: string,
+  repoName: string,
+  topics: string[],
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ topics }),
+  });
+}
+
 export async function getSnapshots(
   token: string | null,
   handle: string,

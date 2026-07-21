@@ -15,6 +15,7 @@ function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   }
   return null;
 }
+import { TopicChips } from "./listShared";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
@@ -236,6 +237,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
               </div>
               {repo.description && (
                 <p className="text-fh-base text-fh-fg-muted mt-2 max-w-3xl">{repo.description}</p>
+              )}
+              {repo.topics && repo.topics.length > 0 && (
+                <TopicChips topics={repo.topics} className="mt-3" />
               )}
             </div>
 
