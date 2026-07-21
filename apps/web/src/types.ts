@@ -161,6 +161,36 @@ export type BranchInfo = {
   date: string;
   isDefault: boolean;
   protected: boolean;
+  /** Commits this branch is ahead of / behind the default branch. */
+  ahead?: number;
+  behind?: number;
+};
+
+/** A contiguous run of lines attributed to one commit (git blame). */
+export type BlameHunk = {
+  sha: string;
+  shortSha: string;
+  author: string;
+  authorMail: string;
+  date: string;
+  summary: string;
+  startLine: number;
+  endLine: number;
+  lines: string[];
+};
+
+/** Result of GET /ref-compare — arbitrary ref-to-ref comparison. */
+export type RefCompareResult = {
+  base: string;
+  head: string;
+  baseSha: string | null;
+  headSha: string | null;
+  mergeBaseSha: string | null;
+  ahead: number;
+  behind: number;
+  identical: boolean;
+  commits: CommitInfo[];
+  files: PRFileEntry[];
 };
 
 export type TagInfo = {
