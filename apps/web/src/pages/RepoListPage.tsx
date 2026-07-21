@@ -1,8 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { createRepo, getCollaboratingRepos, getMyRepos } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import type { Repo, User } from "../types";
+import {
+  Avatar,
+  Button,
+  Dialog,
+  EmptyState,
+  Field,
+  Icons,
+  Skeleton,
+  TextInput,
+  Textarea,
+  cx,
+  useToast,
+} from "../ui";
+import { LockIcon, PlusIcon, RepoIcon, RepoRow, RowList } from "./listShared";
 
 type Props = {
   token: string;
@@ -17,39 +32,13 @@ type CreateForm = {
   visibility: "public" | "private";
 };
 
-function RepoIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8zM5 12.25v3.25a.25.25 0 00.4.2l1.45-1.087a.25.25 0 01.3 0L8.6 15.7a.25.25 0 00.4-.2v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25z" />
-    </svg>
-  );
+const CREATE_FORM_ID = "create-repo-form";
+
+function repoHref(repo: Repo): string {
+  return `/${repo.ownerHandle ?? ""}/${repo.name}`;
 }
 
-function RepoRow({ repo, onSelect, collab }: { repo: Repo; onSelect: (r: Repo) => void; collab?: boolean }) {
-  return (
-    <div className="py-5 flex items-start gap-3">
-      <RepoIcon />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            className="text-gh-accent font-semibold text-gh-lg hover:underline bg-transparent border-none cursor-pointer p-0 text-left"
-            onClick={() => onSelect(repo)}
-          >
-            {collab ? (repo.fullName ?? `${repo.ownerHandle}/${repo.name}`) : repo.name}
-          </button>
-          <span className={repo.visibility === "public" ? "badge-public" : "badge-private"}>
-            {repo.visibility === "public" ? "Public" : "Private"}
-          </span>
-        </div>
-        {repo.description && (
-          <p className="text-gh-sm text-gh-muted mt-1 line-clamp-1">{repo.description}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
+export function RepoListPage({ token, user, onLogout }: Props) {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [collabRepos, setCollabRepos] = useState<Repo[]>([]);
   const [filter, setFilter] = useState("");
@@ -59,6 +48,7 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   const [form, setForm] = useState<CreateForm>({ name: "", description: "", visibility: "private" });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     Promise.all([getMyRepos(token), getCollaboratingRepos(token)])
@@ -70,6 +60,20 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
       .finally(() => setLoading(false));
   }, [token]);
 
+  const { filteredOwn, filteredCollab } = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return { filteredOwn: repos, filteredCollab: collabRepos };
+    return {
+      filteredOwn: repos.filter((r) => r.name.toLowerCase().includes(q)),
+      filteredCollab: collabRepos.filter(
+        (r) => r.name.toLowerCase().includes(q) || r.ownerHandle?.toLowerCase().includes(q),
+      ),
+    };
+  }, [filter, repos, collabRepos]);
+
+  const totalCount = repos.length + collabRepos.length;
+  const hasResults = filteredOwn.length > 0 || filteredCollab.length > 0;
+
   function openCreate() {
     setForm({ name: "", description: "", visibility: "private" });
     setCreateError(null);
@@ -77,6 +81,7 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   }
 
   function closeCreate() {
+    if (creating) return;
     setShowCreate(false);
     setCreateError(null);
   }
@@ -88,7 +93,8 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
     try {
       const repo = await createRepo(token, form.name, form.description || undefined, form.visibility);
       setRepos((prev) => [repo, ...prev]);
-      closeCreate();
+      setShowCreate(false);
+      toast("Repository created", { tone: "success" });
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create");
     } finally {
@@ -97,203 +103,257 @@ export function RepoListPage({ token, user, onSelectRepo, onLogout }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-gh-bg flex flex-col">
+    <div className="flex min-h-screen flex-col bg-fh-canvas">
       <Header user={user} onLogout={onLogout} token={token} />
 
-      <div className="flex-1 max-w-[1200px] w-full mx-auto px-4 py-8">
-        <div className="flex flex-col sm:flex-row gap-6">
-          {/* Left sidebar */}
-          <aside className="w-full sm:w-[296px] flex-shrink-0">
-            {/* User profile card */}
-            <div className="flex flex-col items-center sm:items-start">
-              <div className="w-20 h-20 sm:w-[296px] sm:h-[296px] rounded-full sm:rounded-xl bg-gh-accent flex items-center justify-center text-white text-4xl font-semibold mb-3">
-                {(user.displayName || user.handle)[0].toUpperCase()}
+      <div className="mx-auto w-full max-w-[1280px] flex-1 px-4 py-6">
+        <div className="flex flex-col gap-6 md:flex-row">
+          {/* Left rail — identity + repository controls */}
+          <aside className="w-full flex-shrink-0 md:w-[296px]">
+            <div className="md:sticky md:top-20">
+              <Link
+                to={`/${user.handle}`}
+                className="group flex items-center gap-3 no-underline"
+              >
+                <Avatar name={user.displayName ?? user.handle} size={44} />
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-fh-fg group-hover:text-fh-accent-fg">
+                    {user.displayName ?? user.handle}
+                  </p>
+                  <p className="truncate text-fh-sm text-fh-fg-muted">@{user.handle}</p>
+                </div>
+              </Link>
+
+              <div className="mt-6 border-t border-fh-border pt-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-fh-base font-semibold text-fh-fg">Your repositories</h2>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    leadingIcon={<PlusIcon size={14} />}
+                    onClick={openCreate}
+                  >
+                    New
+                  </Button>
+                </div>
+
+                <div className="relative mt-3">
+                  <Icons.SearchIcon
+                    size={14}
+                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fh-fg-muted"
+                  />
+                  <TextInput
+                    sizing="sm"
+                    className="pl-8"
+                    placeholder="Find a repository…"
+                    aria-label="Find a repository"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    disabled={loading || (!!error && totalCount === 0)}
+                  />
+                </div>
+
+                {!loading && !error && totalCount > 0 && (
+                  <p className="mt-3 text-fh-xs text-fh-fg-subtle">
+                    {totalCount} {totalCount === 1 ? "repository" : "repositories"}
+                  </p>
+                )}
               </div>
-              <h2 className="text-gh-xl font-semibold text-gh-text">{user.displayName || user.handle}</h2>
-              <p className="text-gh-lg text-gh-muted">@{user.handle}</p>
             </div>
           </aside>
 
-          {/* Main content */}
-          <main className="flex-1 min-w-0">
-            {/* Tab bar */}
-            <div className="tab-nav mb-4">
-              <span className="tab-item-active">
-                <RepoIcon />
-                Repositories
-                <span className="counter">{repos.length + collabRepos.length}</span>
-              </span>
-            </div>
-
-            {/* Filter / create row */}
-            <div className="flex gap-2 mb-4">
-              <input
-                className="input flex-1"
-                placeholder="Find a repository…"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              />
-              <button className="btn-primary px-4 whitespace-nowrap" onClick={openCreate}>
-                New
-              </button>
-            </div>
-
-            {/* Repo list */}
+          {/* Main — repository rows */}
+          <main className="min-w-0 flex-1">
             {loading && (
-              <div className="text-gh-muted text-gh-base py-8 text-center">Loading…</div>
+              <RowList aria-hidden="true">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-start gap-3 px-4 py-3">
+                    <Skeleton variant="circle" width={16} height={16} className="mt-0.5" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton variant="text" width="40%" />
+                      <Skeleton variant="text" width="70%" />
+                    </div>
+                  </div>
+                ))}
+              </RowList>
             )}
-            {error && (
-              <div className="text-gh-danger text-gh-sm py-4">{error}</div>
-            )}
-            {(() => {
-              const q = filter.toLowerCase();
-              const filteredOwn = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
-              const filteredCollab = q ? collabRepos.filter((r) => r.name.toLowerCase().includes(q) || r.ownerHandle?.toLowerCase().includes(q)) : collabRepos;
-              return (
-                <>
-                  {filteredOwn.map((repo) => <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} />)}
-                  {filteredCollab.length > 0 && (
-                    <>
-                      <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mt-6 mb-1 px-0.5">Collaborating on</p>
-                      <div className="divide-y divide-gh-border border-t border-gh-border">
-                        {filteredCollab.map((repo) => <RepoRow key={repo.id} repo={repo} onSelect={onSelectRepo} collab />)}
-                      </div>
-                    </>
-                  )}
-                  {filteredOwn.length === 0 && filteredCollab.length === 0 && filter && (
-                    <p className="text-sm text-gh-muted py-8 text-center">No repositories match "{filter}"</p>
-                  )}
-                </>
-              );
-            })()}
 
-            {!loading && repos.length === 0 && collabRepos.length === 0 && !filter && !error && (
-              <div className="text-center py-16 text-gh-muted">
-                <RepoIcon />
-                <p className="mt-3 text-gh-lg font-semibold text-gh-text">No repositories yet</p>
-                <p className="text-gh-sm mt-1">Create your first repository to get started.</p>
-                <button className="btn-primary mt-4 px-4 py-2" onClick={openCreate}>
-                  Create a repository
-                </button>
+            {!loading && error && (
+              <div className="rounded-md border border-fh-border bg-fh-surface px-4 py-4 text-fh-sm text-fh-danger-fg">
+                {error}
               </div>
             )}
 
+            {!loading && !error && totalCount === 0 && (
+              <EmptyState
+                bordered
+                icon={<RepoIcon size={28} />}
+                title="No repositories yet"
+                description="Your code lives in repositories. Create your first one to start pushing commits, opening issues, and cutting releases."
+                actions={
+                  <Button variant="primary" leadingIcon={<PlusIcon size={14} />} onClick={openCreate}>
+                    New repository
+                  </Button>
+                }
+              />
+            )}
+
+            {!loading && !error && totalCount > 0 && (
+              <div className="space-y-6">
+                {filteredOwn.length > 0 && (
+                  <RowList aria-label="Your repositories">
+                    {filteredOwn.map((repo) => (
+                      <RepoRow
+                        key={repo.id}
+                        to={repoHref(repo)}
+                        name={repo.name}
+                        description={repo.description}
+                        visibility={repo.visibility}
+                        updatedAt={repo.updatedAt}
+                      />
+                    ))}
+                  </RowList>
+                )}
+
+                {filteredCollab.length > 0 && (
+                  <section>
+                    <h3 className="mb-2 text-fh-xs font-semibold uppercase tracking-wide text-fh-fg-subtle">
+                      Collaborating on
+                    </h3>
+                    <RowList aria-label="Repositories you collaborate on">
+                      {filteredCollab.map((repo) => (
+                        <RepoRow
+                          key={repo.id}
+                          to={repoHref(repo)}
+                          name={repo.fullName ?? `${repo.ownerHandle}/${repo.name}`}
+                          description={repo.description}
+                          visibility={repo.visibility}
+                          updatedAt={repo.updatedAt}
+                        />
+                      ))}
+                    </RowList>
+                  </section>
+                )}
+
+                {!hasResults && (
+                  <EmptyState
+                    bordered
+                    icon={<Icons.SearchIcon size={28} />}
+                    title="No matching repositories"
+                    description={`No repository matches “${filter.trim()}”.`}
+                    actions={
+                      <Button variant="default" onClick={() => setFilter("")}>
+                        Clear filter
+                      </Button>
+                    }
+                  />
+                )}
+              </div>
+            )}
           </main>
         </div>
       </div>
 
       <Footer />
 
-      {/* Create repo modal */}
-      {showCreate && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4"
-          onClick={closeCreate}
-        >
-          <div
-            className="bg-gh-canvas border border-gh-border rounded-xl w-full max-w-lg shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+      <Dialog
+        open={showCreate}
+        onClose={closeCreate}
+        title="Create a new repository"
+        description="A repository contains all your project's files and their revision history."
+        footer={
+          <>
+            <Button variant="default" onClick={closeCreate} disabled={creating}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form={CREATE_FORM_ID}
+              variant="primary"
+              loading={creating}
+              disabled={!form.name.trim()}
+            >
+              Create repository
+            </Button>
+          </>
+        }
+      >
+        <form id={CREATE_FORM_ID} onSubmit={submitCreate} className="flex flex-col gap-4">
+          <Field
+            label="Repository name"
+            required
+            htmlFor="repo-name"
+            hint="Lowercase letters, numbers, hyphens and dots only."
           >
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gh-border">
-              <h3 className="text-gh-lg font-semibold text-gh-text">Create a new repository</h3>
-              <button
-                className="text-gh-muted hover:text-gh-text bg-transparent border-none cursor-pointer p-1 rounded-md hover:bg-gh-bg"
-                onClick={closeCreate}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path fillRule="evenodd" d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z" />
-                </svg>
-              </button>
-            </div>
+            {(id) => (
+              <TextInput
+                id={id}
+                placeholder="my-project"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                autoFocus
+                required
+              />
+            )}
+          </Field>
 
-            <form onSubmit={submitCreate} className="px-6 py-5 flex flex-col gap-4">
-              <div className="form-group">
-                <label className="label" htmlFor="repo-name">
-                  Repository name <span className="text-gh-danger">*</span>
-                </label>
-                <input
-                  id="repo-name"
-                  className="input"
-                  placeholder="my-project"
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  autoFocus
-                  required
-                />
-                <p className="text-gh-xs text-gh-muted mt-1">Lowercase letters, numbers, hyphens and dots only.</p>
-              </div>
+          <Field label="Description" htmlFor="repo-desc">
+            {(id) => (
+              <Textarea
+                id={id}
+                rows={3}
+                placeholder="Short description of your project (optional)"
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            )}
+          </Field>
 
-              <div className="form-group">
-                <label className="label" htmlFor="repo-desc">
-                  Description <span className="text-gh-muted font-normal">(optional)</span>
-                </label>
-                <textarea
-                  id="repo-desc"
-                  className="input resize-none"
-                  placeholder="Short description of your project"
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="label">Visibility</label>
-                <div className="flex flex-col gap-2">
-                  {(["private", "public"] as const).map((v) => (
-                    <label
-                      key={v}
-                      className={`flex items-start gap-3 p-3 border rounded-md cursor-pointer transition-colors ${
-                        form.visibility === v
-                          ? "border-gh-accent bg-gh-accent-muted"
-                          : "border-gh-border hover:bg-gh-bg"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="visibility"
-                        value={v}
-                        checked={form.visibility === v}
-                        onChange={() => setForm((f) => ({ ...f, visibility: v }))}
-                        className="mt-0.5"
-                      />
-                      <div>
-                        <span className="block text-gh-sm font-semibold text-gh-text">
-                          {v === "private" ? "Private" : "Public"}
-                        </span>
-                        <span className="block text-gh-xs text-gh-muted mt-0.5">
-                          {v === "private"
-                            ? "Only you and collaborators can see it"
-                            : "Anyone on the internet can see this repository"}
-                        </span>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {createError && (
-                <p className="text-gh-danger text-gh-sm bg-gh-danger-muted rounded-md px-3 py-2">
-                  {createError}
-                </p>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-gh-border">
-                <button type="button" className="btn-default" onClick={closeCreate}>
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary px-4"
-                  disabled={creating || !form.name.trim()}
+          <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+            <legend className="mb-1 p-0 text-fh-sm font-semibold text-fh-fg">Visibility</legend>
+            {(["private", "public"] as const).map((v) => {
+              const active = form.visibility === v;
+              return (
+                <label
+                  key={v}
+                  className={cx(
+                    "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                    active
+                      ? "border-fh-accent-emphasis bg-fh-accent-subtle"
+                      : "border-fh-border hover:bg-fh-surface-muted",
+                  )}
                 >
-                  {creating ? "Creating…" : "Create repository"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                  <input
+                    type="radio"
+                    name="visibility"
+                    value={v}
+                    checked={active}
+                    onChange={() => setForm((f) => ({ ...f, visibility: v }))}
+                    className="mt-1 accent-fh-accent-emphasis"
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-fh-sm font-semibold text-fh-fg">
+                      {v === "private" ? <LockIcon size={14} /> : <RepoIcon size={14} />}
+                      {v === "private" ? "Private" : "Public"}
+                    </span>
+                    <span className="mt-0.5 block text-fh-xs text-fh-fg-muted">
+                      {v === "private"
+                        ? "Only you and collaborators can see this repository."
+                        : "Anyone on the internet can see this repository."}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+
+          {createError && (
+            <p className="rounded-md bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg">
+              {createError}
+            </p>
+          )}
+        </form>
+      </Dialog>
     </div>
   );
 }
