@@ -3,11 +3,11 @@ import type { FileDiffViewerProps } from "../fileDiffViewerTypes";
 
 export function TextFileDiffViewer({ file }: FileDiffViewerProps) {
   if (file.binary) {
-    return <p className="px-4 py-3 text-sm text-gh-muted italic">Binary file changed</p>;
+    return <p className="px-4 py-3 text-sm text-fh-fg-muted italic">Binary file changed</p>;
   }
 
   if (file.hunks.length === 0) {
-    return <p className="px-4 py-3 text-sm text-gh-muted italic">No textual changes</p>;
+    return <p className="px-4 py-3 text-sm text-fh-fg-muted italic">No textual changes</p>;
   }
 
   return (

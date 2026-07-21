@@ -34,7 +34,7 @@ export function CodeViewer({ content, filename }: FileViewerProps) {
           {lines.map((_, i) => (
             <tr key={i} className="hover:bg-fh-surface-muted group">
               <td
-                className="select-none text-right text-gh-muted pr-4 pl-3 w-[1%] whitespace-nowrap border-r border-gh-border"
+                className="select-none text-right text-fh-fg-muted pr-4 pl-3 w-[1%] whitespace-nowrap border-r border-fh-border"
                 style={{ userSelect: "none", minWidth: 40 }}
               >
                 {i + 1}
