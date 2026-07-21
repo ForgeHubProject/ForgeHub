@@ -38,6 +38,7 @@ model User {
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
   releases         Release[]                  @relation("ReleaseAuthor")
+  releaseAssets    ReleaseAsset[]             @relation("ReleaseAssetUploader")
   notifications    Notification[]
   personalAccessTokens PersonalAccessToken[]
 }
@@ -395,8 +396,26 @@ model Release {
 
   repo   Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author User @relation("ReleaseAuthor", fields: [authorId], references: [id])
+  assets ReleaseAsset[]
 
   @@unique([repoId, tagName])
+}
+
+model ReleaseAsset {
+  id            String   @id @default(cuid())
+  releaseId     String
+  name          String
+  contentType   String
+  size          Int
+  storageKey    String
+  downloadCount Int      @default(0)
+  uploadedById  String
+  createdAt     DateTime @default(now())
+
+  release    Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation("ReleaseAssetUploader", fields: [uploadedById], references: [id])
+
+  @@unique([releaseId, name])
 }
 
 model PullRequestComment {

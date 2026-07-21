@@ -767,6 +767,55 @@ export async function listMergeBaseCommits(
   }
 }
 
+// ─── release notes ───────────────────────────────────────────────────────────────────────
+
+/**
+ * The nearest tag reachable from `${targetRef}^` — i.e. the previous release
+ * tag before `targetRef`. Returns null when there is no earlier tag (root).
+ */
+export async function resolvePreviousTag(storageKey: string, targetRef: string): Promise<string | null> {
+  try {
+    const out = await git(storageKey, ["describe", "--tags", "--abbrev=0", `${targetRef}^`]);
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Commits reachable from `toRef` but not from `fromRef` (`fromRef..toRef`).
+ * When `fromRef` is null, returns the full history of `toRef` (from the root).
+ */
+export async function listRangeCommits(
+  storageKey: string,
+  fromRef: string | null,
+  toRef: string,
+): Promise<CommitInfo[]> {
+  try {
+    const range = fromRef ? `${fromRef}..${toRef}` : toRef;
+    const out = await git(storageKey, [
+      "log", range,
+      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+    ]);
+    if (!out) return [];
+    return out.split("\n").filter(Boolean).map((line) => {
+      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
+      return {
+        sha: sha ?? "",
+        shortSha: (sha ?? "").slice(0, 7),
+        subject: subject ?? "",
+        message: subject ?? "",
+        authorName: authorName ?? "",
+        authorEmail: authorEmail ?? "",
+        date: date ?? "",
+        parents: parents?.trim() ? parents.trim().split(" ") : [],
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 // ─── file tree ─────────────────────────────────────────────────────────────────────────────
 
 export type TreeEntry = {
