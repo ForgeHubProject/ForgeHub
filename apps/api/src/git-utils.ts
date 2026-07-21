@@ -624,6 +624,34 @@ export async function listTree(
   }
 }
 
+export type BlobSize = { path: string; size: number };
+
+/**
+ * Every blob reachable from a ref with its byte size, via `git ls-tree -r -l`.
+ * Output rows are `<mode> blob <sha> <size>\t<path>` (size right-aligned/padded);
+ * trees are excluded by -r. Drives the format composition bar. Empty on error.
+ */
+export async function listBlobSizes(storageKey: string, ref: string): Promise<BlobSize[]> {
+  try {
+    const out = await git(storageKey, ["ls-tree", "-r", "-l", ref]);
+    if (!out) return [];
+    const result: BlobSize[] = [];
+    for (const line of out.split("\n")) {
+      if (!line) continue;
+      const tab = line.indexOf("\t");
+      if (tab < 0) continue;
+      // meta = [mode, type, sha, size]; size is padded so split on runs of space
+      const meta = line.slice(0, tab).trim().split(/\s+/);
+      if (meta[1] !== "blob") continue;
+      const size = parseInt(meta[3] ?? "0", 10);
+      result.push({ path: line.slice(tab + 1), size: Number.isFinite(size) ? size : 0 });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 /** Paths changed between two branch tips (merge-base..from, plus to-only). */
 export async function listFilesDifferingBetweenBranches(
   storageKey: string,

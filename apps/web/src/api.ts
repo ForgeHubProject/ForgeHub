@@ -1,5 +1,5 @@
 import type {
-  BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
+  BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
   Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, Repo,
   Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
@@ -181,6 +181,19 @@ export async function createRepo(
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility }),
   });
+}
+
+// ─── composition ─────────────────────────────────────────────────────────────
+
+/** Byte-share per format/domain at a ref (default branch when omitted). */
+export async function getComposition(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+): Promise<Composition> {
+  const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  return req(`/repos/${handle}/${repoName}/composition${qs}`, { token: token ?? undefined });
 }
 
 // ─── topics ──────────────────────────────────────────────────────────────────
