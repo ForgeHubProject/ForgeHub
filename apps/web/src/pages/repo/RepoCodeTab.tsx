@@ -1,10 +1,25 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { API_BASE, listCommits, listTree } from "../../api";
 import { BlobViewer } from "../../components/BlobViewer";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
+import {
+  Badge,
+  Button,
+  Dialog,
+  DropdownItem,
+  DropdownLabel,
+  DropdownMenu,
+  DropdownSeparator,
+  Field,
+  Icons,
+  RelativeTime,
+  Select,
+  Skeleton,
+  TextInput,
+  useToast,
+} from "../../ui";
 import type { BranchInfo, CommitInfo, Repo, TreeEntry } from "../../types";
-import type { KeyboardEvent } from "react";
 
 type Props = {
   token: string;
@@ -19,93 +34,26 @@ type Props = {
   splat: string;
 };
 
-function CloneDropdown({ handle, repoName, visibility }: { handle: string; repoName: string; visibility: string }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const url = `${API_BASE}/git/${handle}/${repoName}.git`;
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  function copy() {
-    void navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
+// ── local icons (Octicon-style, currentColor) ────────────────────────────────
+function CodeGlyph() {
   return (
-    <div className="relative" ref={ref}>
-      <button
-        className="btn-primary flex items-center gap-1.5 text-sm px-3 py-1.5"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
-        </svg>
-        Code
-        <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-          <path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" />
-        </svg>
-      </button>
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+    </svg>
+  );
+}
 
-      {open && (
-        <div className="absolute right-0 top-[calc(100%+6px)] w-96 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-50 overflow-hidden">
-          <div className="px-4 py-3 border-b border-gh-border">
-            <p className="text-sm font-semibold text-gh-text">Clone this repository</p>
-          </div>
-
-          <div className="p-3 space-y-3">
-            {/* URL row */}
-            <div className="flex items-center gap-1.5">
-              <input
-                readOnly
-                value={url}
-                className="input flex-1 font-mono text-xs bg-gh-bg"
-                onFocus={(e) => e.currentTarget.select()}
-              />
-              <button className="btn-default px-2.5 py-1.5 text-xs flex-shrink-0" onClick={copy} title="Copy URL">
-                {copied ? (
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-success">
-                    <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                    <path fillRule="evenodd" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" /><path fillRule="evenodd" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
-                  </svg>
-                )}
-              </button>
-            </div>
-
-            {/* Clone command */}
-            <div className="bg-gh-bg border border-gh-border rounded-md p-3 space-y-1.5">
-              <p className="text-xs text-gh-muted font-semibold uppercase tracking-wide">Clone</p>
-              <code className="text-xs font-mono text-gh-text break-all select-all block">
-                git clone {url}
-              </code>
-            </div>
-
-            {visibility === "private" && (
-              <p className="text-xs text-gh-muted bg-gh-warning-muted border border-gh-border rounded-md p-3">
-                <strong>Private repository</strong> — you'll be prompted for your ForgeHub <strong>username</strong> and <strong>password</strong>.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+function BranchGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
+    </svg>
   );
 }
 
 function FolderIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0" style={{ color: "#54aeff" }}>
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-accent-fg shrink-0" aria-hidden="true">
       <path d="M1.75 1A1.75 1.75 0 000 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0016 13.25v-8.5A1.75 1.75 0 0014.25 3H7.5a.25.25 0 01-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z" />
     </svg>
   );
@@ -113,163 +61,192 @@ function FolderIcon() {
 
 function FileIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
       <path fillRule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z" />
     </svg>
   );
 }
 
-function BranchSelector({ branches, currentRef, onRefChange, onCreateBranch }: {
+function CommitGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z" />
+    </svg>
+  );
+}
+
+function BookIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
+      <path fillRule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.062 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm7.75 3.19v8.502A3.75 3.75 0 0111.006 11.5h3.744V2.5h-3.5a2.25 2.25 0 00-2.25 2.25v.19zm-1.5 8.502V4.75A2.25 2.25 0 004.75 2.5H1.25v9h4.008a3.75 3.75 0 01.992.132V13.442z" />
+    </svg>
+  );
+}
+
+// ── clone dropdown ────────────────────────────────────────────────────────────
+function CloneDropdown({ handle, repoName, visibility }: { handle: string; repoName: string; visibility: string }) {
+  const { toast } = useToast();
+  const url = `${API_BASE}/git/${handle}/${repoName}.git`;
+
+  function copy() {
+    void navigator.clipboard.writeText(url).then(() => toast("Clone URL copied", { tone: "success" }));
+  }
+
+  return (
+    <DropdownMenu
+      align="end"
+      width={360}
+      trigger={
+        <Button variant="primary" size="sm" leadingIcon={<CodeGlyph />} trailingIcon={<Icons.ChevronDownIcon size={12} />}>
+          Code
+        </Button>
+      }
+    >
+      <DropdownLabel>Clone with HTTPS</DropdownLabel>
+      <div className="px-3 pb-2 pt-1">
+        <div className="flex items-center gap-1.5">
+          <span className="flex-1 min-w-0 truncate font-mono text-fh-xs text-fh-fg-muted bg-fh-surface-inset border border-fh-border rounded-md px-2 py-1.5">
+            {url}
+          </span>
+          <button
+            type="button"
+            onClick={copy}
+            aria-label="Copy clone URL"
+            title="Copy clone URL"
+            className="shrink-0 inline-flex items-center justify-center h-[30px] w-8 rounded-md border border-fh-border bg-fh-surface text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg cursor-pointer"
+          >
+            <CopyGlyph />
+          </button>
+        </div>
+        <p className="mt-2 text-fh-xs text-fh-fg-subtle">
+          Clone with <code className="font-mono text-fh-fg-muted">git clone {"<url>"}</code>.
+          {visibility === "private" && " You'll be prompted for your ForgeHub username and password."}
+        </p>
+      </div>
+    </DropdownMenu>
+  );
+}
+
+function CopyGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" />
+      <path fillRule="evenodd" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
+    </svg>
+  );
+}
+
+// ── branch switcher ─────────────────────────────────────────────────────────
+function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch }: {
   branches: BranchInfo[];
   currentRef: string;
   onRefChange: (ref: string) => void;
   onCreateBranch: (name: string, from: string) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [name, setName] = useState("");
   const [fromRef, setFromRef] = useState(currentRef);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  const trimmed = query.trim();
-  const filtered = branches.filter((b) => b.name.toLowerCase().includes(trimmed.toLowerCase()));
-  const exactMatch = branches.some((b) => b.name === trimmed);
-  const canCreate = trimmed.length > 0 && !exactMatch && /^[\w/._-]+$/.test(trimmed);
+  const trimmed = name.trim();
+  const valid = trimmed.length > 0 && /^[\w/._-]+$/.test(trimmed) && !branches.some((b) => b.name === trimmed);
 
-  function openDropdown() {
-    setOpen(true);
-    setQuery("");
+  function openDialog() {
+    setName("");
     setFromRef(currentRef);
     setError(null);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  }
-
-  function close() {
-    setOpen(false);
-    setQuery("");
-    setError(null);
+    setDialogOpen(true);
   }
 
   async function handleCreate() {
-    if (!canCreate || creating) return;
+    if (!valid || creating) return;
     setCreating(true);
     setError(null);
     try {
       await onCreateBranch(trimmed, fromRef);
-      close();
+      toast(`Branch ${trimmed} created`, { tone: "success" });
+      setDialogOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create branch");
+    } finally {
       setCreating(false);
     }
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Escape") close();
-  }
-
   return (
-    <div className="relative">
-      <button
-        className="btn-default flex items-center gap-2 min-w-[160px] justify-between text-sm"
-        onClick={openDropdown}
+    <>
+      <DropdownMenu
+        align="start"
+        width={280}
+        trigger={
+          <Button
+            variant="default"
+            size="sm"
+            leadingIcon={<BranchGlyph />}
+            trailingIcon={<Icons.ChevronDownIcon size={12} />}
+            className="max-w-[220px]"
+          >
+            <span className="truncate">{currentRef}</span>
+          </Button>
+        }
       >
-        <span className="flex items-center gap-1.5 truncate">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
-            <path fillRule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
-          </svg>
-          <span className="truncate font-medium">{currentRef}</span>
-        </span>
-        <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-          <path fillRule="evenodd" d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z" />
-        </svg>
-      </button>
+        <DropdownLabel>Switch branches</DropdownLabel>
+        {branches.map((b) => (
+          <DropdownItem
+            key={b.name}
+            leadingIcon={b.name === currentRef ? <Icons.CheckIcon size={14} /> : <span className="w-3.5 inline-block" />}
+            trailing={b.isDefault ? <Badge tone="neutral" pill={false} className="text-fh-xs">default</Badge> : undefined}
+            onSelect={() => onRefChange(b.name)}
+          >
+            <span className={b.name === currentRef ? "font-semibold" : undefined}>{b.name}</span>
+          </DropdownItem>
+        ))}
+        <DropdownSeparator />
+        <DropdownItem leadingIcon={<BranchGlyph />} onSelect={openDialog}>
+          New branch…
+        </DropdownItem>
+      </DropdownMenu>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={close} />
-          <div className="absolute left-0 top-[calc(100%+4px)] w-80 bg-gh-canvas border border-gh-border rounded-lg shadow-xl z-20 overflow-hidden">
-            {/* Search / filter input */}
-            <div className="px-3 py-2 border-b border-gh-border bg-gh-bg">
-              <p className="text-xs font-semibold text-gh-muted uppercase tracking-wide mb-2">Switch branches / tags</p>
-              <input
-                ref={inputRef}
-                type="text"
-                value={query}
-                onChange={(e) => { setQuery(e.target.value); setError(null); }}
-                onKeyDown={onKeyDown}
-                placeholder="Find or create a branch…"
-                className="input w-full text-sm py-1.5"
+      <Dialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        title="Create a branch"
+        size="sm"
+        footer={
+          <>
+            <Button variant="default" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="primary" loading={creating} disabled={!valid} onClick={handleCreate}>Create branch</Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Branch name" required hint="Letters, numbers, and / . _ - only." error={error ?? undefined}>
+            {(id) => (
+              <TextInput
+                id={id}
+                value={name}
+                autoFocus
+                placeholder="feature/my-change"
+                invalid={!!error}
+                onChange={(e) => { setName(e.target.value); setError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
               />
-            </div>
-
-            {/* Branch list */}
-            {!canCreate && (
-              <div className="max-h-60 overflow-y-auto">
-                {filtered.map((b) => (
-                  <button
-                    key={b.name}
-                    className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gh-accent hover:text-white transition-colors"
-                    style={{ color: b.name === currentRef ? "#ea580c" : "#1c1917" }}
-                    onClick={() => { onRefChange(b.name); close(); }}
-                  >
-                    {b.name === currentRef ? (
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
-                        <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-                      </svg>
-                    ) : (
-                      <span className="w-3 flex-shrink-0" />
-                    )}
-                    <span className="truncate">{b.name}</span>
-                    {b.isDefault && (
-                      <span className="ml-auto text-xs text-gh-muted border border-gh-border rounded px-1">default</span>
-                    )}
-                  </button>
+            )}
+          </Field>
+          <Field label="Branch source">
+            {(id) => (
+              <Select id={id} value={fromRef} onChange={(e) => setFromRef(e.target.value)}>
+                {branches.map((b) => (
+                  <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>
                 ))}
-                {filtered.length === 0 && trimmed.length > 0 && (
-                  <div className="px-3 py-3 text-sm text-gh-muted text-center">
-                    No branches match. Use letters, numbers, <code>/ . _ -</code>
-                  </div>
-                )}
-              </div>
+              </Select>
             )}
-
-            {/* Create branch panel — shown when typed name is valid and new */}
-            {canCreate && (
-              <div className="p-3 space-y-3">
-                <div>
-                  <p className="text-xs text-gh-muted font-semibold uppercase tracking-wide mb-1">Create branch</p>
-                  <p className="text-sm font-mono font-semibold text-gh-text truncate bg-gh-bg border border-gh-border rounded px-2 py-1">
-                    {trimmed}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-xs text-gh-muted font-semibold block mb-1">Branch source</label>
-                  <select
-                    value={fromRef}
-                    onChange={(e) => setFromRef(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="input w-full text-sm py-1.5"
-                  >
-                    {branches.map((b) => (
-                      <option key={b.name} value={b.name}>{b.name}{b.isDefault ? " (default)" : ""}</option>
-                    ))}
-                  </select>
-                </div>
-                {error && <p className="text-xs text-gh-danger">{error}</p>}
-                <button
-                  className="btn-primary w-full text-sm py-1.5"
-                  onClick={handleCreate}
-                  disabled={creating}
-                >
-                  {creating ? "Creating…" : "Create branch"}
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+          </Field>
+        </div>
+      </Dialog>
+    </>
   );
 }
 
@@ -318,6 +295,7 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
 }
 
 function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefChange, onCreateBranch, splat, base }: Props & { base: string }) {
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
@@ -325,8 +303,6 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
   const [error, setError] = useState<string | null>(null);
 
   // Extract current path — use currentRef state as prefix so slashed branch names work correctly.
-  // When splat doesn’t match the current ref prefix (e.g. during a branch switch before the URL
-  // has updated), fall back to root rather than misparse the stale splat.
   const currentPath = (() => {
     const treePrefix = `tree/${currentRef}`;
     if (splat === treePrefix) return "";
@@ -336,14 +312,19 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
 
   useEffect(() => {
     if (!currentRef) return;
+    let cancelled = false;
     setLoading(true);
     setError(null);
 
+    // NOTE: the commits endpoint only filters by branch (path is ignored server-side),
+    // so we surface the branch-HEAD commit once in the header bar rather than fabricate a
+    // per-file "last commit" column that would repeat the same commit on every row.
     Promise.all([
       listTree(token, handle, repoName, currentRef, currentPath || undefined),
       listCommits(token, handle, repoName, currentRef, currentPath || undefined, 1),
     ])
       .then(([treeData, commitData]) => {
+        if (cancelled) return;
         const sorted = [...treeData.entries].sort((a, b) => {
           if (a.type !== b.type) return a.type === "tree" ? -1 : 1;
           return a.name.localeCompare(b.name);
@@ -352,8 +333,10 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         setReadme(treeData.readme);
         setLatestCommit(commitData.commits[0] ?? null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
   }, [token, handle, repoName, currentRef, currentPath]);
 
   const pathParts = currentPath ? currentPath.split("/") : [];
@@ -364,129 +347,120 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
       : `${base}/blob/${currentRef}/${entry.path}`;
   }
 
-  const repoName_ = repoName;
-
   return (
     <div>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 flex-wrap mb-4">
-        <BranchSelector branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} />
+      <div className="flex items-center gap-3 flex-wrap mb-4">
+        <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} />
 
-        {/* Breadcrumb */}
+        {/* Breadcrumb path navigation */}
         {pathParts.length > 0 && (
-          <div className="flex items-center gap-1 text-sm text-gh-muted">
-            <Link to={base} className="text-gh-accent hover:underline font-medium">{repoName_}</Link>
+          <nav aria-label="Path" className="flex items-center gap-1.5 text-fh-base min-w-0">
+            <Link to={base} className="text-fh-accent-fg hover:underline font-semibold">{repoName}</Link>
             {pathParts.map((part, i) => {
               const partPath = pathParts.slice(0, i + 1).join("/");
+              const last = i === pathParts.length - 1;
               return (
-                <span key={i} className="flex items-center gap-1">
-                  <span>/</span>
-                  {i === pathParts.length - 1 ? (
-                    <span className="font-semibold text-gh-text">{part}</span>
+                <span key={i} className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-fh-fg-subtle select-none">/</span>
+                  {last ? (
+                    <span className="font-semibold text-fh-fg truncate">{part}</span>
                   ) : (
-                    <Link to={`${base}/tree/${currentRef}/${partPath}`} className="text-gh-accent hover:underline">
+                    <Link to={`${base}/tree/${currentRef}/${partPath}`} className="text-fh-accent-fg hover:underline truncate">
                       {part}
                     </Link>
                   )}
                 </span>
               );
             })}
-          </div>
+          </nav>
         )}
 
         <div className="flex-1" />
 
-        <Link to={`${base}/commits`} className="btn-default text-sm no-underline flex items-center gap-1.5">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path fillRule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z" />
-          </svg>
+        <Button variant="default" size="sm" leadingIcon={<CommitGlyph />} onClick={() => navigate(`${base}/commits`)}>
           Commits
-        </Link>
-        <CloneDropdown handle={handle} repoName={repoName_} visibility={repo.visibility} />
+        </Button>
+        <CloneDropdown handle={handle} repoName={repoName} visibility={repo.visibility} />
       </div>
 
       {/* File tree */}
       {loading ? (
-        <div className="card">
-          <div className="divide-y divide-gh-border">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="flex items-center gap-3 px-4 py-2.5 animate-pulse">
-                <div className="w-4 h-4 bg-gray-200 rounded flex-shrink-0" />
-                <div className="h-4 bg-gray-200 rounded" style={{ width: `${120 + i * 30}px` }} />
-                <div className="flex-1" />
-                <div className="h-3 bg-gray-100 rounded w-28" />
-              </div>
-            ))}
+        <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-fh-canvas border-b border-fh-border">
+            <Skeleton variant="circle" className="w-5 h-5" />
+            <Skeleton className="h-3.5 w-28" />
+            <Skeleton className="h-3 w-40 hidden sm:block" />
           </div>
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-2.5 border-b border-fh-border-muted last:border-b-0">
+              <Skeleton className="w-4 h-4" />
+              <Skeleton className="h-3.5" width={110 + i * 24} />
+            </div>
+          ))}
         </div>
       ) : error ? (
-        <div className="card p-12 text-center">
-          <p className="text-gh-danger font-medium">{error}</p>
-          <p className="text-gh-muted text-sm mt-2">This repository may be empty. Push your first commit to get started.</p>
+        <div className="border border-fh-border rounded-md bg-fh-surface p-12 text-center">
+          <p className="text-fh-danger-fg font-medium">{error}</p>
+          <p className="text-fh-fg-muted text-fh-base mt-2">This repository may be empty. Push your first commit to get started.</p>
         </div>
       ) : entries.length === 0 && pathParts.length === 0 ? (
-        <div className="card p-16 text-center">
-          <p className="text-xl font-semibold text-gh-text">This repository is empty</p>
-          <p className="text-gh-muted text-sm mt-2">Push your first commit to get started.</p>
+        <div className="border border-fh-border rounded-md bg-fh-surface p-16 text-center">
+          <p className="text-fh-xl font-semibold text-fh-fg">This repository is empty</p>
+          <p className="text-fh-fg-muted text-fh-base mt-2">Push your first commit to get started.</p>
         </div>
       ) : (
-        <div className="card overflow-hidden">
+        <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
           {/* Latest commit bar */}
           {latestCommit && (
-            <div className="flex items-center gap-3 px-4 py-2 bg-gh-bg border-b border-gh-border text-sm">
-              <div className="w-5 h-5 rounded-full bg-gh-accent flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-fh-canvas border-b border-fh-border text-fh-sm">
+              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-fh-accent-emphasis text-fh-on-emphasis text-fh-xs font-semibold shrink-0">
                 {latestCommit.authorName[0]?.toUpperCase()}
-              </div>
-              <span className="font-semibold text-gh-text truncate" style={{ maxWidth: 160 }}>{latestCommit.authorName}</span>
-              <span className="text-gh-muted truncate flex-1 text-xs">{latestCommit.subject}</span>
-              <code className="font-mono text-xs text-gh-muted bg-gh-canvas border border-gh-border px-1.5 py-0.5 rounded flex-shrink-0 hidden sm:block">
+              </span>
+              <span className="font-semibold text-fh-fg truncate max-w-[160px]">{latestCommit.authorName}</span>
+              <span className="text-fh-fg-muted truncate flex-1 min-w-0" title={latestCommit.subject}>{latestCommit.subject}</span>
+              <code className="font-mono text-fh-xs text-fh-fg-muted bg-fh-surface border border-fh-border px-1.5 py-0.5 rounded shrink-0 hidden sm:block">
                 {latestCommit.shortSha}
               </code>
-              <span className="text-xs text-gh-muted flex-shrink-0 hidden md:block">
-                {new Date(latestCommit.date).toLocaleDateString()}
-              </span>
+              <RelativeTime date={latestCommit.date} className="text-fh-xs text-fh-fg-subtle shrink-0 hidden md:block" />
             </div>
           )}
 
           {/* Parent dir link */}
           {pathParts.length > 0 && (
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-gh-border hover:bg-gh-bg">
-              <span className="w-4 h-4" />
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-fh-border-muted hover:bg-fh-surface-muted">
+              <span className="w-4 shrink-0" />
               <Link
                 to={pathParts.length === 1 ? base : `${base}/tree/${currentRef}/${pathParts.slice(0, -1).join("/")}`}
-                className="text-sm text-gh-text hover:text-gh-accent"
+                className="text-fh-base text-fh-fg-muted hover:text-fh-accent-fg font-medium"
               >
                 ..
               </Link>
             </div>
           )}
 
-          <div className="divide-y divide-gh-border">
-            {entries.map((entry) => (
-              <div key={entry.path} className="flex items-center gap-3 px-4 py-2 hover:bg-gh-bg group">
-                {entry.type === "tree" ? <FolderIcon /> : <FileIcon />}
-                <Link
-                  to={entryLink(entry)}
-                  className="text-sm text-gh-text hover:text-gh-accent flex-1 min-w-0 truncate group-hover:underline"
-                >
-                  {entry.name}
-                </Link>
-              </div>
-            ))}
-          </div>
+          {entries.map((entry) => (
+            <div
+              key={entry.path}
+              className="flex items-center gap-3 px-4 py-2 border-b border-fh-border-muted last:border-b-0 hover:bg-fh-surface-muted"
+            >
+              {entry.type === "tree" ? <FolderIcon /> : <FileIcon />}
+              <Link to={entryLink(entry)} className="text-fh-base text-fh-fg hover:text-fh-accent-fg hover:underline truncate">
+                {entry.name}
+              </Link>
+            </div>
+          ))}
         </div>
       )}
 
       {/* README */}
       {readme && !error && (
-        <div className="card mt-4 overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2.5 bg-gh-bg border-b border-gh-border">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted">
-              <path fillRule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.062 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm7.quincy 1.5v8.5a3.75 3.75 0 013.75-3.75h3.757V2.5h-3.5a2.25 2.25 0 00-2.25 2.25v.5h-1.5v-.5A2.25 2.25 0 006.003 2.5H2.5v9h2.758a3.75 3.75 0 013.742 3.5V3.25z" />
-            </svg>
-            <span className="text-sm font-semibold text-gh-text">{readme.path}</span>
+        <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface mt-4">
+          <div className="flex items-center gap-2 px-4 py-2.5 bg-fh-canvas border-b border-fh-border">
+            <BookIcon />
+            <span className="text-fh-base font-semibold text-fh-fg">{readme.path}</span>
           </div>
-          <div className="px-8 py-6">
+          <div className="px-6 py-6 md:px-8">
             <MarkdownRenderer content={readme.content} />
           </div>
         </div>

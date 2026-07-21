@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { createBranch, getRepo, listBranches, listIssues, listPulls } from "../api";
 import { Header } from "../components/Header";
-import type { BranchInfo, Issue, PullRequest, Repo, User } from "../types";
+import { Footer } from "../components/Footer";
+import { Badge, Button, Spinner, TabNav, TabItem } from "../ui";
+import type { BranchInfo, Repo, User } from "../types";
 
 function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   if (!splat.startsWith("tree/")) return null;
@@ -88,8 +90,32 @@ function SettingsIcon() {
 
 function LockIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path fillRule="evenodd" d="M4 4v2h-.25A1.75 1.75 0 002 7.75v5.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0014 13.25v-5.5A1.75 1.75 0 0012.25 6H12V4a4 4 0 10-8 0zm6.5 2V4a2.5 2.5 0 00-5 0v2h5zM12 7.5h.25a.25.25 0 01.25.25v5.5a.25.25 0 01-.25.25h-8.5a.25.25 0 01-.25-.25v-5.5a.25.25 0 01.25-.25H12z" />
+    </svg>
+  );
+}
+
+function RepoIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
+      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25zm0 2.445L6.615 5.5a.75.75 0 01-.564.41l-3.097.45 2.24 2.184a.75.75 0 01.216.664l-.528 3.084 2.769-1.456a.75.75 0 01.698 0l2.77 1.456-.53-3.084a.75.75 0 01.216-.664l2.24-2.183-3.096-.45a.75.75 0 01-.564-.41L8 2.694v.001z" />
+    </svg>
+  );
+}
+
+function ForkIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M5 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm0 2.122a2.25 2.25 0 10-1.5 0v.878A2.25 2.25 0 005.75 8.5h1.5v2.128a2.251 2.251 0 101.5 0V8.5h1.5a2.25 2.25 0 002.25-2.25v-.878a2.25 2.25 0 10-1.5 0v.878a.75.75 0 01-.75.75h-4.5A.75.75 0 015 6.25v-.878zm3.75 7.378a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm3-8.75a.75.75 0 100-1.5.75.75 0 000 1.5z" />
     </svg>
   );
 }
@@ -155,92 +181,93 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
   const base = `/${h}/${r}`;
 
-  function TabLink({ tab, icon, label, count }: { tab: Tab; icon: React.ReactNode; label: string; count?: number | null }) {
-    const isActive = activeTab === tab;
-    return (
-      <Link
-        to={tab === "code" ? base : `${base}/${tab}`}
-        className={`flex items-center gap-1.5 px-4 py-3 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap no-underline ${
-          isActive
-            ? "text-fh-fg font-semibold border-fh-accent-emphasis"
-            : "text-fh-fg-muted border-transparent hover:text-fh-fg hover:border-fh-border-strong"
-        }`}
-      >
-        {icon}
-        {label}
-        {count != null && count > 0 && (
-          <span className="counter ml-0.5">{count}</span>
-        )}
-      </Link>
-    );
-  }
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-gh-bg">
+      <div className="min-h-screen flex flex-col bg-fh-canvas">
         <Header user={user} onLogout={onLogout} token={token} />
-        <div className="flex items-center justify-center py-32 text-gh-muted">Loading…</div>
+        <div className="flex-1 flex items-center justify-center py-32 text-fh-fg-muted gap-2">
+          <Spinner size={16} /> Loading…
+        </div>
       </div>
     );
   }
 
   if (error || !repo) {
     return (
-      <div className="min-h-screen bg-gh-bg">
+      <div className="min-h-screen flex flex-col bg-fh-canvas">
         <Header user={user} onLogout={onLogout} token={token} />
-        <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-          <p className="text-gh-xl font-semibold text-gh-text">Repository not found</p>
-          <p className="text-gh-muted mt-2">{error ?? "This repository does not exist or you do not have access."}</p>
-          <Link to="/" className="btn-default mt-4 inline-flex">Back to dashboard</Link>
+        <div className="flex-1 max-w-4xl mx-auto px-4 py-16 text-center">
+          <p className="text-fh-xl font-semibold text-fh-fg">Repository not found</p>
+          <p className="text-fh-fg-muted mt-2">{error ?? "This repository does not exist or you do not have access."}</p>
+          <Link to="/" className="inline-block mt-4">
+            <Button variant="default">Back to dashboard</Button>
+          </Link>
         </div>
       </div>
     );
   }
 
+  const isPrivate = repo.visibility === "private";
+
   return (
-    <div className="min-h-screen bg-gh-bg">
+    <div className="min-h-screen flex flex-col bg-fh-canvas">
       <Header user={user} onLogout={onLogout} token={token} />
 
       {/* Repo header */}
-      <div className="bg-gh-canvas border-b border-gh-border">
-        <div className="max-w-[1280px] mx-auto px-4 pt-4">
-          {/* Breadcrumb row */}
-          <div className="flex items-center gap-1.5 flex-wrap mb-1">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="text-gh-muted flex-shrink-0">
-              <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
-            </svg>
-            <Link to="/" className="text-base font-semibold text-gh-accent hover:underline">
-              {user.handle}
-            </Link>
-            <span className="text-gh-muted text-base font-light">/</span>
-            <Link to={base} className="text-base font-semibold text-gh-accent hover:underline">
-              {repo.name}
-            </Link>
-            <span className={`badge ml-0.5 ${repo.visibility === "private" ? "border-gh-border text-gh-muted" : "border-gh-border text-gh-muted"}`}>
-              {repo.visibility === "private" ? <><LockIcon />&nbsp;Private</> : "Public"}
-            </span>
-          </div>
+      <div className="bg-fh-canvas">
+        <div className="max-w-[1280px] mx-auto px-4 pt-5">
+          {/* Breadcrumb + star area */}
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <RepoIcon />
+                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-fh-xl min-w-0">
+                  <Link to={`/${h}`} className="font-normal text-fh-accent-fg hover:underline truncate">
+                    {h}
+                  </Link>
+                  <span className="text-fh-fg-subtle select-none">/</span>
+                  <Link to={base} className="font-semibold text-fh-accent-fg hover:underline truncate">
+                    {repo.name}
+                  </Link>
+                </nav>
+                <Badge tone={isPrivate ? "warning" : "neutral"} className="ml-0.5 border-fh-border">
+                  {isPrivate ? <><LockIcon /> Private</> : "Public"}
+                </Badge>
+              </div>
+              {repo.description && (
+                <p className="text-fh-base text-fh-fg-muted mt-2 max-w-3xl">{repo.description}</p>
+              )}
+            </div>
 
-          {repo.description && (
-            <p className="text-sm text-gh-muted mb-3">{repo.description}</p>
-          )}
+            {/* Star / fork placeholder — not yet wired to a backend */}
+            <div className="flex items-center gap-2 shrink-0">
+              <Button variant="default" size="sm" leadingIcon={<ForkIcon />} title="Forking is not available yet" disabled>
+                Fork
+                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted">0</span>
+              </Button>
+              <Button variant="default" size="sm" leadingIcon={<StarIcon />} title="Starring is not available yet" disabled>
+                Star
+                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted">0</span>
+              </Button>
+            </div>
+          </div>
 
           {/* Tab bar */}
-          <div className="flex items-stretch -mb-px overflow-x-auto gap-0">
-            <TabLink tab="code" icon={<CodeIcon />} label="Code" />
-            <TabLink tab="issues" icon={<IssueIcon />} label="Issues" count={openIssueCount} />
-            <TabLink tab="pulls" icon={<PRIcon />} label="Pull requests" count={openPrCount} />
-            <TabLink tab="commits" icon={<CommitIcon />} label="Commits" />
-            <TabLink tab="releases" icon={<TagIcon />} label="Releases" />
+          <TabNav aria-label="Repository" className="mt-4">
+            <TabItem to={base} active={activeTab === "code"} icon={<CodeIcon />}>Code</TabItem>
+            <TabItem to={`${base}/issues`} active={activeTab === "issues"} icon={<IssueIcon />} count={openIssueCount ?? undefined}>Issues</TabItem>
+            <TabItem to={`${base}/pulls`} active={activeTab === "pulls"} icon={<PRIcon />} count={openPrCount ?? undefined}>Pull requests</TabItem>
+            <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
+            <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
             {user.handle === h && (
-              <TabLink tab="settings" icon={<SettingsIcon />} label="Settings" />
+              <TabItem to={`${base}/settings`} active={activeTab === "settings"} icon={<SettingsIcon />}>Settings</TabItem>
             )}
-          </div>
+          </TabNav>
         </div>
       </div>
 
       {/* Tab content */}
-      <div className="max-w-[1280px] mx-auto px-4 py-6">
+      <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 py-6">
         {activeTab === "code" && (
           <RepoCodeTab
             token={token}
@@ -297,6 +324,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
           <RepoSettingsTab token={token} handle={h} repoName={r} user={user} />
         )}
       </div>
+
+      <Footer />
     </div>
   );
 }
