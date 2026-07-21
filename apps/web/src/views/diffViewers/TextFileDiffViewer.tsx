@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { FileDiffViewerProps } from "../fileDiffViewerTypes";
 
 export function TextFileDiffViewer({ file }: FileDiffViewerProps) {
@@ -14,32 +15,38 @@ export function TextFileDiffViewer({ file }: FileDiffViewerProps) {
       <table className="w-full border-collapse" style={{ fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
         <tbody>
           {file.hunks.map((hunk, hi) => (
-            <>
-              <tr key={`h${hi}`} style={{ backgroundColor: "#eaf5ff" }}>
-                <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
-                <td className="select-none px-2 py-0.5 text-right border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40 }} />
-                <td className="px-3 py-0.5" style={{ color: "#ea580c" }}>{hunk.header}</td>
+            <Fragment key={`h${hi}`}>
+              <tr className="bg-fh-accent-muted">
+                <td className="select-none px-2 py-0.5 text-right border-r border-fh-border text-fh-fg-subtle" style={{ width: 40 }} />
+                <td className="select-none px-2 py-0.5 text-right border-r border-fh-border text-fh-fg-subtle" style={{ width: 40 }} />
+                <td className="px-3 py-0.5 text-fh-accent-fg">{hunk.header}</td>
               </tr>
               {hunk.lines.map((line, li) => {
-                const bg = line.type === "add" ? "#e6ffec" : line.type === "remove" ? "#ffebe9" : "#ffffff";
-                const fg = line.type === "add" ? "#1a7f37" : line.type === "remove" ? "#cf222e" : "#1f2328";
+                const rowBg =
+                  line.type === "add" ? "bg-fh-success-muted"
+                  : line.type === "remove" ? "bg-fh-danger-muted"
+                  : "";
+                const rowFg =
+                  line.type === "add" ? "text-fh-success-fg"
+                  : line.type === "remove" ? "text-fh-danger-fg"
+                  : "text-fh-fg";
                 const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
                 return (
-                  <tr key={`${hi}-${li}`} style={{ backgroundColor: bg }}>
-                    <td className="select-none text-right px-2 py-0 border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40, minWidth: 40 }}>
+                  <tr key={`${hi}-${li}`} className={rowBg}>
+                    <td className="select-none text-right px-2 py-0 border-r border-fh-border text-fh-fg-subtle" style={{ width: 40, minWidth: 40 }}>
                       {line.oldLineNo ?? ""}
                     </td>
-                    <td className="select-none text-right px-2 py-0 border-r" style={{ color: "#57606a", borderColor: "#d0d7de", width: 40, minWidth: 40 }}>
+                    <td className="select-none text-right px-2 py-0 border-r border-fh-border text-fh-fg-subtle" style={{ width: 40, minWidth: 40 }}>
                       {line.newLineNo ?? ""}
                     </td>
-                    <td className="pl-2 pr-4 whitespace-pre" style={{ color: fg }}>
+                    <td className={`pl-2 pr-4 whitespace-pre ${rowFg}`}>
                       <span className="select-none mr-2" style={{ opacity: 0.7 }}>{prefix}</span>
                       {line.content}
                     </td>
                   </tr>
                 );
               })}
-            </>
+            </Fragment>
           ))}
         </tbody>
       </table>

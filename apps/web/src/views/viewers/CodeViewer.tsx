@@ -32,7 +32,7 @@ export function CodeViewer({ content, filename }: FileViewerProps) {
       <table className="w-full border-collapse text-xs font-mono" style={{ lineHeight: "20px" }}>
         <tbody>
           {lines.map((_, i) => (
-            <tr key={i} className="hover:bg-blue-50 group">
+            <tr key={i} className="hover:bg-fh-surface-muted group">
               <td
                 className="select-none text-right text-gh-muted pr-4 pl-3 w-[1%] whitespace-nowrap border-r border-gh-border"
                 style={{ userSelect: "none", minWidth: 40 }}
