@@ -736,3 +736,201 @@ export function readBlobAsBuffer(
     );
   });
 }
+
+// ─── ref resolution ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve any ref-ish (branch, tag, short/long SHA) to its full 40-char commit
+ * SHA — the canonical id a permalink pins to so it never rots. Returns null when
+ * the ref can't be resolved. Unlike `resolveBranchSha`, this accepts any revision.
+ */
+export async function resolveRefSha(storageKey: string, ref: string): Promise<string | null> {
+  try {
+    const sha = await git(storageKey, ["rev-parse", "--verify", `${ref}^{commit}`]);
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── blame ───────────────────────────────────────────────────────────────────
+
+/** A contiguous run of lines attributed to a single commit. */
+export type BlameHunk = {
+  sha: string;
+  shortSha: string;
+  author: string;
+  authorMail: string;
+  date: string; // ISO 8601, from the author time
+  summary: string;
+  startLine: number; // 1-based, inclusive (final file line numbers)
+  endLine: number; // 1-based, inclusive
+  lines: string[]; // the source lines in this hunk, in order
+};
+
+type BlameCommitMeta = {
+  author?: string;
+  authorMail?: string;
+  authorTime?: string;
+  summary?: string;
+};
+
+/**
+ * Parse `git blame --porcelain` output into contiguous per-commit hunks. The
+ * porcelain format emits, for each result line, a header
+ * `<sha> <origLine> <finalLine> [<groupSize>]` followed (only the first time a
+ * commit is seen) by its metadata block, then a TAB-prefixed content line.
+ */
+export function parseBlamePorcelain(raw: string): BlameHunk[] {
+  const rawLines = raw.split("\n");
+  const commits = new Map<string, BlameCommitMeta>();
+  type LineEntry = { sha: string; finalLine: number; content: string };
+  const entries: LineEntry[] = [];
+
+  let i = 0;
+  while (i < rawLines.length) {
+    const header = rawLines[i].match(/^([0-9a-f]{40}) \d+ (\d+)(?: \d+)?$/);
+    if (!header) { i++; continue; }
+    const sha = header[1];
+    const finalLine = parseInt(header[2], 10);
+    if (!commits.has(sha)) commits.set(sha, {});
+    const meta = commits.get(sha)!;
+    i++;
+    // Metadata block (present only the first time this commit appears), until the
+    // TAB-prefixed content line.
+    while (i < rawLines.length && !rawLines[i].startsWith("\t")) {
+      const line = rawLines[i];
+      const sp = line.indexOf(" ");
+      const key = sp === -1 ? line : line.slice(0, sp);
+      const val = sp === -1 ? "" : line.slice(sp + 1);
+      if (key === "author") meta.author = val;
+      else if (key === "author-mail") meta.authorMail = val.replace(/^<|>$/g, "");
+      else if (key === "author-time") meta.authorTime = val;
+      else if (key === "summary") meta.summary = val;
+      i++;
+    }
+    if (i < rawLines.length && rawLines[i].startsWith("\t")) {
+      entries.push({ sha, finalLine, content: rawLines[i].slice(1) });
+      i++;
+    }
+  }
+
+  // Coalesce consecutive same-commit lines into hunks.
+  const hunks: BlameHunk[] = [];
+  for (const e of entries) {
+    const prev = hunks[hunks.length - 1];
+    if (prev && prev.sha === e.sha && e.finalLine === prev.endLine + 1) {
+      prev.endLine = e.finalLine;
+      prev.lines.push(e.content);
+      continue;
+    }
+    const meta = commits.get(e.sha) ?? {};
+    const t = meta.authorTime ? parseInt(meta.authorTime, 10) : NaN;
+    hunks.push({
+      sha: e.sha,
+      shortSha: e.sha.slice(0, 7),
+      author: meta.author ?? "",
+      authorMail: meta.authorMail ?? "",
+      date: Number.isFinite(t) ? new Date(t * 1000).toISOString() : "",
+      summary: meta.summary ?? "",
+      startLine: e.finalLine,
+      endLine: e.finalLine,
+      lines: [e.content],
+    });
+  }
+  return hunks;
+}
+
+/** Line-level authorship for a file at a ref, as contiguous commit hunks. */
+export async function getBlame(
+  storageKey: string,
+  ref: string,
+  filePath: string,
+): Promise<BlameHunk[]> {
+  try {
+    const raw = await git(storageKey, ["blame", "--porcelain", ref, "--", filePath]);
+    return parseBlamePorcelain(raw);
+  } catch {
+    return [];
+  }
+}
+
+// ─── ahead / behind ───────────────────────────────────────────────────────────
+
+export type AheadBehind = { ahead: number; behind: number };
+
+/**
+ * Commits `head` is ahead of / behind `base`, via
+ * `git rev-list --left-right --count base...head` (left = base-only = behind,
+ * right = head-only = ahead). Returns zeros when the refs don't resolve.
+ */
+export async function countAheadBehind(
+  storageKey: string,
+  base: string,
+  head: string,
+): Promise<AheadBehind> {
+  try {
+    const out = await git(storageKey, ["rev-list", "--left-right", "--count", `${base}...${head}`]);
+    const [left, right] = out.trim().split(/\s+/).map((n) => parseInt(n, 10));
+    return { behind: Number.isFinite(left) ? left : 0, ahead: Number.isFinite(right) ? right : 0 };
+  } catch {
+    return { ahead: 0, behind: 0 };
+  }
+}
+
+// ─── ref-to-ref compare ───────────────────────────────────────────────────────
+
+export type RefCompare = {
+  base: string;
+  head: string;
+  baseSha: string | null;
+  headSha: string | null;
+  mergeBaseSha: string | null;
+  ahead: number;
+  behind: number;
+  identical: boolean;
+  commits: CommitInfo[];
+  files: PRFileEntry[];
+};
+
+/**
+ * Compare any two refs the way GitHub's /compare does: the commit list and file
+ * changes are measured from the merge-base of `base` and `head` up to `head`
+ * (three-dot), so only what `head` introduces shows. Ahead/behind is relative to
+ * `base`. Reuses the same merge-base machinery PRs are built on.
+ */
+export async function compareRefs(
+  storageKey: string,
+  base: string,
+  head: string,
+): Promise<RefCompare | null> {
+  const [baseSha, headSha] = await Promise.all([
+    resolveRefSha(storageKey, base),
+    resolveRefSha(storageKey, head),
+  ]);
+  if (!baseSha || !headSha) return null;
+
+  let mergeBaseSha: string | null = null;
+  try {
+    mergeBaseSha = await git(storageKey, ["merge-base", base, head]);
+  } catch { mergeBaseSha = null; }
+
+  const [{ ahead, behind }, commits, files] = await Promise.all([
+    countAheadBehind(storageKey, base, head),
+    listMergeBaseCommits(storageKey, base, head),
+    getMergeBaseFileList(storageKey, base, head),
+  ]);
+
+  return {
+    base,
+    head,
+    baseSha,
+    headSha,
+    mergeBaseSha,
+    ahead,
+    behind,
+    identical: baseSha === headSha,
+    commits,
+    files,
+  };
+}
