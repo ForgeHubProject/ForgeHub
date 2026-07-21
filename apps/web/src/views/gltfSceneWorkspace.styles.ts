@@ -1,8 +1,26 @@
 import type { CSSProperties } from "react";
 
+/**
+ * Snapshot workspace chrome styles.
+ *
+ * The solid chrome (sidebar, right panel, section headers, module/commit rows,
+ * inspector) uses fh design tokens so it reads correctly in both themes.
+ *
+ * The floating HUD overlays over the 3D viewport (diff view segment, diff
+ * toggle, changes overlay) keep a fixed dark-glass surface. They sit on top of
+ * the r3f canvas — which has its own dark background in both themes — so, like
+ * the app header, they are intentionally theme-independent. See apps/web/DESIGN.md.
+ */
 export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
-  sidebar: { width: 240, borderRight: "1px solid #e5e7eb", backgroundColor: "#fff", display: "flex", flexDirection: "column", overflow: "hidden" },
-  sideSection: { borderBottom: "1px solid #f3f4f6", padding: "10px 0" },
+  sidebar: {
+    width: 240,
+    borderRight: "1px solid rgb(var(--fh-border))",
+    backgroundColor: "rgb(var(--fh-surface))",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+  },
+  sideSection: { borderBottom: "1px solid rgb(var(--fh-border-muted))", padding: "10px 0" },
   sideSectionHeader: {
     display: "flex",
     alignItems: "center",
@@ -10,11 +28,11 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
     padding: "0 12px 6px",
     fontSize: 11,
     fontWeight: 600,
-    color: "#6b7280",
+    color: "rgb(var(--fh-fg-muted))",
     textTransform: "uppercase",
     letterSpacing: "0.05em",
   },
-  muted: { fontSize: 12, color: "#9ca3af", margin: 0 },
+  muted: { fontSize: 12, color: "rgb(var(--fh-fg-subtle))", margin: 0 },
 
   moduleBtn: {
     display: "flex",
@@ -28,20 +46,22 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
     textAlign: "left",
     borderRadius: 0,
   },
-  moduleBtnSelected: { backgroundColor: "#f0f9ff" },
-  moduleIcon: { fontSize: 13, color: "#6b7280", flexShrink: 0 },
+  moduleBtnSelected: { backgroundColor: "rgb(var(--fh-accent-muted))" },
+  moduleIcon: { fontSize: 13, color: "rgb(var(--fh-fg-subtle))", flexShrink: 0 },
   moduleName: {
     fontSize: 13,
-    color: "#111827",
+    color: "rgb(var(--fh-fg))",
     fontWeight: 500,
     flex: 1,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  moduleCommitCount: { fontSize: 11, color: "#9ca3af", flexShrink: 0 },
+  moduleCommitCount: { fontSize: 11, color: "rgb(var(--fh-fg-subtle))", flexShrink: 0 },
 
   viewport: { flex: 1, overflow: "hidden", position: "relative" },
+
+  // ── Floating HUD over the 3D canvas — theme-independent dark glass ──
   diffViewSegment: {
     position: "absolute",
     top: 12,
@@ -121,28 +141,30 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
     whiteSpace: "nowrap" as const,
   },
   overlayKind: { fontSize: 10, color: "#64748b", flexShrink: 0 },
+  // ── end HUD ──
+
   viewportPlaceholder: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     height: "100%",
-    color: "#9ca3af",
+    color: "rgb(var(--fh-fg-subtle))",
   },
   viewportIcon: { fontSize: 64, display: "block", marginBottom: 12 },
-  viewportText: { fontSize: 18, fontWeight: 600, color: "#6b7280", margin: 0 },
-  viewportSub: { fontSize: 13, color: "#9ca3af", marginTop: 6 },
+  viewportText: { fontSize: 18, fontWeight: 600, color: "rgb(var(--fh-fg-muted))", margin: 0 },
+  viewportSub: { fontSize: 13, color: "rgb(var(--fh-fg-subtle))", marginTop: 6 },
 
   rightPanel: {
     width: 300,
-    borderLeft: "1px solid #e5e7eb",
-    backgroundColor: "#fff",
+    borderLeft: "1px solid rgb(var(--fh-border))",
+    backgroundColor: "rgb(var(--fh-surface))",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
   },
 
-  commitsSection: { borderBottom: "1px solid #f3f4f6", overflowY: "auto", maxHeight: 280, flexShrink: 0 },
+  commitsSection: { borderBottom: "1px solid rgb(var(--fh-border-muted))", overflowY: "auto", maxHeight: 280, flexShrink: 0 },
   commitBtn: {
     display: "flex",
     alignItems: "flex-start",
@@ -154,7 +176,7 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
     cursor: "pointer",
     textAlign: "left",
   },
-  commitBtnActive: { backgroundColor: "#f0f9ff" },
+  commitBtnActive: { backgroundColor: "rgb(var(--fh-accent-muted))" },
   commitTrack: {
     display: "flex",
     flexDirection: "column",
@@ -163,34 +185,34 @@ export const gltfSceneWorkspaceStyles: Record<string, CSSProperties> = {
     flexShrink: 0,
     width: 12,
   },
-  commitDot: { width: 8, height: 8, borderRadius: "50%", backgroundColor: "#cbd5e1", flexShrink: 0 },
-  commitDotActive: { backgroundColor: "#3b82f6" },
-  commitLine: { width: 2, flex: 1, backgroundColor: "#e5e7eb", minHeight: 8, marginTop: 2 },
+  commitDot: { width: 8, height: 8, borderRadius: "50%", backgroundColor: "rgb(var(--fh-border-strong))", flexShrink: 0 },
+  commitDotActive: { backgroundColor: "rgb(var(--fh-accent-emphasis))" },
+  commitLine: { width: 2, flex: 1, backgroundColor: "rgb(var(--fh-border))", minHeight: 8, marginTop: 2 },
   commitInfo: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
   commitMsg: {
     fontSize: 12,
-    color: "#111827",
+    color: "rgb(var(--fh-fg))",
     fontWeight: 500,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  commitDate: { fontSize: 10, color: "#9ca3af" },
+  commitDate: { fontSize: 10, color: "rgb(var(--fh-fg-subtle))" },
   commitSha: {
     fontSize: 10,
-    color: "#94a3b8",
+    color: "rgb(var(--fh-fg-subtle))",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    background: "#f1f5f9",
+    background: "rgb(var(--fh-surface-muted))",
     borderRadius: 3,
     padding: "0 3px",
   },
   commitDiffBadges: { display: "flex", gap: 4, marginTop: 2 },
 
-  rightPlaceholder: { fontSize: 12, color: "#9ca3af", padding: "12px", flex: 1 },
-  paramKey: { fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" },
+  rightPlaceholder: { fontSize: 12, color: "rgb(var(--fh-fg-subtle))", padding: "12px", flex: 1 },
+  paramKey: { fontSize: 11, color: "rgb(var(--fh-fg-subtle))", textTransform: "uppercase", letterSpacing: "0.04em" },
   paramValue: {
     fontSize: 12,
-    color: "#0f172a",
+    color: "rgb(var(--fh-fg))",
     wordBreak: "break-word",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   },
