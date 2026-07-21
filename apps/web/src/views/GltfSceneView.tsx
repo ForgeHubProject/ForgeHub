@@ -8,6 +8,7 @@ import { gltfChangeType, gltfEntityOf, isGlTfDiff } from "../types";
 import { gltfSceneWorkspaceStyles as styles } from "./gltfSceneWorkspace.styles";
 import type { RepoCodeWorkspaceProps } from "./repoWorkspaceTypes";
 
+/** Fixed bright diff colors for the dark-glass HUD overlay over the 3D canvas. */
 const DIFF_COLOR: Record<string, string> = {
   added: "#22c55e",
   removed: "#ef4444",
@@ -15,6 +16,18 @@ const DIFF_COLOR: Record<string, string> = {
   moved: "#6366f1",
   unchanged: "#94a3b8",
 };
+
+/** Tokenized diff colors for solid chrome (sidebar/inspector) — theme-aware. */
+const DIFF_TOKEN: Record<string, string> = {
+  added: "--fh-success-fg",
+  removed: "--fh-danger-fg",
+  modified: "--fh-fg-muted",
+  moved: "--fh-purple-fg",
+  unchanged: "--fh-fg-subtle",
+};
+
+/** `rgb(var(--fh-…))` string for a diff change type, for solid-surface chrome. */
+const diffFg = (type: string): string => `rgb(var(${DIFF_TOKEN[type] ?? "--fh-fg-muted"}))`;
 
 const DIFF_ICON: Record<string, string> = {
   added: "+",
@@ -174,7 +187,7 @@ export function GltfSceneView({
             <span style={styles.muted}>{modules.length}</span>
           </div>
           {mergeReviewPr && (
-            <div style={{ fontSize: 11, color: "#92400e", padding: "6px 12px", background: "#fffbeb", borderBottom: "1px solid #fde68a" }}>
+            <div style={{ fontSize: 11, color: "rgb(var(--fh-warning-fg))", padding: "6px 12px", background: "rgb(var(--fh-warning-muted))", borderBottom: "1px solid rgb(var(--fh-warning-emphasis) / 0.5)" }}>
               Merge review: <strong>{mergeReviewPr.toBranch}</strong> vs incoming <strong>{mergeReviewPr.fromBranch}</strong>
               {mergeReviewFromLoading ? " — loading…" : ""}
             </div>
@@ -403,7 +416,7 @@ export function GltfSceneView({
                 key={group.key}
                 style={{
                   opacity: touchesChosen ? (selectedFileTouched && !selectedFileChanged ? 0.45 : 1) : 0.2,
-                  borderBottom: gi < commitGroups.length - 1 ? "1px solid #f3f4f6" : undefined,
+                  borderBottom: gi < commitGroups.length - 1 ? "1px solid rgb(var(--fh-border-muted))" : undefined,
                 }}
               >
                 <button
@@ -413,7 +426,7 @@ export function GltfSceneView({
                     ...(isActiveGroup ? styles.commitBtnActive : {}),
                     width: "100%",
                     ...(selectedFileTouched && selectedFileChanged
-                      ? { border: "1px solid #bfdbfe", background: "#eff6ff" }
+                      ? { border: "1px solid rgb(var(--fh-accent-emphasis) / 0.4)", background: "rgb(var(--fh-accent-muted))" }
                       : {}),
                   }}
                   onClick={() => {
@@ -434,8 +447,8 @@ export function GltfSceneView({
                           style={{
                             fontSize: 10,
                             fontWeight: 600,
-                            color: "#2563eb",
-                            background: "#eff6ff",
+                            color: "rgb(var(--fh-accent-fg))",
+                            background: "rgb(var(--fh-accent-muted))",
                             borderRadius: 4,
                             padding: "1px 6px",
                           }}
@@ -452,19 +465,19 @@ export function GltfSceneView({
                         </span>
                       )}
                       {selectedModuleFile && selectedFileTouched && selectedFileChangeLoading && (
-                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checking…</span>
+                        <span style={{ fontSize: 10, color: "rgb(var(--fh-fg-subtle))" }}>checking…</span>
                       )}
                     </div>
                     {n === 1 && isActiveGroup && gltfSummary && (
                       <div style={styles.commitDiffBadges}>
                         {gltfSummary.added > 0 && (
-                          <span style={diffBadgeStyle("#22c55e")}>+{gltfSummary.added}</span>
+                          <span style={diffBadgeStyle("added")}>+{gltfSummary.added}</span>
                         )}
                         {gltfSummary.removed > 0 && (
-                          <span style={diffBadgeStyle("#ef4444")}>−{gltfSummary.removed}</span>
+                          <span style={diffBadgeStyle("removed")}>−{gltfSummary.removed}</span>
                         )}
                         {gltfSummary.modified > 0 && (
-                          <span style={diffBadgeStyle("#64748b")}>~{gltfSummary.modified}</span>
+                          <span style={diffBadgeStyle("modified")}>~{gltfSummary.modified}</span>
                         )}
                       </div>
                     )}
@@ -473,7 +486,7 @@ export function GltfSceneView({
                 {isExpanded && commitFilePreviews && (
                   <div style={{ padding: "4px 8px 8px 36px", display: "flex", flexDirection: "column", gap: 4 }}>
                     {commitFilePreviews.length === 0 ? (
-                      <div style={{ fontSize: 11, color: "#94a3b8", padding: "4px 2px 2px" }}>
+                      <div style={{ fontSize: 11, color: "rgb(var(--fh-fg-subtle))", padding: "4px 2px 2px" }}>
                         No per-file changes vs the previous snapshot (other files in this commit were unchanged).
                       </div>
                     ) : null}
@@ -493,9 +506,9 @@ export function GltfSceneView({
                             width: "100%",
                             textAlign: "left",
                             padding: "8px 10px",
-                            border: "1px solid #e5e7eb",
+                            border: "1px solid rgb(var(--fh-border))",
                             borderRadius: 6,
-                            background: fileActive ? "#f0f9ff" : "#fafafa",
+                            background: fileActive ? "rgb(var(--fh-accent-muted))" : "rgb(var(--fh-surface-muted))",
                             cursor: "pointer",
                           }}
                           onClick={() => onPickSnapshotFromCommit(snap)}
@@ -505,7 +518,7 @@ export function GltfSceneView({
                               style={{
                                 fontSize: 12,
                                 fontWeight: 600,
-                                color: "#111827",
+                                color: "rgb(var(--fh-fg))",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
@@ -515,32 +528,32 @@ export function GltfSceneView({
                             >
                               {row.sourceFile.split("/").pop()}
                             </span>
-                            <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>{row.handlerId}</span>
+                            <span style={{ fontSize: 10, color: "rgb(var(--fh-fg-subtle))", flexShrink: 0 }}>{row.handlerId}</span>
                           </div>
                           {row.error && (
-                            <span style={{ fontSize: 10, color: "#dc2626" }}>{row.error}</span>
+                            <span style={{ fontSize: 10, color: "rgb(var(--fh-danger-fg))" }}>{row.error}</span>
                           )}
                           {!row.loading && row.stats && (
                             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                              <span style={{ ...diffBadgeStyle("#22c55e"), opacity: row.stats.added > 0 ? 1 : 0.25 }}>
+                              <span style={{ ...diffBadgeStyle("added"), opacity: row.stats.added > 0 ? 1 : 0.25 }}>
                                 +{row.stats.added}
                               </span>
-                              <span style={{ ...diffBadgeStyle("#ef4444"), opacity: row.stats.removed > 0 ? 1 : 0.25 }}>
+                              <span style={{ ...diffBadgeStyle("removed"), opacity: row.stats.removed > 0 ? 1 : 0.25 }}>
                                 −{row.stats.removed}
                               </span>
                               <span
-                                style={{ ...diffBadgeStyle("#64748b"), opacity: row.stats.modified > 0 ? 1 : 0.25 }}
+                                style={{ ...diffBadgeStyle("modified"), opacity: row.stats.modified > 0 ? 1 : 0.25 }}
                               >
                                 ~{row.stats.modified}
                               </span>
-                              <span style={{ ...diffBadgeStyle("#6366f1"), opacity: row.stats.moved > 0 ? 1 : 0.25 }}>
+                              <span style={{ ...diffBadgeStyle("moved"), opacity: row.stats.moved > 0 ? 1 : 0.25 }}>
                                 ↔{row.stats.moved}
                               </span>
                             </div>
                           )}
-                          {row.loading && <span style={{ fontSize: 10, color: "#94a3b8" }}>Diff…</span>}
+                          {row.loading && <span style={{ fontSize: 10, color: "rgb(var(--fh-fg-subtle))" }}>Diff…</span>}
                           {!row.loading && !row.stats && !row.error && (
-                            <span style={{ fontSize: 10, color: "#94a3b8" }}>First version</span>
+                            <span style={{ fontSize: 10, color: "rgb(var(--fh-fg-subtle))" }}>First version</span>
                           )}
                         </button>
                       );
@@ -719,7 +732,7 @@ function EntityInspector({
     <div style={{ padding: "10px 12px", overflowY: "auto", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "rgb(var(--fh-fg))", overflow: "hidden", textOverflow: "ellipsis" }}>
             {src.name}
           </span>
           {modeLabel && (
@@ -727,8 +740,8 @@ function EntityInspector({
               style={{
                 fontSize: 10,
                 fontWeight: 700,
-                color: "#64748b",
-                border: "1px solid #e2e8f0",
+                color: "rgb(var(--fh-fg-subtle))",
+                border: "1px solid rgb(var(--fh-border))",
                 borderRadius: 4,
                 padding: "1px 6px",
                 flexShrink: 0,
@@ -742,11 +755,11 @@ function EntityInspector({
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {isModified && showFieldDiff && (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontFamily: "monospace" }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: "#ef4444" }}>-{changedPropertyCount}</span>
-                <span style={{ fontSize: 11, fontWeight: 800, color: "#22c55e" }}>+{changedPropertyCount}</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "rgb(var(--fh-danger-fg))" }}>-{changedPropertyCount}</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "rgb(var(--fh-success-fg))" }}>+{changedPropertyCount}</span>
               </span>
             )}
-            <span style={{ fontSize: 11, fontWeight: 700, color: DIFF_COLOR[type!] }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: diffFg(type!) }}>
               {DIFF_ICON[type!]} {type}
             </span>
           </div>
@@ -772,8 +785,9 @@ function EntityInspector({
                       fontWeight: 600,
                       padding: "1px 5px",
                       borderRadius: 3,
-                      border: fieldSide === "base" ? "1px solid #2563eb" : "1px solid #94a3b8",
-                      background: fieldSide === "base" ? "#eff6ff" : "transparent",
+                      border: fieldSide === "base" ? "1px solid rgb(var(--fh-accent-emphasis))" : "1px solid rgb(var(--fh-border-strong))",
+                      background: fieldSide === "base" ? "rgb(var(--fh-accent-muted))" : "transparent",
+                      color: fieldSide === "base" ? "rgb(var(--fh-accent-fg))" : "rgb(var(--fh-fg-muted))",
                       cursor: "pointer",
                     }}
                     onClick={() => onMergeGltfFieldSide(entityId, fc.path, "base")}
@@ -787,8 +801,9 @@ function EntityInspector({
                       fontWeight: 600,
                       padding: "1px 5px",
                       borderRadius: 3,
-                      border: fieldSide === "incoming" ? "1px solid #2563eb" : "1px solid #94a3b8",
-                      background: fieldSide === "incoming" ? "#eff6ff" : "transparent",
+                      border: fieldSide === "incoming" ? "1px solid rgb(var(--fh-accent-emphasis))" : "1px solid rgb(var(--fh-border-strong))",
+                      background: fieldSide === "incoming" ? "rgb(var(--fh-accent-muted))" : "transparent",
+                      color: fieldSide === "incoming" ? "rgb(var(--fh-accent-fg))" : "rgb(var(--fh-fg-muted))",
                       cursor: "pointer",
                     }}
                     onClick={() => onMergeGltfFieldSide(entityId, fc.path, "incoming")}
@@ -800,7 +815,7 @@ function EntityInspector({
             </div>
             <span style={styles.paramValue}>{row.value}</span>
             {row.before !== undefined && (
-              <span style={{ fontSize: 10, color: DIFF_COLOR.removed, fontFamily: "monospace" }}>was: {row.before}</span>
+              <span style={{ fontSize: 10, color: diffFg("removed"), fontFamily: "monospace" }}>was: {row.before}</span>
             )}
           </div>
         );
@@ -824,7 +839,10 @@ function fmtVal(v: unknown): string {
 
 function propRowStyle(kind: PropKind): CSSProperties {
   const bg =
-    kind === "changed" ? "#fef9c3" : kind === "added" ? "#dcfce7" : kind === "removed" ? "#fee2e2" : "transparent";
+    kind === "changed" ? "rgb(var(--fh-warning-muted))"
+    : kind === "added" ? "rgb(var(--fh-success-muted))"
+    : kind === "removed" ? "rgb(var(--fh-danger-muted))"
+    : "transparent";
   return {
     display: "grid",
     gap: 1,
@@ -832,10 +850,11 @@ function propRowStyle(kind: PropKind): CSSProperties {
     borderRadius: 4,
     marginBottom: 3,
     backgroundColor: bg,
-    borderBottom: "1px solid #f1f5f9",
+    borderBottom: "1px solid rgb(var(--fh-border-muted))",
   };
 }
 
+/** HUD diff-count chip — sits on the dark-glass changes overlay (fixed bright colors). */
 function diffCountStyle(color: string): CSSProperties {
   return {
     fontSize: 10,
@@ -848,13 +867,15 @@ function diffCountStyle(color: string): CSSProperties {
   };
 }
 
-function diffBadgeStyle(color: string): CSSProperties {
+/** Solid-surface diff badge — theme-aware, keyed by change type. */
+function diffBadgeStyle(type: string): CSSProperties {
+  const token = DIFF_TOKEN[type] ?? "--fh-fg-muted";
   return {
     fontSize: 10,
     fontWeight: 700,
-    color,
-    background: `${color}18`,
-    border: `1px solid ${color}44`,
+    color: `rgb(var(${token}))`,
+    background: `rgb(var(${token}) / 0.12)`,
+    border: `1px solid rgb(var(${token}) / 0.3)`,
     borderRadius: 3,
     padding: "0 4px",
   };
