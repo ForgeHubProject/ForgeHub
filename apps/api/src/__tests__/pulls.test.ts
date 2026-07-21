@@ -6,7 +6,7 @@ vi.mock("../prisma.js", () => ({
   prisma: {
     user: {
       create: vi.fn(),
-      findUnique: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue({ handle: "merger", displayName: "Merl Merger", email: "merl@forgehub.io" }),
       findUniqueOrThrow: vi.fn(),
     },
     repo: {
@@ -51,6 +51,10 @@ vi.mock("../git-utils.js", () => ({
   resolveBranchSha: vi.fn().mockResolvedValue("abc1234"),
   performMerge: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
   performMergeWithResolvedFiles: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
+  performSquashMerge: vi.fn().mockResolvedValue({ ok: true, sha: "5qua5h00" }),
+  performRebaseMerge: vi.fn().mockResolvedValue({ ok: true, sha: "reba5e00" }),
+  performRevert: vi.fn().mockResolvedValue({ ok: true, branch: "revert-pr-1", sha: "revert00" }),
+  listMergeBaseCommits: vi.fn().mockResolvedValue([{ subject: "first" }, { subject: "second" }]),
   branchShas: vi.fn().mockResolvedValue([]),
   listFilesDifferingBetweenBranches: vi.fn().mockResolvedValue([]),
   readFileAtBranch: vi.fn().mockResolvedValue(null),
@@ -412,6 +416,80 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().merged).toBe(true);
     expect(res.json().sha).toBe("deadbeef");
+    expect(res.json().method).toBe("merge");
+  });
+
+  it("defaults to the merge method (performMerge) when none is supplied", async () => {
+    const { performMerge, performSquashMerge, performRebaseMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear();
+    vi.mocked(performSquashMerge).mockClear();
+    vi.mocked(performRebaseMerge).mockClear();
+
+    await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: { authorization: ownerToken } });
+    expect(vi.mocked(performMerge)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(performSquashMerge)).not.toHaveBeenCalled();
+    expect(vi.mocked(performRebaseMerge)).not.toHaveBeenCalled();
+  });
+
+  it("routes mergeMethod=squash through performSquashMerge and records the method", async () => {
+    const { performSquashMerge } = await import("../git-utils.js");
+    vi.mocked(performSquashMerge).mockClear().mockResolvedValueOnce({ ok: true, sha: "5qua5h00" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "squash" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().method).toBe("squash");
+    expect(res.json().sha).toBe("5qua5h00");
+    expect(vi.mocked(performSquashMerge)).toHaveBeenCalledTimes(1);
+    // Persists the method + resulting sha on the PR record.
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mergeMethod: "squash", mergeCommitSha: "5qua5h00" }) }),
+    );
+  });
+
+  it("routes mergeMethod=rebase through performRebaseMerge", async () => {
+    const { performRebaseMerge } = await import("../git-utils.js");
+    vi.mocked(performRebaseMerge).mockClear().mockResolvedValueOnce({ ok: true, sha: "reba5e00" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "rebase" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().method).toBe("rebase");
+    expect(vi.mocked(performRebaseMerge)).toHaveBeenCalledTimes(1);
+  });
+
+  it("400 for an unknown mergeMethod", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "octopus" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/mergeMethod/i);
+  });
+
+  it("409 with a rebase-specific message when the replay conflicts", async () => {
+    const { performRebaseMerge } = await import("../git-utils.js");
+    vi.mocked(performRebaseMerge).mockResolvedValueOnce({ ok: false, conflicts: true });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "rebase" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/rebase/i);
+    expect(res.json().resolvable).toBe(true);
   });
 
   it("409 when merge has conflicts", async () => {
@@ -467,6 +545,113 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
       method: "POST",
       url: "/repos/alice/my-repo/pulls/1/merge",
     });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe("POST /repos/:handle/:name/pulls/:number/revert", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  const mergedPR = () => makePR({ state: "MERGED", mergedAt: new Date(), mergeMethod: "merge", mergeCommitSha: "mergesha1" });
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    const { branchExists, performRevert } = await import("../git-utils.js");
+    vi.mocked(branchExists).mockResolvedValue(false);
+    vi.mocked(performRevert).mockResolvedValue({ ok: true, branch: "revert-pr-1", sha: "revert00" });
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(mergedPR() as never);
+    vi.mocked(prisma.pullRequest.count).mockResolvedValue(1 as never);
+    vi.mocked(prisma.pullRequest.create).mockReset().mockResolvedValue(
+      makePR({ id: "pr-revert", number: 2, title: 'Revert "Add feature" (!1)', fromBranch: "revert-pr-1" }) as never,
+    );
+  });
+
+  it("201 opens a reverting PR for a merged PR", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.number).toBe(2);
+    expect(body.fromBranch).toBe("revert-pr-1");
+    expect(body.title).toMatch(/^Revert /);
+    // The new PR cross-links the original.
+    expect(vi.mocked(prisma.pullRequest.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ fromBranch: "revert-pr-1", description: "Reverts #1." }) }),
+    );
+  });
+
+  it("409 when the PR is not merged", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ state: "OPEN" }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/merged/i);
+  });
+
+  it("409 when no merge commit sha is recorded", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", mergedAt: new Date(), mergeCommitSha: null }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("409 when the revert conflicts, with a clear no-manual-resolution message", async () => {
+    const { performRevert } = await import("../git-utils.js");
+    vi.mocked(performRevert).mockResolvedValueOnce({ ok: false, conflicts: true });
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/conflict/i);
+    expect(vi.mocked(prisma.pullRequest.create)).not.toHaveBeenCalled();
+  });
+
+  it("409 when a revert branch already exists", async () => {
+    const { branchExists } = await import("../git-utils.js");
+    vi.mocked(branchExists).mockResolvedValue(true);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already exists/i);
+  });
+
+  it("403 when caller lacks write access", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ ownerId: "other", collaborators: [] }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("401 when not authenticated", async () => {
+    const res = await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/revert" });
     expect(res.statusCode).toBe(401);
   });
 });
