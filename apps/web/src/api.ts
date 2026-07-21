@@ -1,6 +1,6 @@
 import type {
   BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, Repo,
+  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, Release, ReleaseAsset, Repo,
   Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
 } from "./types";
 
@@ -721,6 +721,111 @@ export async function deleteRelease(
   return req(`/repos/${handle}/${repoName}/releases/${encodeURIComponent(tagName)}`, {
     method: "DELETE",
     token,
+  });
+}
+
+// ─── release assets ─────────────────────────────────────────────────────────────────────────
+
+/** Direct API URL for an asset's bytes (usable as an <a href> on public repos). */
+export function releaseAssetDownloadUrl(
+  handle: string,
+  repoName: string,
+  releaseId: string,
+  assetId: string,
+): string {
+  return `${BASE}/repos/${handle}/${repoName}/releases/${releaseId}/assets/${assetId}`;
+}
+
+/** Fetch an asset with auth and trigger a browser download (works for private repos too). */
+export async function downloadReleaseAsset(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  releaseId: string,
+  asset: ReleaseAsset,
+): Promise<void> {
+  const res = await fetch(releaseAssetDownloadUrl(handle, repoName, releaseId, asset.id), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = asset.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Upload a binary asset to a release, reporting progress (0..1) via a callback. */
+export function uploadReleaseAsset(
+  token: string,
+  handle: string,
+  repoName: string,
+  releaseId: string,
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<ReleaseAsset> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/repos/${handle}/${repoName}/releases/${releaseId}/assets`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as ReleaseAsset);
+        } catch {
+          reject(new ApiError(xhr.status, "Malformed server response"));
+        }
+      } else {
+        let message = `HTTP ${xhr.status}`;
+        try {
+          message = (JSON.parse(xhr.responseText) as { error?: string }).error ?? message;
+        } catch { /* keep default */ }
+        reject(new ApiError(xhr.status, message));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error during upload"));
+    const form = new FormData();
+    form.append("file", file, file.name);
+    xhr.send(form);
+  });
+}
+
+export async function deleteReleaseAsset(
+  token: string,
+  handle: string,
+  repoName: string,
+  releaseId: string,
+  assetId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/releases/${releaseId}/assets/${assetId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+/** Generate a Markdown changelog for a target ref vs the previous tag (or root). */
+export async function generateReleaseNotes(
+  token: string,
+  handle: string,
+  repoName: string,
+  tagName: string,
+  target?: string,
+  previousTag?: string,
+): Promise<{ tagName: string; previousTag: string | null; body: string }> {
+  return req(`/repos/${handle}/${repoName}/releases/generate-notes`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ tagName, target, previousTag }),
   });
 }
 
