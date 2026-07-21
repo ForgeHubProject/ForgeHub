@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getPull, listPRCommits, listPRFiles } from "../../../api";
+import {
+  createPullComment, getPull, listPRCommits, listPRFiles, listPullComments, listPullTimeline,
+} from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
-import type { CommitInfo, PRFileEntry, PullRequest } from "../../../types";
-import { Avatar, Button, RelativeTime, Skeleton, TabItem, TabNav } from "../../../ui";
+import { TimelineEventRow } from "../../../components/TimelineEventRow";
+import type { CommitInfo, IssueComment, PRFileEntry, PullRequest, TimelineEvent, User } from "../../../types";
+import { Avatar, Button, RelativeTime, Skeleton, TabItem, TabNav, Textarea } from "../../../ui";
 import { MergeBox } from "./MergeBox";
 import { PRFileRow } from "./PRFileRow";
 import {
@@ -21,19 +24,27 @@ export function PullDetail({
   handle,
   repoName,
   number,
+  user,
 }: {
   token: string;
   handle: string;
   repoName: string;
   number: number;
+  user: User;
 }) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
+  const repoRef = { owner: handle, name: repoName };
 
   const [pr, setPr] = useState<PullRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("commits");
+
+  const [comments, setComments] = useState<IssueComment[]>([]);
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [commentBody, setCommentBody] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [commitsLoading, setCommitsLoading] = useState(false);
@@ -48,6 +59,38 @@ export function PullDetail({
       .catch((e) => setError(e instanceof Error ? e.message : "Not found"))
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
+
+  useEffect(() => {
+    Promise.all([
+      listPullComments(token, handle, repoName, number).catch(() => ({ comments: [] })),
+      listPullTimeline(token, handle, repoName, number).catch(() => ({ events: [] })),
+    ]).then(([c, tl]) => {
+      setComments(c.comments);
+      setEvents(tl.events);
+    });
+  }, [token, handle, repoName, number]);
+
+  function refreshTimeline() {
+    listPullTimeline(token, handle, repoName, number)
+      .then((tl) => setEvents(tl.events))
+      .catch(() => { /* keep prior events on failure */ });
+  }
+
+  async function submitComment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!commentBody.trim()) return;
+    setSubmitting(true);
+    try {
+      const c = await createPullComment(token, handle, repoName, number, commentBody.trim());
+      setComments((prev) => [...prev, c]);
+      setCommentBody("");
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to comment");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   useEffect(() => {
     if (activeTab !== "commits" || commits !== null || !pr) return;
@@ -99,6 +142,12 @@ export function PullDetail({
   const totalAdditions = prFiles?.reduce((s, f) => s + f.additions, 0) ?? 0;
   const totalDeletions = prFiles?.reduce((s, f) => s + f.deletions, 0) ?? 0;
 
+  // Comments and non-comment events, interleaved chronologically.
+  const stream = [
+    ...comments.map((c) => ({ kind: "comment" as const, at: c.createdAt, comment: c })),
+    ...events.map((ev) => ({ kind: "event" as const, at: ev.createdAt, event: ev })),
+  ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+
   return (
     <div>
       <Link
@@ -144,12 +193,52 @@ export function PullDetail({
             </div>
             <div className="px-5 py-4">
               {pr.description ? (
-                <MarkdownRenderer content={pr.description} />
+                <MarkdownRenderer content={pr.description} repo={repoRef} />
               ) : (
                 <p className="text-fh-sm text-fh-fg-subtle italic">No description provided.</p>
               )}
             </div>
           </div>
+
+          {/* Conversation: comments interleaved with timeline events */}
+          {stream.map((item) =>
+            item.kind === "comment" ? (
+              <div key={`c-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
+                  <Avatar name={item.comment.author} size={22} />
+                  <span className="font-semibold text-fh-fg">{item.comment.author}</span>
+                  <span className="text-fh-fg-muted">commented <RelativeTime date={item.comment.createdAt} /></span>
+                </div>
+                <div className="px-5 py-4">
+                  <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+                </div>
+              </div>
+            ) : (
+              <TimelineEventRow key={`e-${item.event.id}`} event={item.event} repo={repoRef} />
+            ),
+          )}
+
+          {/* Comment composer */}
+          <form onSubmit={submitComment} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
+              <Avatar name={user.displayName ?? user.handle} size={22} />
+              <span className="font-semibold text-fh-fg">Add a comment</span>
+            </div>
+            <div className="p-3">
+              <Textarea
+                rows={4}
+                placeholder="Leave a comment"
+                value={commentBody}
+                onChange={(e) => setCommentBody(e.target.value)}
+              />
+              <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">Styling with Markdown is supported.</p>
+              <div className="flex items-center justify-end mt-3">
+                <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
+                  Comment
+                </Button>
+              </div>
+            </div>
+          </form>
 
           {/* Tabs */}
           <TabNav aria-label="Pull request">
@@ -250,7 +339,7 @@ export function PullDetail({
             ) : null)}
 
           {/* Merge box */}
-          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={setPr} />
+          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={(p) => { setPr(p); refreshTimeline(); }} />
         </div>
 
         {/* Sidebar */}

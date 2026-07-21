@@ -320,6 +320,7 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
                       description={repo.description}
                       visibility={repo.visibility}
                       updatedAt={repo.updatedAt}
+                      topics={repo.topics}
                     />
                   ))}
                 </RowList>
