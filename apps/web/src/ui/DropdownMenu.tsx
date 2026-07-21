@@ -29,7 +29,13 @@ export function DropdownMenu({ trigger, children, align = "end", width, classNam
 
   const close = useCallback((returnFocus = true) => {
     setOpen(false);
-    if (returnFocus) triggerRef.current?.focus();
+    if (returnFocus) {
+      // triggerRef wraps the trigger in a `contents` span; focus the real control.
+      const focusable = triggerRef.current?.querySelector<HTMLElement>(
+        'button, a[href], input, [tabindex]:not([tabindex="-1"])',
+      );
+      focusable?.focus();
+    }
   }, []);
 
   // Outside click / focus loss.
