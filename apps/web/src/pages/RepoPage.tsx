@@ -105,6 +105,14 @@ function RepoIcon() {
   );
 }
 
+function LawIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M7.467.133a1.748 1.748 0 011.066 0l5.25 1.68A1.75 1.75 0 0115 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 01-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 011.217-1.667L7.467.133zm.61 1.429a.25.25 0 00-.153 0l-5.25 1.68a.25.25 0 00-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.2.2 0 00.154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.25.25 0 00-.174-.237l-5.25-1.68zM11.28 6.28l-3.5 3.5a.75.75 0 01-1.06 0l-1.5-1.5a.751.751 0 01.018-1.042.751.751 0 011.042-.018l.97.97 2.97-2.97a.751.751 0 011.042.018.751.751 0 01.018 1.042z" />
+    </svg>
+  );
+}
+
 function StarIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -234,6 +242,15 @@ export function RepoPage({ token, user, onLogout }: Props) {
                 <Badge tone={isPrivate ? "warning" : "neutral"} className="ml-0.5 border-fh-border">
                   {isPrivate ? <><LockIcon /> Private</> : "Public"}
                 </Badge>
+                {repo.license && (
+                  <Link
+                    to={`/${h}/${r}/blob/${defaultBranch}/${repo.license.path}`}
+                    title={`Licensed under ${repo.license.spdxId} — view ${repo.license.path}`}
+                    className="inline-flex items-center gap-1 rounded-full border border-fh-border px-2 py-0.5 text-fh-xs font-medium text-fh-fg-muted hover:text-fh-accent-fg hover:border-fh-accent-emphasis"
+                  >
+                    <LawIcon /> {repo.license.spdxId}
+                  </Link>
+                )}
               </div>
               {repo.description && (
                 <p className="text-fh-base text-fh-fg-muted mt-2 max-w-3xl">{repo.description}</p>

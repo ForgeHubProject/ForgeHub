@@ -1,6 +1,7 @@
 import type { CollaboratorRole, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
+import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import {
   addCollaboratorBodySchema,
@@ -170,7 +171,9 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!repo || !canViewRepo(viewerId(request), repo)) {
         return reply.status(404).send({ error: "Repository not found" });
       }
-      return repoResponse(repo);
+      // Best-effort SPDX detection at the default branch (cached per head sha).
+      const license = await detectRepoLicense(repo.storageKey);
+      return { ...repoResponse(repo), license };
     },
   );
 

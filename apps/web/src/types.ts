@@ -28,6 +28,9 @@ export type PublicProfile = {
   createdAt: string;
 };
 
+/** Best-effort license detection (SPDX id + the file it was read from). */
+export type RepoLicense = { spdxId: string; path: string };
+
 export type Repo = {
   id: string;
   name: string;
@@ -37,6 +40,8 @@ export type Repo = {
   fullName: string;
   /** Lowercase-kebab discovery topics (may be absent on older list payloads). */
   topics?: string[];
+  /** Detected license — present only on the repo detail payload; null when none. */
+  license?: RepoLicense | null;
   createdAt: string;
   updatedAt: string;
 };
