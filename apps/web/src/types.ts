@@ -269,6 +269,16 @@ export type IssueComment = {
   updatedAt: string;
 };
 
+export type ReleaseAsset = {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  downloadCount: number;
+  uploader: string | null;
+  createdAt: string;
+};
+
 export type Release = {
   id: string;
   tagName: string;
@@ -277,6 +287,7 @@ export type Release = {
   isDraft: boolean;
   isPrerelease: boolean;
   author: string;
+  assets: ReleaseAsset[];
   createdAt: string;
   updatedAt: string;
 };
