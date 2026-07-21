@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { login, register } from "../api";
 import { ForgeLogo } from "../components/ForgeLogo";
+import { Button, Field, TextInput } from "../ui";
 import type { User } from "../types";
+import { useDocumentTitle } from "./useDocumentTitle";
 
 type Props = {
   onAuth: (token: string, user: User) => void;
 };
 
+type Mode = "login" | "register";
+
 export function LoginPage({ onAuth }: Props) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [handle, setHandle] = useState("");
@@ -16,110 +20,134 @@ export function LoginPage({ onAuth }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const isLogin = mode === "login";
+  useDocumentTitle(isLogin ? "Sign in · ForgeHub" : "Sign up · ForgeHub");
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setError(null);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const res =
-        mode === "login"
-          ? await login(email, password)
-          : await register(email, password, handle, displayName || undefined);
+      const res = isLogin
+        ? await login(email, password)
+        : await register(email, password, handle, displayName || undefined);
       onAuth(res.token, res.user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const fallback = isLogin
+        ? "Unable to sign in. Please check your details and try again."
+        : "Unable to create your account. Please try again.";
+      setError(err instanceof Error && err.message ? err.message : fallback);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen bg-gh-bg flex flex-col items-center justify-center px-4">
-      {/* Logo mark */}
-      <div className="mb-5 text-gh-accent">
-        <ForgeLogo size={48} />
-      </div>
+    <main className="min-h-screen bg-fh-canvas flex flex-col items-center justify-center px-4 py-12">
+      <div className="w-full max-w-[22rem]">
+        <div className="flex flex-col items-center">
+          <span className="text-fh-accent-fg mb-4">
+            <ForgeLogo size={40} />
+          </span>
+          <h1 className="text-fh-xl font-semibold text-fh-fg text-center">
+            {isLogin ? "Sign in to ForgeHub" : "Create your account"}
+          </h1>
+        </div>
 
-      <div className="w-full max-w-sm">
-        <h1 className="text-center text-gh-xl font-semibold text-gh-text mb-4">
-          {mode === "login" ? "Sign in to ForgeHub" : "Create your account"}
-        </h1>
+        <div className="mt-5 bg-fh-surface border border-fh-border rounded-md p-5">
+          {error && (
+            <div
+              role="alert"
+              className="mb-4 rounded-md border border-fh-danger-fg/30 bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg"
+            >
+              {error}
+            </div>
+          )}
 
-        <div className="card p-6">
-          <form onSubmit={submit} className="flex flex-col gap-4">
-            {mode === "register" && (
+          <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+            {!isLogin && (
               <>
-                <div className="form-group">
-                  <label className="label" htmlFor="handle">Username</label>
-                  <input
-                    id="handle"
-                    className="input"
-                    placeholder="octocat"
-                    value={handle}
-                    onChange={(e) => setHandle(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="label" htmlFor="displayName">Name <span className="text-gh-muted font-normal">(optional)</span></label>
-                  <input
-                    id="displayName"
-                    className="input"
-                    placeholder="The Octocat"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                  />
-                </div>
+                <Field label="Username" required>
+                  {(id) => (
+                    <TextInput
+                      id={id}
+                      value={handle}
+                      onChange={(e) => setHandle(e.target.value)}
+                      placeholder="octocat"
+                      autoComplete="username"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      required
+                      autoFocus
+                    />
+                  )}
+                </Field>
+                <Field label="Name" hint="Shown on your profile. Optional.">
+                  {(id) => (
+                    <TextInput
+                      id={id}
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="The Octocat"
+                      autoComplete="name"
+                    />
+                  )}
+                </Field>
               </>
             )}
 
-            <div className="form-group">
-              <label className="label" htmlFor="email">Email address</label>
-              <input
-                id="email"
-                className="input"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus={mode === "login"}
-              />
-            </div>
+            <Field label="Email address" required>
+              {(id) => (
+                <TextInput
+                  id={id}
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  required
+                  autoFocus={isLogin}
+                />
+              )}
+            </Field>
 
-            <div className="form-group">
-              <label className="label" htmlFor="password">Password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                placeholder={mode === "login" ? "Enter your password" : "Create a password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
+            <Field label="Password" required>
+              {(id) => (
+                <TextInput
+                  id={id}
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={isLogin ? "Enter your password" : "Create a password"}
+                  autoComplete={isLogin ? "current-password" : "new-password"}
+                  required
+                />
+              )}
+            </Field>
 
-            {error && (
-              <p className="text-gh-danger text-gh-sm bg-gh-danger-muted border border-gh-danger border-opacity-20 rounded-md px-3 py-2">
-                {error}
-              </p>
-            )}
-
-            <button className="btn-primary w-full py-2 text-gh-base" type="submit" disabled={loading}>
-              {loading ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
-            </button>
+            <Button type="submit" variant="primary" block loading={loading} className="mt-1">
+              {isLogin ? "Sign in" : "Create account"}
+            </Button>
           </form>
         </div>
 
-        {/* Toggle mode */}
-        <div className="card mt-4 p-4 text-center text-gh-sm text-gh-muted">
-          {mode === "login" ? (
+        <div className="mt-4 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-center text-fh-sm text-fh-fg-muted">
+          {isLogin ? (
             <>
               New to ForgeHub?{" "}
               <button
-                className="text-gh-accent hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
-                onClick={() => { setMode("register"); setError(null); }}
+                type="button"
+                onClick={() => switchMode("register")}
+                className="font-medium text-fh-accent-fg hover:underline"
               >
                 Create an account
               </button>
@@ -128,19 +156,29 @@ export function LoginPage({ onAuth }: Props) {
             <>
               Already have an account?{" "}
               <button
-                className="text-gh-accent hover:underline font-medium bg-transparent border-none cursor-pointer p-0"
-                onClick={() => { setMode("login"); setError(null); }}
+                type="button"
+                onClick={() => switchMode("login")}
+                className="font-medium text-fh-accent-fg hover:underline"
               >
                 Sign in
               </button>
             </>
           )}
         </div>
-      </div>
 
-      <footer className="mt-8 text-gh-xs text-gh-muted">
-        © 2025 ForgeHub
-      </footer>
-    </div>
+        <footer className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-fh-xs text-fh-fg-subtle">
+          <span>© 2026 ForgeHub</span>
+          <a href="#" className="hover:text-fh-accent-fg hover:underline">
+            Terms
+          </a>
+          <a href="#" className="hover:text-fh-accent-fg hover:underline">
+            Privacy
+          </a>
+          <a href="#" className="hover:text-fh-accent-fg hover:underline">
+            Docs
+          </a>
+        </footer>
+      </div>
+    </main>
   );
 }
