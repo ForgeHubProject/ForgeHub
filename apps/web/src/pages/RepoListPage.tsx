@@ -210,6 +210,7 @@ export function RepoListPage({ token, user, onLogout }: Props) {
                         description={repo.description}
                         visibility={repo.visibility}
                         updatedAt={repo.updatedAt}
+                        topics={repo.topics}
                       />
                     ))}
                   </RowList>
@@ -229,6 +230,7 @@ export function RepoListPage({ token, user, onLogout }: Props) {
                           description={repo.description}
                           visibility={repo.visibility}
                           updatedAt={repo.updatedAt}
+                          topics={repo.topics}
                         />
                       ))}
                     </RowList>

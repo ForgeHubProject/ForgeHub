@@ -7,6 +7,7 @@ import multipart from "@fastify/multipart";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
 import { branchRoutes } from "./routes/branches.js";
+import { codeNavRoutes } from "./routes/code-nav.js";
 import { commitRoutes } from "./routes/commits.js";
 import { compareRoutes } from "./routes/compare.js";
 import { fhrRoutes } from "./routes/fhr.js";
@@ -26,8 +27,11 @@ import { releaseRoutes } from "./routes/releases.js";
 import { repoRoutes } from "./routes/repos.js";
 import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
+import { topicRoutes } from "./routes/topics.js";
+import { compositionRoutes } from "./routes/composition.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
+import { timelineRoutes } from "./routes/timeline.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -85,6 +89,7 @@ export async function buildServer() {
   await app.register(entityRoutes);
   await app.register(branchRoutes);
   await app.register(commitRoutes);
+  await app.register(codeNavRoutes);
   await app.register(tagRoutes);
   await app.register(forkRoutes);
   await app.register(pullRoutes);
@@ -93,7 +98,10 @@ export async function buildServer() {
   await app.register(issueRoutes);
   await app.register(labelRoutes);
   await app.register(notificationRoutes);
+  await app.register(timelineRoutes);
   await app.register(searchRoutes);
+  await app.register(topicRoutes);
+  await app.register(compositionRoutes);
   await app.register(gitHttpRoutes);
 
   return app;
