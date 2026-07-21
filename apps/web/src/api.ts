@@ -1,7 +1,7 @@
 import type {
-  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue, IssueComment,
-  Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult, Release, Repo,
-  Snapshot, SnapshotSummary, TagInfo, TreeEntry, User,
+  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue,
+  IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult, Release,
+  Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -746,6 +746,49 @@ export async function createIssueComment(
   body: string,
 ): Promise<IssueComment> {
   return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+// ─── timelines & PR conversation ─────────────────────────────────────────────────────────
+
+export async function listIssueTimeline(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ events: TimelineEvent[] }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/timeline`, { token: token ?? undefined });
+}
+
+export async function listPullTimeline(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ events: TimelineEvent[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/timeline`, { token: token ?? undefined });
+}
+
+export async function listPullComments(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ comments: IssueComment[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, { token: token ?? undefined });
+}
+
+export async function createPullComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<IssueComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, {
     method: "POST",
     token,
     body: JSON.stringify({ body }),

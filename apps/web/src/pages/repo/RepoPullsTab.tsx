@@ -24,10 +24,10 @@ type Props = {
  * the file-diff viewer registry (semantic FHR diffs) and the merge / merge-
  * resolve wiring are consumed as-is.
  */
-export function RepoPullsTab({ token, handle, repoName, branches, defaultBranch, currentRef, splat }: Props) {
+export function RepoPullsTab({ token, handle, repoName, user, branches, defaultBranch, currentRef, splat }: Props) {
   const match = splat.match(/^pulls\/(\d+)$/);
   if (match) {
-    return <PullDetail token={token} handle={handle} repoName={repoName} number={Number(match[1])} />;
+    return <PullDetail token={token} handle={handle} repoName={repoName} number={Number(match[1])} user={user} />;
   }
   if (splat === "pulls/new") {
     return (
