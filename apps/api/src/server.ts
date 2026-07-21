@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import multipart from "@fastify/multipart";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
 import { branchRoutes } from "./routes/branches.js";
@@ -38,6 +39,14 @@ export async function buildServer() {
 
   await app.register(cors, { origin: true });
   await app.register(jwt, { secret });
+
+  // Release-asset uploads. Truncate (don't throw) at the size cap so the route
+  // can detect an over-limit file via `part.file.truncated` and return 413.
+  const maxAssetBytes = Number(process.env["RELEASE_ASSET_MAX_BYTES"] ?? 100 * 1024 * 1024);
+  await app.register(multipart, {
+    throwFileSizeLimit: false,
+    limits: { fileSize: maxAssetBytes, files: 1 },
+  });
 
   app.decorate(
     "authenticate",
