@@ -48,6 +48,21 @@ function hrefFor(token: RefToken, repo: RepoRef): string | null {
   }
 }
 
+/**
+ * Autolink references in an HTML string (parse → linkify → serialize). Baking the
+ * links into the markup — rather than mutating the DOM after React renders it —
+ * keeps them from being wiped by re-renders. Browser-only (uses DOMParser); a
+ * no-op if DOMParser is unavailable.
+ */
+export function linkifyHtml(html: string, repo: RepoRef): string {
+  if (typeof DOMParser === "undefined") return html;
+  const doc = new DOMParser().parseFromString(`<div id="__fh_autolink_root">${html}</div>`, "text/html");
+  const root = doc.getElementById("__fh_autolink_root");
+  if (!root) return html;
+  linkifyElement(root, repo);
+  return root.innerHTML;
+}
+
 const SKIP_TAGS = new Set(["A", "CODE", "PRE"]);
 
 /** Rewrite reference text inside `root` into internal `<a data-fh-autolink>` links. */

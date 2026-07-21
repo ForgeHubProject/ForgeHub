@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
 import { escapeHtml, highlightCode } from "../lib/highlight";
-import { linkifyElement, type RepoRef } from "../lib/autolink";
+import { linkifyHtml, type RepoRef } from "../lib/autolink";
 
 const renderer = new Renderer();
 
@@ -32,20 +32,17 @@ type Props = {
 
 export function MarkdownRenderer({ content, className = "", repo }: Props) {
   const navigate = useNavigate();
-  const ref = useRef<HTMLDivElement>(null);
 
   const html = useMemo(() => {
     const raw = marked.parse(content) as string;
-    return DOMPurify.sanitize(raw, {
+    const clean = DOMPurify.sanitize(raw, {
       ADD_ATTR: ["class"],
       FORBID_TAGS: ["script", "style"],
     });
-  }, [content]);
-
-  // Autolink references after the sanitized HTML is in the DOM (skips code/links).
-  useEffect(() => {
-    if (repo && ref.current) linkifyElement(ref.current, repo);
-  }, [html, repo?.owner, repo?.name]);
+    // Bake reference autolinks into the markup (skips code and existing links) so
+    // they survive re-renders instead of being reapplied imperatively.
+    return repo ? linkifyHtml(clean, repo) : clean;
+  }, [content, repo?.owner, repo?.name]);
 
   // Keep autolink clicks inside the SPA rather than triggering a full navigation.
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -60,7 +57,6 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
 
   return (
     <div
-      ref={ref}
       onClick={onClick}
       className={`gh-prose ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
