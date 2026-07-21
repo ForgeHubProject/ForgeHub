@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, listCommits, listTree } from "../../api";
+import { API_BASE, downloadArchive, listCommits, listTree } from "../../api";
 import { BlobViewer } from "../../components/BlobViewer";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import {
@@ -75,6 +75,14 @@ function CommitGlyph() {
   );
 }
 
+function CompareGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M5 3.254V3.25v.005a.75.75 0 110-.005v.004zm.45 1.9a2.25 2.25 0 10-1.95.218v5.256a2.25 2.25 0 101.5 0V7.123A5.735 5.735 0 009.25 9h1.378a2.251 2.251 0 100-1.5H9.25a4.25 4.25 0 01-3.8-2.346zM12.75 9a.75.75 0 100-1.5.75.75 0 000 1.5zm-8.5 4.5a.75.75 0 100-1.5.75.75 0 000 1.5z" />
+    </svg>
+  );
+}
+
 function BookIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
@@ -84,12 +92,27 @@ function BookIcon() {
 }
 
 // ── clone dropdown ────────────────────────────────────────────────────────────
-function CloneDropdown({ handle, repoName, visibility }: { handle: string; repoName: string; visibility: string }) {
+function CloneDropdown({ token, handle, repoName, visibility, currentRef }: {
+  token: string; handle: string; repoName: string; visibility: string; currentRef: string;
+}) {
   const { toast } = useToast();
   const url = `${API_BASE}/git/${handle}/${repoName}.git`;
+  const [downloading, setDownloading] = useState(false);
 
   function copy() {
     void navigator.clipboard.writeText(url).then(() => toast("Clone URL copied", { tone: "success" }));
+  }
+
+  async function downloadZip() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadArchive(token, handle, repoName, currentRef, "zip");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Download failed", { tone: "danger" });
+    } finally {
+      setDownloading(false);
+    }
   }
 
   return (
@@ -123,7 +146,19 @@ function CloneDropdown({ handle, repoName, visibility }: { handle: string; repoN
           {visibility === "private" && " You'll be prompted for your ForgeHub username and password."}
         </p>
       </div>
+      <DropdownSeparator />
+      <DropdownItem leadingIcon={<DownloadGlyph />} onSelect={downloadZip}>
+        {downloading ? "Preparing ZIP…" : `Download ZIP (${currentRef})`}
+      </DropdownItem>
     </DropdownMenu>
+  );
+}
+
+function DownloadGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM3.75 13a.75.75 0 000 1.5h8.5a.75.75 0 000-1.5h-8.5z" />
+    </svg>
   );
 }
 
@@ -137,13 +172,15 @@ function CopyGlyph() {
 }
 
 // ── branch switcher ─────────────────────────────────────────────────────────
-function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch }: {
+function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, base }: {
   branches: BranchInfo[];
   currentRef: string;
   onRefChange: (ref: string) => void;
   onCreateBranch: (name: string, from: string) => Promise<void>;
+  base: string;
 }) {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [fromRef, setFromRef] = useState(currentRef);
@@ -206,6 +243,9 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch }: {
         <DropdownSeparator />
         <DropdownItem leadingIcon={<BranchGlyph />} onSelect={openDialog}>
           New branch…
+        </DropdownItem>
+        <DropdownItem leadingIcon={<span className="w-3.5 inline-block" />} onSelect={() => navigate(`${base}/branches`)}>
+          View all branches
         </DropdownItem>
       </DropdownMenu>
 
@@ -351,7 +391,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
     <div>
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap mb-4">
-        <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} />
+        <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} base={base} />
 
         {/* Breadcrumb path navigation */}
         {pathParts.length > 0 && (
@@ -381,7 +421,10 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         <Button variant="default" size="sm" leadingIcon={<CommitGlyph />} onClick={() => navigate(`${base}/commits`)}>
           Commits
         </Button>
-        <CloneDropdown handle={handle} repoName={repoName} visibility={repo.visibility} />
+        <Button variant="default" size="sm" leadingIcon={<CompareGlyph />} onClick={() => navigate(`${base}/compare`)}>
+          Compare
+        </Button>
+        <CloneDropdown token={token} handle={handle} repoName={repoName} visibility={repo.visibility} currentRef={currentRef} />
       </div>
 
       {/* File tree */}

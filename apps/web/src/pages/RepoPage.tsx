@@ -15,8 +15,10 @@ function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   }
   return null;
 }
+import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
+import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
@@ -268,7 +270,22 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
       {/* Tab content */}
       <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 py-6">
-        {activeTab === "code" && (
+        {activeTab === "code" && splat.startsWith("branches") && (
+          <RepoBranchesTab token={token} handle={h} repoName={r} user={user} base={base} />
+        )}
+        {activeTab === "code" && splat.startsWith("compare") && (
+          <RepoCompareTab
+            token={token}
+            handle={h}
+            repoName={r}
+            branches={branches}
+            defaultBranch={defaultBranch}
+            user={user}
+            splat={splat}
+            base={base}
+          />
+        )}
+        {activeTab === "code" && !splat.startsWith("branches") && !splat.startsWith("compare") && (
           <RepoCodeTab
             token={token}
             handle={h}
