@@ -36,6 +36,16 @@ vi.mock("../notifications-service.js", () => ({
   notifyUser: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../timeline-service.js", () => ({
+  recordEvent: vi.fn().mockResolvedValue(undefined),
+  emitHeadPushedForPush: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../references-service.js", () => ({
+  syncBodyReferences: vi.fn().mockResolvedValue(undefined),
+  closeIssuesForMergedPull: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../git-storage.js", () => ({
   buildStorageKey: vi.fn().mockReturnValue("alice/my-repo.git"),
   createBareRepo: vi.fn().mockResolvedValue("/tmp/repo"),
