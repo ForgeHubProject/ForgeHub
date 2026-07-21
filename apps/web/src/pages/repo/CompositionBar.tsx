@@ -153,7 +153,7 @@ export function CompositionBar({ token, handle, repoName, refName }: Props) {
               <span
                 aria-hidden="true"
                 className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: color, ...(seg.optedIn ? { backgroundImage: SEMANTIC_HATCH } : {}) }}
+                style={{ backgroundColor: color }}
               />
               <span className="font-medium text-fh-fg">{seg.label}</span>
               {seg.optedIn && <SemanticMark />}
