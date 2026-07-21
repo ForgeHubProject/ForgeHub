@@ -418,17 +418,37 @@ export async function getPull(
   return req(`/repos/${handle}/${repoName}/pulls/${number}`, { token: token ?? undefined });
 }
 
+export type MergeMethod = "merge" | "squash" | "rebase";
+
 export async function mergePull(
   token: string,
   handle: string,
   repoName: string,
   number: number,
+  mergeMethod: MergeMethod = "merge",
   commitMessage?: string,
-): Promise<{ merged: boolean; sha: string }> {
+): Promise<{ merged: boolean; sha: string; method: MergeMethod }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge`, {
     method: "POST",
     token,
-    body: JSON.stringify({ commitMessage }),
+    body: JSON.stringify({ mergeMethod, commitMessage }),
+  });
+}
+
+/**
+ * Revert a merged PR: opens a new PR whose branch reverts the merge/squash/
+ * rebase commit. Returns the newly created reverting PR. A 409 (ApiError)
+ * signals the revert conflicts with the base branch.
+ */
+export async function revertPull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<PullRequest> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/revert`, {
+    method: "POST",
+    token,
   });
 }
 

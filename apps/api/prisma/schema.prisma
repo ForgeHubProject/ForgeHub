@@ -170,6 +170,10 @@ model PullRequest {
   toBranch    String
   state       PRState  @default(OPEN)
   mergedAt    DateTime?
+  /** How the PR was merged: "merge" | "squash" | "rebase". Null until merged. */
+  mergeMethod    String?
+  /** SHA of the resulting merge/squash/rebase commit on the base branch. Null until merged. Needed to revert. */
+  mergeCommitSha String?
   authorId    String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
