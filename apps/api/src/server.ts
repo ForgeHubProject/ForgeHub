@@ -6,6 +6,7 @@ import jwt from "@fastify/jwt";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
 import { branchRoutes } from "./routes/branches.js";
+import { codeNavRoutes } from "./routes/code-nav.js";
 import { commitRoutes } from "./routes/commits.js";
 import { compareRoutes } from "./routes/compare.js";
 import { fhrRoutes } from "./routes/fhr.js";
@@ -76,6 +77,7 @@ export async function buildServer() {
   await app.register(entityRoutes);
   await app.register(branchRoutes);
   await app.register(commitRoutes);
+  await app.register(codeNavRoutes);
   await app.register(tagRoutes);
   await app.register(forkRoutes);
   await app.register(pullRoutes);
