@@ -1,6 +1,7 @@
 import type { CollaboratorRole, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
+import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import {
   addCollaboratorBodySchema,
@@ -53,6 +54,7 @@ function repoResponse(r: {
   createdAt: Date;
   updatedAt: Date;
   owner?: { handle: string };
+  topics?: Array<{ topic: string }>;
 }) {
   return {
     id: r.id,
@@ -63,10 +65,16 @@ function repoResponse(r: {
     ownerId: r.ownerId,
     ownerHandle: r.owner?.handle,
     fullName: r.owner ? `${r.owner.handle}/${r.name}` : undefined,
+    // Sorted topic slugs; empty when the relation wasn't included or none set.
+    topics: (r.topics ?? []).map((t) => t.topic),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
 }
+
+// Prisma include fragment for the sorted topic set — shared by every route that
+// returns a repoResponse so topic chips render consistently everywhere.
+const topicsInclude = { topics: { orderBy: { topic: "asc" }, select: { topic: true } } } as const;
 
 export async function repoRoutes(app: FastifyInstance) {
   app.post(
@@ -123,7 +131,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const repos = await prisma.repo.findMany({
         where: { ownerId: request.user.sub },
         orderBy: { updatedAt: "desc" },
-        include: { owner: { select: { handle: true } } },
+        include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
       return { repos: repos.map(repoResponse) };
     },
@@ -136,7 +144,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const collabs = await prisma.repoCollaborator.findMany({
         where: { userId: request.user.sub },
         include: {
-          repo: { include: { owner: { select: { handle: true } } } },
+          repo: { include: { owner: { select: { handle: true } }, ...topicsInclude } },
         },
         orderBy: { repo: { updatedAt: "desc" } },
       });
@@ -157,12 +165,15 @@ export async function repoRoutes(app: FastifyInstance) {
         include: {
           owner: { select: { handle: true } },
           collaborators: { select: { userId: true } },
+          ...topicsInclude,
         },
       });
       if (!repo || !canViewRepo(viewerId(request), repo)) {
         return reply.status(404).send({ error: "Repository not found" });
       }
-      return repoResponse(repo);
+      // Best-effort SPDX detection at the default branch (cached per head sha).
+      const license = await detectRepoLicense(repo.storageKey);
+      return { ...repoResponse(repo), license };
     },
   );
 
@@ -188,7 +199,7 @@ export async function repoRoutes(app: FastifyInstance) {
               OR: [{ visibility: "PUBLIC" }, { collaborators: { some: { userId: v } } }],
             },
         orderBy: { updatedAt: "desc" },
-        include: { owner: { select: { handle: true } } },
+        include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
       return { repos: repos.map(repoResponse) };
     },
@@ -229,7 +240,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (Object.keys(data).length === 0) {
         const repo = await prisma.repo.findFirstOrThrow({
           where: { id: existing.id },
-          include: { owner: { select: { handle: true } } },
+          include: { owner: { select: { handle: true } }, ...topicsInclude },
         });
         return repoResponse(repo);
       }
@@ -237,7 +248,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const repo = await prisma.repo.update({
         where: { id: existing.id },
         data,
-        include: { owner: { select: { handle: true } } },
+        include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
       return repoResponse(repo);
     },
@@ -259,7 +270,7 @@ export async function repoRoutes(app: FastifyInstance) {
 
       const existing = await prisma.repo.findFirst({
         where: { ownerId, name: currentName },
-        include: { owner: { select: { handle: true } } },
+        include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -289,7 +300,7 @@ export async function repoRoutes(app: FastifyInstance) {
             name: newName,
             storageKey: newStorageKey,
           },
-          include: { owner: { select: { handle: true } } },
+          include: { owner: { select: { handle: true } }, ...topicsInclude },
         });
         return repoResponse(updated);
       } catch (e: unknown) {

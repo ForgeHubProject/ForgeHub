@@ -86,15 +86,26 @@ export async function searchRoutes(app: FastifyInstance) {
         };
       }
 
-      // Default: repos
+      // Default: repos. `topic:<slug>` tokens filter by topic (repeatable, ANDed);
+      // remaining free text still matches name/description. This is how a topic
+      // chip's click-through ("topic:react") narrows to repos carrying that topic.
+      const topicFilters = [...term.matchAll(/topic:([a-z0-9-]+)/gi)].map((m) => m[1].toLowerCase());
+      const textTerm = term.replace(/topic:[a-z0-9-]+/gi, "").trim();
+
+      const repoConditions: Record<string, unknown>[] = [
+        visibilityFilter,
+        ...topicFilters.map((topic) => ({ topics: { some: { topic } } })),
+      ];
+      if (textTerm.length > 0) {
+        repoConditions.push({ OR: [{ name: { contains: textTerm } }, { description: { contains: textTerm } }] });
+      }
+
       const repos = await prisma.repo.findMany({
-        where: {
-          AND: [
-            { OR: [{ name: { contains: term } }, { description: { contains: term } }] },
-            visibilityFilter,
-          ],
+        where: { AND: repoConditions },
+        include: {
+          owner: { select: { handle: true } },
+          topics: { orderBy: { topic: "asc" }, select: { topic: true } },
         },
-        include: { owner: { select: { handle: true } } },
         orderBy: { updatedAt: "desc" },
         take: 25,
       });
@@ -107,6 +118,7 @@ export async function searchRoutes(app: FastifyInstance) {
           description: r.description,
           visibility: r.visibility === "PUBLIC" ? "public" : "private",
           ownerHandle: r.owner.handle,
+          topics: r.topics.map((t) => t.topic),
           createdAt: r.createdAt.toISOString(),
           updatedAt: r.updatedAt.toISOString(),
         })),

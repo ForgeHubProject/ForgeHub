@@ -1,7 +1,7 @@
 import type {
-  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Constraint, DiffChange, DiffResult, FileDiff, Issue,
-  IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult, Release,
-  Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
+  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
+  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
+  Release, Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -180,6 +180,43 @@ export async function createRepo(
     method: "POST",
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility }),
+  });
+}
+
+// ─── composition ─────────────────────────────────────────────────────────────
+
+/** Byte-share per format/domain at a ref (default branch when omitted). */
+export async function getComposition(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+): Promise<Composition> {
+  const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  return req(`/repos/${handle}/${repoName}/composition${qs}`, { token: token ?? undefined });
+}
+
+// ─── topics ──────────────────────────────────────────────────────────────────
+
+export async function getTopics(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, { token: token ?? undefined });
+}
+
+/** Replace the whole topic set (writer-gated). Returns the persisted, sorted set. */
+export async function updateTopics(
+  token: string,
+  handle: string,
+  repoName: string,
+  topics: string[],
+): Promise<{ topics: string[] }> {
+  return req(`/repos/${handle}/${repoName}/topics`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ topics }),
   });
 }
 

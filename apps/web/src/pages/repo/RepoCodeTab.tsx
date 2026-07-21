@@ -20,6 +20,7 @@ import {
   useToast,
 } from "../../ui";
 import type { BranchInfo, CommitInfo, Repo, TreeEntry } from "../../types";
+import { CompositionBar } from "./CompositionBar";
 
 type Props = {
   token: string;
@@ -389,6 +390,12 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
 
   return (
     <div>
+      {/* Format/domain composition bar — the repo's identity at a glance. Shown at
+          the repository root (like the README), for the branch being viewed. */}
+      {currentPath === "" && currentRef && (
+        <CompositionBar token={token} handle={handle} repoName={repoName} refName={currentRef} />
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap mb-4">
         <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} base={base} />
