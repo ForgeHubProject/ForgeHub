@@ -269,6 +269,16 @@ export type IssueComment = {
   updatedAt: string;
 };
 
+/** An append-only conversation event (labeled, closed, merged, referenced, …). */
+export type TimelineEvent = {
+  id: string;
+  kind: string;
+  actor: string;
+  createdAt: string;
+  /** Per-kind denormalized payload (label name/color, assignee, ref source, …). */
+  data: Record<string, unknown>;
+};
+
 export type Release = {
   id: string;
   tagName: string;

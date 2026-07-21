@@ -1,7 +1,7 @@
 import { prisma } from "./prisma.js";
 
 export type NotificationSubjectType = "ISSUE" | "PULL_REQUEST" | "RELEASE";
-export type NotificationReason = "ASSIGNED" | "COMMENT" | "REVIEW_REQUESTED" | "SUBSCRIBED";
+export type NotificationReason = "ASSIGNED" | "COMMENT" | "REVIEW_REQUESTED" | "SUBSCRIBED" | "MENTIONED";
 
 type EventParams = {
   actorId: string;

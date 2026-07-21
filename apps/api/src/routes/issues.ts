@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
+import { recordEvent } from "../timeline-service.js";
+import { syncBodyReferences } from "../references-service.js";
 
 function formatIssue(issue: {
   id: string;
@@ -134,6 +136,14 @@ export async function issueRoutes(app: FastifyInstance) {
       void notifyUser(issue.assigneeId, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "ASSIGNED" });
     }
 
+    // Parse #N / !N / @handle out of the body into cross-refs, link-backs, mentions.
+    await syncBodyReferences({
+      repo, actorId: userId,
+      source: { type: "ISSUE", id: issue.id },
+      container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: issue.title },
+      body: issue.body,
+    }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue create)"));
+
     return reply.status(201).send(formatIssue(issue));
   });
 
@@ -193,6 +203,33 @@ export async function issueRoutes(app: FastifyInstance) {
       },
       include: issueInclude,
     });
+
+    // ── Timeline events for the state changes this PATCH performed ────────────────
+    const emit = (kind: Parameters<typeof recordEvent>[0]["kind"], data?: Record<string, unknown>) =>
+      recordEvent({ repoId: repo.id, subjectType: "ISSUE", subjectNumber: issue.number, kind, actorId: userId, data })
+        .catch((err) => request.log.error({ err }, `recordEvent ${kind} (issue)`));
+
+    if (title !== undefined && updated.title !== issue.title) {
+      await emit("title_changed", { from: issue.title, to: updated.title });
+    }
+    if (state === "closed" && issue.state !== "CLOSED") await emit("closed");
+    if (state === "open" && issue.state !== "OPEN") await emit("reopened");
+    if (assigneeId !== undefined && updated.assigneeId !== issue.assigneeId) {
+      if (updated.assigneeId) {
+        await emit("assigned", { assignee: updated.assignee?.handle });
+      } else {
+        const prev = await prisma.user.findUnique({ where: { id: issue.assigneeId! }, select: { handle: true } });
+        await emit("unassigned", { assignee: prev?.handle });
+      }
+    }
+    if (body !== undefined && updated.body !== issue.body) {
+      await syncBodyReferences({
+        repo, actorId: userId,
+        source: { type: "ISSUE", id: issue.id },
+        container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: updated.title },
+        body: updated.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue edit)"));
+    }
 
     return formatIssue(updated);
   });
@@ -269,6 +306,13 @@ export async function issueRoutes(app: FastifyInstance) {
       void notifyUser(uid, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "COMMENT" });
     }
 
+    await syncBodyReferences({
+      repo, actorId: userId,
+      source: { type: "ISSUE_COMMENT", id: comment.id },
+      container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: issue.title },
+      body: comment.body,
+    }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue comment)"));
+
     return reply.status(201).send(formatComment(comment));
   });
 
@@ -301,6 +345,13 @@ export async function issueRoutes(app: FastifyInstance) {
       data: { body: body.trim() },
       include: { author: { select: { handle: true } } },
     });
+
+    await syncBodyReferences({
+      repo, actorId: userId,
+      source: { type: "ISSUE_COMMENT", id: comment.id },
+      container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: issue.title },
+      body: updated.body,
+    }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue comment edit)"));
 
     return formatComment(updated);
   });
@@ -355,6 +406,12 @@ export async function issueRoutes(app: FastifyInstance) {
       data: { issueId: issue.id, labelId: label.id },
     });
 
+    await recordEvent({
+      repoId: repo.id, subjectType: "ISSUE", subjectNumber: issue.number,
+      kind: "labeled", actorId: userId,
+      data: { label: { name: label.name, color: label.color } },
+    }).catch((err) => request.log.error({ err }, "recordEvent labeled"));
+
     return reply.status(201).send({ issueId: issue.id, labelId: label.id });
   });
 
@@ -377,9 +434,17 @@ export async function issueRoutes(app: FastifyInstance) {
     });
     if (!issueLabel) return reply.status(404).send({ error: "Label not applied to this issue" });
 
+    const label = await prisma.label.findFirst({ where: { id: labelId, repoId: repo.id } });
+
     await prisma.issueLabel.delete({
       where: { issueId_labelId: { issueId: issue.id, labelId } },
     });
+
+    await recordEvent({
+      repoId: repo.id, subjectType: "ISSUE", subjectNumber: issue.number,
+      kind: "unlabeled", actorId: userId,
+      data: { label: label ? { name: label.name, color: label.color } : undefined },
+    }).catch((err) => request.log.error({ err }, "recordEvent unlabeled"));
 
     return reply.status(204).send();
   });
