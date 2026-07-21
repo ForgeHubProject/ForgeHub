@@ -198,12 +198,14 @@ export function MergeBox({
   const activeOption = mergeMethodOption(method);
 
   // ── Open PR ────────────────────────────────────────────────────────────────
+  // No overflow-hidden here: the merge-method dropdown is absolutely positioned
+  // and must be free to extend past the box's bottom edge.
   return (
-    <div className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+    <div className="rounded-md border border-fh-border bg-fh-surface">
       {/* Status header */}
       <div
         className={cx(
-          "flex items-start gap-2.5 px-4 py-3 border-b border-fh-border",
+          "flex items-start gap-2.5 px-4 py-3 border-b border-fh-border rounded-t-md",
           hasConflict ? "bg-fh-danger-muted/40" : "bg-fh-success-muted/40",
         )}
       >
