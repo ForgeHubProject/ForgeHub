@@ -307,6 +307,16 @@ export type IssueComment = {
   updatedAt: string;
 };
 
+export type ReleaseAsset = {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  downloadCount: number;
+  uploader: string | null;
+  createdAt: string;
+};
+
 /** An append-only conversation event (labeled, closed, merged, referenced, …). */
 export type TimelineEvent = {
   id: string;
@@ -325,6 +335,7 @@ export type Release = {
   isDraft: boolean;
   isPrerelease: boolean;
   author: string;
+  assets: ReleaseAsset[];
   createdAt: string;
   updatedAt: string;
 };
