@@ -16,7 +16,17 @@ import {
   deleteTag,
   performMerge,
   performMergeWithResolvedFiles,
+  performSquashMerge,
+  performRebaseMerge,
+  performRevert,
 } from "../git-utils.js";
+
+const AUTHOR = { name: "Merl Merger", email: "merl@forgehub.io" };
+
+async function gitOut(workDir: string, args: string[]): Promise<string> {
+  const { stdout } = await execFile("git", ["-C", workDir, ...args]);
+  return stdout.trim();
+}
 
 const execFile = promisify(execFileCb);
 
@@ -292,6 +302,205 @@ describe("listFilesDifferingBetweenBranches", () => {
 
       const files = await listFilesDifferingBetweenBranches(r.storageKey, def, "copy");
       expect(files).toHaveLength(0);
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+});
+
+// ─── Squash merge ─────────────────────────────────────────────────────────────
+
+describe("performSquashMerge", () => {
+  it("collapses the branch into exactly one commit with the merger's author and message", async () => {
+    const r = await createTestRepo("squash/basic.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "a.txt": "base" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "b.txt": "one" }, "first feature commit");
+      await makeCommit(r.workDir, { "c.txt": "two" }, "second feature commit");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+
+      const before = Number(await gitOut(r.workDir, ["rev-list", "--count", def]));
+      const message = "Add feature (!7)\n\n* first feature commit\n* second feature commit\n";
+      const result = await performSquashMerge(r.storageKey, "feature", def, message, AUTHOR);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // Exactly one new commit on the base.
+      await gitOut(r.workDir, ["fetch", "origin"]);
+      const after = Number(await gitOut(r.workDir, ["rev-list", "--count", `origin/${def}`]));
+      expect(after).toBe(before + 1);
+
+      // Single parent → no merge commit.
+      const parents = (await gitOut(r.workDir, ["rev-list", "--parents", "-n", "1", result.sha])).split(/\s+/);
+      expect(parents.length - 1).toBe(1);
+
+      // Authored as the merger, with our subject.
+      expect(await gitOut(r.workDir, ["show", "-s", "--format=%an", result.sha])).toBe(AUTHOR.name);
+      expect(await gitOut(r.workDir, ["show", "-s", "--format=%ae", result.sha])).toBe(AUTHOR.email);
+      expect(await gitOut(r.workDir, ["show", "-s", "--format=%s", result.sha])).toBe("Add feature (!7)");
+
+      // Both changes landed in the single commit.
+      expect(await readFileAtBranch(r.storageKey, def, "b.txt")).toBe("one");
+      expect(await readFileAtBranch(r.storageKey, def, "c.txt")).toBe("two");
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+
+  it("returns alreadyMerged when the branch is contained in the base", async () => {
+    const r = await createTestRepo("squash/already.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "a.txt": "base" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "b.txt": "feat" }, "feat");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+      await performMerge(r.storageKey, "feature", def, "merge");
+
+      const result = await performSquashMerge(r.storageKey, "feature", def, "Squash (!1)\n", AUTHOR);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect("alreadyMerged" in result).toBe(true);
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+});
+
+// ─── Rebase merge ─────────────────────────────────────────────────────────────
+
+describe("performRebaseMerge", () => {
+  it("replays commits onto the base (fast-forward, no merge commit) preserving subjects", async () => {
+    const r = await createTestRepo("rebase/basic.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "a.txt": "base" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "b.txt": "one" }, "feat one");
+      await makeCommit(r.workDir, { "c.txt": "two" }, "feat two");
+      // Diverge the base so the rebase is a genuine replay, not a plain fast-forward.
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+      await makeCommit(r.workDir, { "d.txt": "mainwork" }, "main work");
+
+      const result = await performRebaseMerge(r.storageKey, "feature", def);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      await gitOut(r.workDir, ["fetch", "origin"]);
+      // No merge commits anywhere on the base history.
+      expect(await gitOut(r.workDir, ["rev-list", "--merges", `origin/${def}`])).toBe("");
+      // Original subjects preserved.
+      const subjects = await gitOut(r.workDir, ["log", "--format=%s", `origin/${def}`]);
+      expect(subjects).toContain("feat one");
+      expect(subjects).toContain("feat two");
+      expect(subjects).toContain("main work");
+      // Every file present.
+      expect(await readFileAtBranch(r.storageKey, def, "b.txt")).toBe("one");
+      expect(await readFileAtBranch(r.storageKey, def, "c.txt")).toBe("two");
+      expect(await readFileAtBranch(r.storageKey, def, "d.txt")).toBe("mainwork");
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+
+  it("rejects a conflicting replay with conflicts=true and leaves the base untouched", async () => {
+    const r = await createTestRepo("rebase/conflict.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "f.txt": "base\n" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "f.txt": "feature\n" }, "feature edit");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+      await makeCommit(r.workDir, { "f.txt": "main\n" }, "main edit");
+
+      const beforeSha = await resolveBranchSha(r.storageKey, def);
+      const result = await performRebaseMerge(r.storageKey, "feature", def);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect("conflicts" in result).toBe(true);
+
+      // Base branch is byte-for-byte unchanged.
+      expect(await resolveBranchSha(r.storageKey, def)).toBe(beforeSha);
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+});
+
+// ─── Revert ───────────────────────────────────────────────────────────────────
+
+describe("performRevert", () => {
+  it("reverts a merge commit (-m 1) producing a branch without the merged changes", async () => {
+    const r = await createTestRepo("revert/merge.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "a.txt": "base" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "newfile.txt": "hello" }, "add newfile");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+
+      const merge = await performMerge(r.storageKey, "feature", def, "Merge feature (#1)");
+      expect(merge.ok).toBe(true);
+      if (!merge.ok) return;
+      expect(await readFileAtBranch(r.storageKey, def, "newfile.txt")).toBe("hello");
+
+      const rev = await performRevert(r.storageKey, def, merge.sha, "revert-pr-1", AUTHOR);
+      expect(rev.ok).toBe(true);
+      if (!rev.ok) return;
+      expect(rev.branch).toBe("revert-pr-1");
+
+      // The reverting branch drops the merged file; the base is untouched.
+      expect(await readFileAtBranch(r.storageKey, "revert-pr-1", "newfile.txt")).toBeNull();
+      expect(await readFileAtBranch(r.storageKey, def, "newfile.txt")).toBe("hello");
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+
+  it("reverts a squash (single-parent) commit producing a branch without the change", async () => {
+    const r = await createTestRepo("revert/squash.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "a.txt": "base" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "newfile2.txt": "world" }, "add newfile2");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+
+      const squash = await performSquashMerge(r.storageKey, "feature", def, "Squash (!1)\n", AUTHOR);
+      expect(squash.ok).toBe(true);
+      if (!squash.ok) return;
+      expect(await readFileAtBranch(r.storageKey, def, "newfile2.txt")).toBe("world");
+
+      const rev = await performRevert(r.storageKey, def, squash.sha, "revert-pr-2", AUTHOR);
+      expect(rev.ok).toBe(true);
+      if (!rev.ok) return;
+
+      expect(await readFileAtBranch(r.storageKey, "revert-pr-2", "newfile2.txt")).toBeNull();
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
+
+  it("returns conflicts=true when the revert cannot apply cleanly, leaving the base untouched", async () => {
+    const r = await createTestRepo("revert/conflict.git");
+    try {
+      const def = await (await makeCommit(r.workDir, { "f.txt": "v1\n" }, "base"), defaultBranch(r.storageKey));
+      await checkoutBranch(r.workDir, "feature");
+      await makeCommit(r.workDir, { "f.txt": "v2\n" }, "to v2");
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+
+      const squash = await performSquashMerge(r.storageKey, "feature", def, "Squash (!1)\n", AUTHOR);
+      expect(squash.ok).toBe(true);
+      if (!squash.ok) return;
+
+      // Move the base forward again so reverting v1→v2 no longer applies cleanly.
+      await execFile("git", ["-C", r.workDir, "fetch", "origin"]);
+      await execFile("git", ["-C", r.workDir, "checkout", def]);
+      await execFile("git", ["-C", r.workDir, "reset", "--hard", `origin/${def}`]);
+      await makeCommit(r.workDir, { "f.txt": "v3\n" }, "to v3");
+
+      const beforeSha = await resolveBranchSha(r.storageKey, def);
+      const rev = await performRevert(r.storageKey, def, squash.sha, "revert-pr-3", AUTHOR);
+      expect(rev.ok).toBe(false);
+      if (!rev.ok) expect("conflicts" in rev).toBe(true);
+
+      // Nothing pushed: base untouched, no revert branch created.
+      expect(await resolveBranchSha(r.storageKey, def)).toBe(beforeSha);
+      expect(await branchExists(r.storageKey, "revert-pr-3")).toBe(false);
     } finally {
       await r.cleanup();
     }
