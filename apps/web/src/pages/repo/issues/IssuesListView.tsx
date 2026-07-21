@@ -106,7 +106,7 @@ export function IssuesListView({ token, handle, repoName }: {
   );
 
   const filters = (
-    <div className="flex items-center gap-0.5">
+    <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1">
       <DropdownMenu
         align="end"
         trigger={<FilterTrigger label="Author" active={!!authorFilter} icon={<PersonIcon size={14} />} />}
@@ -201,22 +201,24 @@ export function IssuesListView({ token, handle, repoName }: {
         <Button variant="primary" onClick={() => navigate(`${base}/issues/new`)}>New issue</Button>
       </div>
 
-      <div className="border border-fh-border rounded-md overflow-hidden">
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-fh-surface-muted border-b border-fh-border">
+      {/* No overflow-clip on the outer container: the filter menus need to
+          escape it (short lists would otherwise clip the open panel). */}
+      <div className="border border-fh-border rounded-md">
+        <div className="flex flex-col gap-2 px-4 py-2.5 bg-fh-surface-muted border-b border-fh-border rounded-t-md sm:flex-row sm:items-center sm:justify-between">
           {toggle}
           {filters}
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-16 bg-fh-surface">
+          <div className="flex items-center justify-center py-16 bg-fh-surface rounded-b-md">
             <Spinner size={20} />
           </div>
         ) : error ? (
-          <div className="py-12 bg-fh-surface">
+          <div className="py-12 bg-fh-surface rounded-b-md">
             <EmptyState title="Couldn't load issues" description={error} />
           </div>
         ) : all.length === 0 ? (
-          <div className="bg-fh-surface">
+          <div className="bg-fh-surface rounded-b-md">
             <EmptyState
               icon={<IssueOpenedIcon size={28} />}
               title="No issues yet"
@@ -225,7 +227,7 @@ export function IssuesListView({ token, handle, repoName }: {
             />
           </div>
         ) : visible.length === 0 ? (
-          <div className="bg-fh-surface">
+          <div className="bg-fh-surface rounded-b-md">
             <EmptyState
               icon={<IssueOpenedIcon size={28} />}
               title={hasActiveFilter ? "No issues match your filters" : state === "open" ? "No open issues" : "No closed issues"}
@@ -246,7 +248,7 @@ export function IssuesListView({ token, handle, repoName }: {
             />
           </div>
         ) : (
-          <ul className="divide-y divide-fh-border bg-fh-surface">
+          <ul className="divide-y divide-fh-border bg-fh-surface rounded-b-md overflow-hidden">
             {visible.map((issue) => (
               <li key={issue.id}>
                 <Link
