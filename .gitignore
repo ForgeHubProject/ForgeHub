@@ -1,7 +1,11 @@
 node_modules/
+# also ignore node_modules symlinks (the trailing-slash pattern above only matches dirs)
+node_modules
 dist/
 apps/api/prisma/dev.db
 apps/api/prisma/dev.db-journal
+# ignore all local dev sqlite databases (dev.db, dev-b2.db, ...)
+apps/api/prisma/*.db
 apps/api/prisma/prisma/
 apps/api/.env
 .env
