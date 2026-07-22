@@ -1,7 +1,8 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
   Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
+  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
+  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -432,11 +433,12 @@ export async function mergePull(
   number: number,
   mergeMethod: MergeMethod = "merge",
   commitMessage?: string,
+  override?: boolean,
 ): Promise<{ merged: boolean; sha: string; method: MergeMethod }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge`, {
     method: "POST",
     token,
-    body: JSON.stringify({ mergeMethod, commitMessage }),
+    body: JSON.stringify({ mergeMethod, commitMessage, override }),
   });
 }
 
@@ -479,11 +481,12 @@ export async function resolveMergePr(
   number: number,
   options: { strategy: "ours" | "theirs" } | { files: MergeFileResolution[] },
   commitMessage?: string,
+  override?: boolean,
 ): Promise<{ merged: boolean; sha: string }> {
   const body =
     "strategy" in options
-      ? { strategy: options.strategy, commitMessage }
-      : { files: options.files, commitMessage };
+      ? { strategy: options.strategy, commitMessage, override }
+      : { files: options.files, commitMessage, override };
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge-resolve`, {
     method: "POST",
     token,
@@ -814,6 +817,62 @@ export async function createIssueComment(
   });
 }
 
+// ─── issue triage: pin / lock / transfer (#120) ────────────────────────────────
+
+export async function pinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "POST", token });
+}
+
+export async function unpinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "DELETE", token });
+}
+
+export async function lockIssue(token: string, handle: string, repoName: string, number: number, reason?: string): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, {
+    method: "POST", token, body: JSON.stringify({ reason }),
+  });
+}
+
+export async function unlockIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, { method: "DELETE", token });
+}
+
+/** Move an issue to another repo owned by the same owner (v0). Returns the new location. */
+export async function transferIssue(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  targetRepo: string,
+): Promise<{ id: string; number: number; repo: string; handle: string; name: string; url: string }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/transfer`, {
+    method: "POST", token, body: JSON.stringify({ targetRepo }),
+  });
+}
+
+// ─── saved filter views (#120) — per user, per repo ────────────────────────────
+
+export async function listSavedFilters(token: string, handle: string, repoName: string): Promise<{ savedFilters: SavedFilter[] }> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, { token });
+}
+
+export async function createSavedFilter(
+  token: string,
+  handle: string,
+  repoName: string,
+  name: string,
+  query: string,
+  scope: "issue" | "pull_request" = "issue",
+): Promise<SavedFilter> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, {
+    method: "POST", token, body: JSON.stringify({ name, query, scope: scope.toUpperCase() }),
+  });
+}
+
+export async function deleteSavedFilter(token: string, handle: string, repoName: string, id: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/saved-filters/${id}`, { method: "DELETE", token });
+}
+
 // ─── timelines & PR conversation ─────────────────────────────────────────────────────────
 
 export async function listIssueTimeline(
@@ -855,6 +914,224 @@ export async function createPullComment(
     token,
     body: JSON.stringify({ body }),
   });
+}
+
+// ─── quick actions + time tracking (issue #122) ───────────────────────────────────────────
+
+/** One quick action that was applied or rejected when a comment was posted. */
+export type QuickAction = { command: string; summary?: string; reason?: string };
+
+/** Applied/rejected quick-action summary the UI can toast after posting a comment. */
+export type CommentActionSummary = { applied: QuickAction[]; rejected: QuickAction[] };
+
+/** A posted comment plus the quick-action summary. `comment` is null for a command-only body. */
+export type CommentWithActions = { comment: IssueComment | null; actions: CommentActionSummary };
+
+/**
+ * Post an issue comment and surface any quick actions (`/close`, `/label …`,
+ * `/estimate 2h` …) it triggered. Command lines are stripped server-side; if the
+ * body was only commands, `comment` comes back null but the actions still applied.
+ */
+export async function createIssueCommentWithActions(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<CommentWithActions> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Post a PR comment, surfacing any quick actions (on PRs: `/close`, `/reopen`). */
+export async function createPullCommentWithActions(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<CommentWithActions> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Set an issue's time estimate (absolute whole minutes; 0 clears it). Writer-only. */
+export async function setIssueEstimate(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  minutes: number,
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/estimate`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ minutes }),
+  });
+}
+
+/** Set an issue's total spent time (absolute whole minutes; 0 clears it). Writer-only. */
+export async function setIssueSpent(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  minutes: number,
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/spent`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ minutes }),
+  });
+}
+
+// ─── PR reviews: submissions, inline comments, threads ──────────────────────────
+
+export type ReviewVerdict = "approved" | "changes_requested" | "commented";
+
+/** All reviews visible to the caller (submitted reviews + the caller's own draft). */
+export async function listReviews(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ reviews: Review[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews`, { token: token ?? undefined });
+}
+
+/** All visible inline review comments (submitted, plus the caller's own drafts). */
+export async function listReviewComments(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ comments: ReviewComment[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments`, { token: token ?? undefined });
+}
+
+/**
+ * Add an inline review comment. Auto-attaches to (or opens) the caller's pending
+ * review; the returned comment carries its `reviewId` so a single-comment flow can
+ * immediately submit that review.
+ */
+export async function createReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  input: { body: string; filePath: string; position: ReviewCommentPosition },
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Submit a fresh review (summary only — no pre-composed inline drafts). */
+export async function createReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  input: { state: ReviewVerdict; body?: string },
+): Promise<Review> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Submit the caller's pending review (folding in its draft inline comments). */
+export async function submitReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  reviewId: string,
+  input: { state: ReviewVerdict; body?: string },
+): Promise<Review> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews/${reviewId}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Discard the caller's pending (draft) review. */
+export async function deleteReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  reviewId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews/${reviewId}`, { method: "DELETE", token });
+}
+
+/** Reply to a review thread (attaches to the thread's root review). */
+export async function replyToReviewThread(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  body: string,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}/replies`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Resolve (true) or unresolve (false) a review thread by any comment in it. */
+export async function setReviewThreadResolved(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  resolved: boolean,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}/resolve`, {
+    method: resolved ? "POST" : "DELETE",
+    token,
+  });
+}
+
+/** Edit an inline review comment body (author only). */
+export async function updateReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  body: string,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Delete an inline review comment (author or repo owner). */
+export async function deleteReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}`, { method: "DELETE", token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────
@@ -1134,11 +1411,49 @@ export async function revokeToken(token: string, id: string): Promise<void> {
   return req(`/auth/tokens/${id}`, { method: "DELETE", token });
 }
 
+export type SearchType = "repos" | "issues" | "users" | "code" | "entities";
+
+/**
+ * Unified search. `code` fans a bounded `git grep` across readable repos and
+ * `entities` queries the FHR Entity table (name/kind) — both visibility-scoped
+ * server-side. The envelope carries type-specific extras (e.g. `truncated`,
+ * `timedOut`, `reposSearched` for code), so callers read `results` plus whatever
+ * else the type provides.
+ */
 export async function search(
   token: string | null,
   q: string,
-  type: "repos" | "issues" | "users",
-): Promise<{ type: string; results: unknown[] }> {
+  type: SearchType,
+): Promise<{ type: string; results: unknown[]; truncated?: boolean; timedOut?: boolean; reposSearched?: number }> {
   const params = new URLSearchParams({ q, type });
-  return req<{ type: string; results: unknown[] }>(`/search?${params}`, { token: token ?? undefined });
+  return req(`/search?${params}`, { token: token ?? undefined });
+}
+
+/** Result of the repo-scoped code-search endpoint (`git grep` at a ref). */
+export type RepoCodeSearchResponse = {
+  query: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  ref: string;
+  sha: string;
+  files: { path: string; matches: { line: number; preview: string }[] }[];
+  totalMatches: number;
+  truncated: boolean;
+  timedOut: boolean;
+};
+
+/** Search one repository's file contents at a ref. Deep-links use the returned `sha`. */
+export async function codeSearchRepo(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  q: string,
+  opts: { ref?: string; regex?: boolean; caseSensitive?: boolean; limit?: number } = {},
+): Promise<RepoCodeSearchResponse> {
+  const qs = new URLSearchParams({ q });
+  if (opts.ref) qs.set("ref", opts.ref);
+  if (opts.regex) qs.set("regex", "true");
+  if (opts.caseSensitive) qs.set("case", "sensitive");
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  return req(`/repos/${handle}/${repoName}/code-search?${qs}`, { token: token ?? undefined });
 }
