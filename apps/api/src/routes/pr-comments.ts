@@ -1,8 +1,11 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, resolveRepo } from "../repo-access.js";
+import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifyUser } from "../notifications-service.js";
 import { syncBodyReferences } from "../references-service.js";
+import { recordEvent } from "../timeline-service.js";
+import { resolveBranchSha } from "../git-utils.js";
+import { isReviewStale } from "../review-summary.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -29,11 +32,12 @@ function formatReview(
     body: string | null;
     author: { handle: string };
     submittedAt: Date | null;
+    commitSha?: string | null;
     createdAt: Date;
     updatedAt: Date;
     _count?: { comments: number };
   },
-  commentCount?: number,
+  opts?: { commentCount?: number; currentHeadSha?: string | null },
 ) {
   return {
     id: review.id,
@@ -43,7 +47,9 @@ function formatReview(
     submittedAt: review.submittedAt?.toISOString() ?? null,
     createdAt: review.createdAt.toISOString(),
     updatedAt: review.updatedAt.toISOString(),
-    commentCount: commentCount ?? review._count?.comments ?? 0,
+    commentCount: opts?.commentCount ?? review._count?.comments ?? 0,
+    commitSha: review.commitSha ?? null,
+    stale: isReviewStale(review.commitSha, opts?.currentHeadSha ?? null),
   };
 }
 
@@ -54,6 +60,10 @@ function formatReviewComment(comment: {
   author: { handle: string };
   filePath: string;
   position: string;
+  inReplyToId?: string | null;
+  resolvedAt?: Date | null;
+  resolvedBy?: { handle: string } | null;
+  review?: { state: string } | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -64,6 +74,11 @@ function formatReviewComment(comment: {
     author: comment.author.handle,
     filePath: comment.filePath,
     position: JSON.parse(comment.position) as unknown,
+    inReplyToId: comment.inReplyToId ?? null,
+    resolved: comment.resolvedAt != null,
+    resolvedAt: comment.resolvedAt?.toISOString() ?? null,
+    resolvedBy: comment.resolvedBy?.handle ?? null,
+    pending: comment.review ? comment.review.state === "PENDING" : false,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
   };
@@ -127,6 +142,19 @@ export async function prCommentRoutes(app: FastifyInstance) {
       return null;
     }
     return { repo, pr };
+  }
+
+  /** Current head (`fromBranch`) SHA, for recording/computing review staleness. */
+  async function headShaOf(
+    repo: { storageKey: string | null },
+    pr: { fromBranch: string },
+  ): Promise<string | null> {
+    if (!repo.storageKey) return null;
+    try {
+      return await resolveBranchSha(repo.storageKey, pr.fromBranch);
+    } catch {
+      return null;
+    }
   }
 
   // ─── General PR Comments ──────────────────────────────────────────────────────
@@ -269,8 +297,16 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
       if (!ctx) return;
 
+      // Submitted reviews are public; a PENDING review is a private draft visible
+      // only to its own author (so "start a review" stays a draft until submitted).
       const reviews = await prisma.pullRequestReview.findMany({
-        where: { pullRequestId: ctx.pr.id },
+        where: {
+          pullRequestId: ctx.pr.id,
+          OR: [
+            { state: { not: "PENDING" } },
+            ...(userId ? [{ authorId: userId, state: "PENDING" as const }] : []),
+          ],
+        },
         orderBy: { createdAt: "asc" },
         include: {
           author: { select: { handle: true } },
@@ -278,7 +314,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
         },
       });
 
-      return { reviews: reviews.map((r) => formatReview(r)) };
+      const headSha = await headShaOf(ctx.repo, ctx.pr);
+      return { reviews: reviews.map((r) => formatReview(r, { currentHeadSha: headSha })) };
     },
   );
 
@@ -303,6 +340,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const validStates = ["approved", "changes_requested", "commented"];
       let dbState: string;
       let submittedAt: Date | null = null;
+      let commitSha: string | null = null;
 
       if (state) {
         if (!validStates.includes(state)) {
@@ -310,6 +348,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
         }
         dbState = state.toUpperCase();
         submittedAt = new Date();
+        commitSha = await headShaOf(ctx.repo, ctx.pr);
       } else {
         dbState = "PENDING";
       }
@@ -321,6 +360,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
           state: dbState as "PENDING" | "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED",
           body: body?.trim() || null,
           submittedAt,
+          commitSha,
         },
         include: {
           author: { select: { handle: true } },
@@ -328,12 +368,17 @@ export async function prCommentRoutes(app: FastifyInstance) {
         },
       });
 
-      // Notify PR author when a review is actually submitted (not left as PENDING)
+      // Notify + record a spine event when a review is actually submitted.
       if (submittedAt) {
         void notifyUser(ctx.pr.authorId, { actorId: userId, repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectId: ctx.pr.id, subjectTitle: ctx.pr.title, reason: "COMMENT" });
+        await recordEvent({
+          repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectNumber: ctx.pr.number,
+          kind: "reviewed", actorId: userId,
+          data: { state: dbState.toLowerCase(), reviewId: review.id, commentCount: review._count?.comments ?? 0 },
+        }).catch((err) => request.log.error({ err }, "recordEvent reviewed"));
       }
 
-      return reply.status(201).send(formatReview(review));
+      return reply.status(201).send(formatReview(review, { currentHeadSha: commitSha }));
     },
   );
 
@@ -356,15 +401,19 @@ export async function prCommentRoutes(app: FastifyInstance) {
           author: { select: { handle: true } },
           comments: {
             orderBy: { createdAt: "asc" },
-            include: { author: { select: { handle: true } } },
+            include: {
+              author: { select: { handle: true } },
+              resolvedBy: { select: { handle: true } },
+            },
           },
         },
       });
 
       if (!review) return reply.status(404).send({ error: "Review not found" });
 
+      const headSha = await headShaOf(ctx.repo, ctx.pr);
       return {
-        ...formatReview(review, review.comments.length),
+        ...formatReview(review, { commentCount: review.comments.length, currentHeadSha: headSha }),
         comments: review.comments.map(formatReviewComment),
       };
     },
@@ -407,12 +456,14 @@ export async function prCommentRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: `state must be one of: ${validStates.join(", ")}` });
       }
 
+      const commitSha = await headShaOf(ctx.repo, ctx.pr);
       const updated = await prisma.pullRequestReview.update({
         where: { id: review.id },
         data: {
           state: state.toUpperCase() as "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED",
           body: body?.trim() || review.body,
           submittedAt: new Date(),
+          commitSha,
         },
         include: {
           author: { select: { handle: true } },
@@ -420,7 +471,14 @@ export async function prCommentRoutes(app: FastifyInstance) {
         },
       });
 
-      return formatReview(updated);
+      void notifyUser(ctx.pr.authorId, { actorId: userId, repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectId: ctx.pr.id, subjectTitle: ctx.pr.title, reason: "COMMENT" });
+      await recordEvent({
+        repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectNumber: ctx.pr.number,
+        kind: "reviewed", actorId: userId,
+        data: { state: state.toLowerCase(), reviewId: updated.id, commentCount: updated._count?.comments ?? 0 },
+      }).catch((err) => request.log.error({ err }, "recordEvent reviewed"));
+
+      return formatReview(updated, { currentHeadSha: commitSha });
     },
   );
 
@@ -469,10 +527,22 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
       if (!ctx) return;
 
+      // Comments on submitted reviews are public; a reviewer's own PENDING draft
+      // comments are visible only to them until they submit the review.
       const comments = await prisma.pullRequestReviewComment.findMany({
-        where: { pullRequestId: ctx.pr.id },
+        where: {
+          pullRequestId: ctx.pr.id,
+          OR: [
+            { review: { state: { not: "PENDING" } } },
+            ...(userId ? [{ review: { authorId: userId, state: "PENDING" as const } }] : []),
+          ],
+        },
         orderBy: { createdAt: "asc" },
-        include: { author: { select: { handle: true } } },
+        include: {
+          author: { select: { handle: true } },
+          resolvedBy: { select: { handle: true } },
+          review: { select: { state: true } },
+        },
       });
 
       return { comments: comments.map(formatReviewComment) };
@@ -620,5 +690,122 @@ export async function prCommentRoutes(app: FastifyInstance) {
 
       return reply.status(204).send();
     },
+  );
+
+  // ─── Threads: replies + resolution ────────────────────────────────────────────
+
+  /** Resolve the thread root for a comment id: itself if a root, else its parent. */
+  async function findThreadRoot(commentId: string, pullRequestId: string) {
+    const comment = await prisma.pullRequestReviewComment.findFirst({
+      where: { id: commentId, pullRequestId },
+    });
+    if (!comment) return null;
+    if (!comment.inReplyToId) return comment;
+    const root = await prisma.pullRequestReviewComment.findFirst({
+      where: { id: comment.inReplyToId, pullRequestId },
+    });
+    // A stray reply whose root vanished falls back to itself.
+    return root ?? comment;
+  }
+
+  // POST /repos/:handle/:name/pulls/:number/review-comments/:commentId/replies
+  // Reply to a review thread. Attaches to the ROOT comment's review, so answering
+  // a reviewer never opens a new pending review — and the PR author may reply too
+  // (the "authors can't post review comments" rule is relaxed for replies).
+  app.post(
+    "/repos/:handle/:name/pulls/:number/review-comments/:commentId/replies",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { handle, name, number, commentId } = request.params as {
+        handle: string; name: string; number: string; commentId: string;
+      };
+      const userId = request.user.sub;
+
+      const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
+      if (!ctx) return;
+
+      const { body } = request.body as { body?: string };
+      if (!body?.trim()) return reply.status(400).send({ error: "body is required" });
+
+      const root = await findThreadRoot(commentId, ctx.pr.id);
+      if (!root) return reply.status(404).send({ error: "Comment not found" });
+
+      const created = await prisma.pullRequestReviewComment.create({
+        data: {
+          reviewId: root.reviewId,
+          pullRequestId: ctx.pr.id,
+          authorId: userId,
+          body: body.trim(),
+          filePath: root.filePath,
+          position: root.position,
+          inReplyToId: root.id,
+        },
+        include: {
+          author: { select: { handle: true } },
+          resolvedBy: { select: { handle: true } },
+          review: { select: { state: true } },
+        },
+      });
+
+      await syncBodyReferences({
+        repo: ctx.repo, actorId: userId,
+        source: { type: "PR_REVIEW_COMMENT", id: created.id },
+        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+        body: created.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr review reply)"));
+
+      return reply.status(201).send(formatReviewComment(created));
+    },
+  );
+
+  // POST /repos/:handle/:name/pulls/:number/review-comments/:commentId/resolve
+  // Mark a thread resolved (resolution lives on the root comment).
+  // DELETE the same path to unresolve. Allowed for a repo writer or the thread's
+  // root author (so a reviewer can resolve threads they opened).
+  async function setResolution(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    resolve: boolean,
+  ) {
+    const { handle, name, number, commentId } = request.params as {
+      handle: string; name: string; number: string; commentId: string;
+    };
+    const userId = (request as { user: { sub: string } }).user.sub;
+
+    const ctx = await resolveRepoAndPR(handle, name, number, userId, reply);
+    if (!ctx) return;
+
+    const root = await findThreadRoot(commentId, ctx.pr.id);
+    if (!root) return reply.status(404).send({ error: "Comment not found" });
+
+    if (!canWrite(ctx.repo, userId) && root.authorId !== userId) {
+      return reply.status(403).send({ error: "Only a repository writer or the thread author can resolve this thread" });
+    }
+
+    const updated = await prisma.pullRequestReviewComment.update({
+      where: { id: root.id },
+      data: resolve
+        ? { resolvedAt: new Date(), resolvedById: userId }
+        : { resolvedAt: null, resolvedById: null },
+      include: {
+        author: { select: { handle: true } },
+        resolvedBy: { select: { handle: true } },
+        review: { select: { state: true } },
+      },
+    });
+
+    return reply.send(formatReviewComment(updated));
+  }
+
+  app.post(
+    "/repos/:handle/:name/pulls/:number/review-comments/:commentId/resolve",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => setResolution(request, reply, true),
+  );
+
+  app.delete(
+    "/repos/:handle/:name/pulls/:number/review-comments/:commentId/resolve",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => setResolution(request, reply, false),
   );
 }
