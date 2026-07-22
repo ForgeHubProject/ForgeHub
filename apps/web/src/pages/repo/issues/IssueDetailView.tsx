@@ -2,18 +2,18 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Avatar, Badge, Button, Dialog, DropdownMenu, DropdownItem, DropdownSeparator,
-  EmptyState, RelativeTime, Skeleton, Textarea, TextInput,
+  EmptyState, RelativeTime, Skeleton, Textarea, TextInput, useToast,
 } from "../../../ui";
 import {
-  addIssueLabel, createIssueComment, getIssue, listIssueComments, listIssueTimeline, listLabels,
-  listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember, transferIssue, unlockIssue,
-  unpinIssue, updateIssue,
+  addIssueLabel, createIssueCommentWithActions, getIssue, listIssueComments, listIssueTimeline,
+  listLabels, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember, setIssueEstimate,
+  setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import type { Issue, IssueComment, Label, TimelineEvent, User } from "../../../types";
 import { StatePill, UserLink } from "./parts";
-import { SidebarLabels, SidebarAssignee } from "./Sidebar";
+import { SidebarLabels, SidebarAssignee, SidebarTimeTracking } from "./Sidebar";
 import {
   ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, KebabIcon, LockIcon,
   PencilIcon, PinIcon, TransferIcon, UnlockIcon,
@@ -95,6 +95,16 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
 
+  const { toast } = useToast();
+
+  // Re-fetch the issue itself — quick actions in a comment can change state,
+  // labels, assignee, or time tracking out from under the loaded copy.
+  function refreshIssue() {
+    getIssue(token, handle, repoName, number)
+      .then(setIssue)
+      .catch(() => { /* keep the prior copy on failure */ });
+  }
+
   function refreshTimeline() {
     listIssueTimeline(token, handle, repoName, number)
       .then((tl) => setEvents(tl.events))
@@ -106,9 +116,16 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
     if (!commentBody.trim()) return;
     setSubmitting(true);
     try {
-      const c = await createIssueComment(token, handle, repoName, number, commentBody.trim());
-      setComments((prev) => [...prev, c]);
+      const res = await createIssueCommentWithActions(token, handle, repoName, number, commentBody.trim());
+      if (res.comment) setComments((prev) => [...prev, res.comment!]);
       setCommentBody("");
+      if (res.actions.applied.length > 0) {
+        toast(`Applied: ${res.actions.applied.map((a) => a.command).join(", ")}`, { tone: "success" });
+        refreshIssue();
+      }
+      for (const r of res.actions.rejected) {
+        toast(`${r.command}: ${r.reason ?? "not applied"}`, { tone: "warning" });
+      }
       refreshTimeline();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to comment");
@@ -450,6 +467,13 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             selectedHandle={issue.assignee}
             onSelect={setAssignee}
             canEdit={canEdit}
+          />
+          <SidebarTimeTracking
+            estimateMinutes={issue.estimateMinutes}
+            spentMinutes={issue.spentMinutes}
+            canEdit={canEdit}
+            onSetEstimate={(m) => setIssueEstimate(token, handle, repoName, number, m).then(refreshIssue)}
+            onSetSpent={(m) => setIssueSpent(token, handle, repoName, number, m).then(refreshIssue)}
           />
           <section className="text-fh-sm text-fh-fg-muted">
             <h3 className="text-fh-sm font-semibold text-fh-fg mb-2">Meta</h3>
