@@ -1406,11 +1406,49 @@ export async function revokeToken(token: string, id: string): Promise<void> {
   return req(`/auth/tokens/${id}`, { method: "DELETE", token });
 }
 
+export type SearchType = "repos" | "issues" | "users" | "code" | "entities";
+
+/**
+ * Unified search. `code` fans a bounded `git grep` across readable repos and
+ * `entities` queries the FHR Entity table (name/kind) — both visibility-scoped
+ * server-side. The envelope carries type-specific extras (e.g. `truncated`,
+ * `timedOut`, `reposSearched` for code), so callers read `results` plus whatever
+ * else the type provides.
+ */
 export async function search(
   token: string | null,
   q: string,
-  type: "repos" | "issues" | "users",
-): Promise<{ type: string; results: unknown[] }> {
+  type: SearchType,
+): Promise<{ type: string; results: unknown[]; truncated?: boolean; timedOut?: boolean; reposSearched?: number }> {
   const params = new URLSearchParams({ q, type });
-  return req<{ type: string; results: unknown[] }>(`/search?${params}`, { token: token ?? undefined });
+  return req(`/search?${params}`, { token: token ?? undefined });
+}
+
+/** Result of the repo-scoped code-search endpoint (`git grep` at a ref). */
+export type RepoCodeSearchResponse = {
+  query: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  ref: string;
+  sha: string;
+  files: { path: string; matches: { line: number; preview: string }[] }[];
+  totalMatches: number;
+  truncated: boolean;
+  timedOut: boolean;
+};
+
+/** Search one repository's file contents at a ref. Deep-links use the returned `sha`. */
+export async function codeSearchRepo(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  q: string,
+  opts: { ref?: string; regex?: boolean; caseSensitive?: boolean; limit?: number } = {},
+): Promise<RepoCodeSearchResponse> {
+  const qs = new URLSearchParams({ q });
+  if (opts.ref) qs.set("ref", opts.ref);
+  if (opts.regex) qs.set("regex", "true");
+  if (opts.caseSensitive) qs.set("case", "sensitive");
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  return req(`/repos/${handle}/${repoName}/code-search?${qs}`, { token: token ?? undefined });
 }
