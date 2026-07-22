@@ -1120,7 +1120,9 @@ describe("Issue transfer", () => {
 
     // The moved row is updated to the target repo + fresh number.
     expect(vi.mocked(prisma.issue.update)).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ repoId: "repo-target", number: 6 }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ repo: { connect: { id: "repo-target" } }, number: 6 }),
+      }),
     );
     // A timeline event on each side (out + in).
     const kinds = vi.mocked(recordEvent).mock.calls.map((c) => (c[0] as { kind: string; data?: { direction?: string } }));

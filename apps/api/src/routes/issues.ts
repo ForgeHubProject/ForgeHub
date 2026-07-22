@@ -667,7 +667,7 @@ export async function issueRoutes(app: FastifyInstance) {
       await tx.issue.update({
         // Comments follow the row automatically (FK on issueId); pin is per-repo, so drop it.
         where: { id: issue.id },
-        data: { repoId: target.id, number: newNumber, pinnedAt: null },
+        data: { repo: { connect: { id: target.id } }, number: newNumber, pinnedAt: null },
       });
     });
 
