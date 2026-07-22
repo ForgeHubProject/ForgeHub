@@ -4,6 +4,7 @@ import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { syncBodyReferences } from "../references-service.js";
+import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 
 function formatIssue(issue: {
   id: string;
@@ -18,6 +19,8 @@ function formatIssue(issue: {
   closedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  estimateMinutes?: number;
+  spentMinutes?: number;
   // Issue-triage (#120) — optional so mocked/legacy rows without them still format.
   pinnedAt?: Date | null;
   locked?: boolean | null;
@@ -40,6 +43,9 @@ function formatIssue(issue: {
     createdAt: issue.createdAt.toISOString(),
     updatedAt: issue.updatedAt.toISOString(),
     closedAt: issue.closedAt?.toISOString() ?? null,
+    // Time tracking (issue #122). Whole minutes; 0 = unset.
+    estimateMinutes: issue.estimateMinutes ?? 0,
+    spentMinutes: issue.spentMinutes ?? 0,
     pinnedAt: issue.pinnedAt ? issue.pinnedAt.toISOString() : null,
     locked: issue.locked ?? false,
     lockReason: issue.lockReason ?? null,
@@ -325,31 +331,57 @@ export async function issueRoutes(app: FastifyInstance) {
     }
 
     const { body } = request.body as { body?: string };
-    if (!body?.trim()) return reply.status(400).send({ error: "body is required" });
 
-    const comment = await prisma.issueComment.create({
-      data: {
-        issueId: issue.id,
-        authorId: userId,
-        body: body.trim(),
-      },
-      include: { author: { select: { handle: true } } },
-    });
+    // Split leading `/command` lines out of the body. What's left is the stored
+    // comment; if that's empty and no commands were given, there's nothing to do.
+    const { commands, body: stripped } = parseQuickActions(body);
+    if (commands.length === 0 && !stripped) return reply.status(400).send({ error: "body is required" });
 
-    // Notify issue participants (author + assignee, not self)
-    const participants = new Set([issue.authorId, issue.assigneeId].filter(Boolean) as string[]);
-    for (const uid of participants) {
-      void notifyUser(uid, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "COMMENT" });
+    // Create the comment only when prose remains after stripping commands.
+    const comment = stripped
+      ? await prisma.issueComment.create({
+          data: { issueId: issue.id, authorId: userId, body: stripped },
+          include: { author: { select: { handle: true } } },
+        })
+      : null;
+
+    if (comment) {
+      // Notify issue participants (author + assignee, not self)
+      const participants = new Set([issue.authorId, issue.assigneeId].filter(Boolean) as string[]);
+      for (const uid of participants) {
+        void notifyUser(uid, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "COMMENT" });
+      }
+
+      await syncBodyReferences({
+        repo, actorId: userId,
+        source: { type: "ISSUE_COMMENT", id: comment.id },
+        container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: issue.title },
+        body: comment.body,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue comment)"));
     }
 
-    await syncBodyReferences({
-      repo, actorId: userId,
-      source: { type: "ISSUE_COMMENT", id: comment.id },
-      container: { subjectType: "ISSUE", id: issue.id, number: issue.number, title: issue.title },
-      body: comment.body,
-    }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue comment)"));
+    // Dispatch quick actions through the same mutations the REST endpoints use.
+    const actions = await applyQuickActions({
+      repo, actorId: userId, commands,
+      subject: {
+        type: "ISSUE",
+        issue: {
+          id: issue.id, number: issue.number, authorId: issue.authorId, state: issue.state,
+          title: issue.title, assigneeId: issue.assigneeId,
+          estimateMinutes: issue.estimateMinutes, spentMinutes: issue.spentMinutes,
+        },
+      },
+      log: request.log,
+    }).catch((err) => {
+      request.log.error({ err }, "applyQuickActions (issue comment)");
+      return { applied: [], rejected: [] };
+    });
 
-    return reply.status(201).send(formatComment(comment));
+    // Uniform response: comment fields at top level (back-compat with clients
+    // that expect the created comment) plus `comment` + `actions` for clients
+    // that toast the quick-action summary. `comment` is null for command-only bodies.
+    const cf = comment ? formatComment(comment) : null;
+    return reply.status(201).send({ ...(cf ?? {}), comment: cf, actions });
   });
 
   // PATCH /repos/:handle/:name/issues/:number/comments/:commentId
@@ -483,6 +515,61 @@ export async function issueRoutes(app: FastifyInstance) {
     }).catch((err) => request.log.error({ err }, "recordEvent unlabeled"));
 
     return reply.status(204).send();
+  });
+
+  // ─── Time tracking (issue #122) ─────────────────────────────────────────────────
+  // Plain REST setters so the sidebar can set/clear estimate & spent without the
+  // slash syntax. Both take absolute whole-minute values (0 clears). Writer-gated,
+  // matching the /estimate + /spend quick actions.
+
+  // PUT /repos/:handle/:name/issues/:number/estimate  { minutes }
+  app.put("/repos/:handle/:name/issues/:number/estimate", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const issue = await prisma.issue.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!issue) return reply.status(404).send({ error: "Issue not found" });
+
+    const { minutes } = request.body as { minutes?: number };
+    if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < 0) {
+      return reply.status(400).send({ error: "minutes must be a non-negative number" });
+    }
+
+    const updated = await prisma.issue.update({
+      where: { id: issue.id },
+      data: { estimateMinutes: Math.round(minutes) },
+      include: issueInclude,
+    });
+    return formatIssue(updated);
+  });
+
+  // PUT /repos/:handle/:name/issues/:number/spent  { minutes }
+  app.put("/repos/:handle/:name/issues/:number/spent", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const issue = await prisma.issue.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!issue) return reply.status(404).send({ error: "Issue not found" });
+
+    const { minutes } = request.body as { minutes?: number };
+    if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < 0) {
+      return reply.status(400).send({ error: "minutes must be a non-negative number" });
+    }
+
+    const updated = await prisma.issue.update({
+      where: { id: issue.id },
+      data: { spentMinutes: Math.round(minutes) },
+      include: issueInclude,
+    });
+    return formatIssue(updated);
   });
 
   // ─── Pinned issues (#120) ─────────────────────────────────────────────────────
