@@ -297,6 +297,9 @@ export type Issue = {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  /** Time tracking (issue #122): whole minutes; 0 = unset. */
+  estimateMinutes: number;
+  spentMinutes: number;
 };
 
 export type IssueComment = {
