@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  Avatar, Badge, Button, EmptyState, RelativeTime, Skeleton, Textarea, TextInput,
+  Avatar, Badge, Button, Dialog, DropdownMenu, DropdownItem, DropdownSeparator,
+  EmptyState, RelativeTime, Skeleton, Textarea, TextInput,
 } from "../../../ui";
 import {
   addIssueLabel, createIssueComment, getIssue, listIssueComments, listIssueTimeline, listLabels,
-  listRepoMembers, removeIssueLabel, RepoMember, updateIssue,
+  listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember, transferIssue, unlockIssue,
+  unpinIssue, updateIssue,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import type { Issue, IssueComment, Label, TimelineEvent, User } from "../../../types";
 import { StatePill, UserLink } from "./parts";
 import { SidebarLabels, SidebarAssignee } from "./Sidebar";
-import { ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, PencilIcon } from "./icons";
+import {
+  ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, KebabIcon, LockIcon,
+  PencilIcon, PinIcon, TransferIcon, UnlockIcon,
+} from "./icons";
 
 /** One timeline entry: an author header bar over a rendered-markdown body. */
 function TimelineCard({
@@ -61,6 +66,13 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+
+  // Issue-triage (#120): pin / lock / transfer.
+  const [triageBusy, setTriageBusy] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTarget, setTransferTarget] = useState("");
+  const [transferring, setTransferring] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -166,6 +178,56 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
     } catch { /* ignore */ }
   }
 
+  async function togglePin() {
+    if (!issue) return;
+    setTriageBusy(true);
+    setError(null);
+    try {
+      const updated = issue.pinnedAt
+        ? await unpinIssue(token, handle, repoName, number)
+        : await pinIssue(token, handle, repoName, number);
+      setIssue(updated);
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update pin");
+    } finally {
+      setTriageBusy(false);
+    }
+  }
+
+  async function toggleLock() {
+    if (!issue) return;
+    setTriageBusy(true);
+    setError(null);
+    try {
+      const updated = issue.locked
+        ? await unlockIssue(token, handle, repoName, number)
+        : await lockIssue(token, handle, repoName, number);
+      setIssue(updated);
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update lock");
+    } finally {
+      setTriageBusy(false);
+    }
+  }
+
+  async function submitTransfer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!transferTarget.trim()) return;
+    setTransferring(true);
+    setTransferError(null);
+    try {
+      const res = await transferIssue(token, handle, repoName, number, transferTarget.trim());
+      setTransferOpen(false);
+      navigate(res.url);
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : "Transfer failed");
+    } finally {
+      setTransferring(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -189,6 +251,10 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
 
   const isOpen = issue.state === "open";
   const canEdit = issue.author === user.handle || handle === user.handle;
+  // Writer/owner gate for triage actions (pin / lock / transfer).
+  const isWriter = members.some((m) => m.handle === user.handle && (m.role === "owner" || m.role === "writer"));
+  const canManage = isWriter || handle === user.handle;
+  const isLocked = !!issue.locked;
 
   // Comments and non-comment events, interleaved chronologically.
   const stream = [
@@ -234,12 +300,57 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
               <PencilIcon size={14} /> Edit
             </button>
           )}
+          {canManage && (
+            <DropdownMenu
+              align="end"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="Issue actions"
+                  disabled={triageBusy}
+                  className="mt-0.5 inline-flex items-center justify-center w-7 h-7 rounded-md text-fh-fg-muted hover:text-fh-fg hover:bg-fh-surface-muted disabled:opacity-50"
+                >
+                  <KebabIcon size={16} />
+                </button>
+              }
+            >
+              <DropdownItem
+                leadingIcon={<PinIcon size={16} />}
+                onSelect={togglePin}
+              >
+                {issue.pinnedAt ? "Unpin issue" : "Pin issue"}
+              </DropdownItem>
+              <DropdownItem
+                leadingIcon={isLocked ? <UnlockIcon size={16} /> : <LockIcon size={16} />}
+                onSelect={toggleLock}
+              >
+                {isLocked ? "Unlock conversation" : "Lock conversation"}
+              </DropdownItem>
+              <DropdownSeparator />
+              <DropdownItem
+                leadingIcon={<TransferIcon size={16} />}
+                onSelect={() => { setTransferError(null); setTransferTarget(""); setTransferOpen(true); }}
+              >
+                Transfer issue…
+              </DropdownItem>
+            </DropdownMenu>
+          )}
         </div>
       )}
 
       {/* State + meta */}
       <div className="flex items-center gap-3 flex-wrap pb-4 mb-6 border-b border-fh-border">
         <StatePill state={issue.state} />
+        {issue.pinnedAt && (
+          <span className="inline-flex items-center gap-1 text-fh-sm font-medium text-fh-accent-fg">
+            <PinIcon size={14} /> Pinned
+          </span>
+        )}
+        {isLocked && (
+          <span className="inline-flex items-center gap-1 text-fh-sm font-medium text-fh-warning-fg">
+            <LockIcon size={14} /> Locked
+          </span>
+        )}
         <span className="text-fh-sm text-fh-fg-muted">
           <UserLink handle={issue.author} /> opened this issue <RelativeTime date={issue.createdAt} />
           {" · "}
@@ -272,38 +383,58 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             ),
           )}
 
-          {/* Composer */}
-          <form onSubmit={submitComment} className="border border-fh-border rounded-md overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border text-fh-sm">
-              <Avatar name={user.displayName ?? user.handle} size={20} />
-              <span className="font-semibold text-fh-fg">Add a comment</span>
-            </div>
-            <div className="p-3 bg-fh-surface">
-              <Textarea
-                rows={5}
-                placeholder="Leave a comment"
-                value={commentBody}
-                onChange={(e) => setCommentBody(e.target.value)}
-              />
-              <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">Styling with Markdown is supported.</p>
-              {error && <p className="mt-2 text-fh-sm text-fh-danger-fg">{error}</p>}
-              <div className="flex items-center justify-end gap-2 mt-3">
-                {canEdit && (
-                  <Button
-                    variant="default"
-                    loading={toggling}
-                    onClick={toggleState}
-                    leadingIcon={isOpen ? <IssueClosedIcon size={16} /> : <IssueOpenedIcon size={16} />}
-                  >
-                    {isOpen ? "Close issue" : "Reopen issue"}
-                  </Button>
-                )}
-                <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
-                  Comment
-                </Button>
+          {/* Composer — replaced by a locked banner when the viewer can't comment. */}
+          {isLocked && !isWriter ? (
+            <div className="flex items-start gap-3 border border-fh-border rounded-md bg-fh-warning-muted px-4 py-3">
+              <span className="mt-0.5 shrink-0 text-fh-warning-fg"><LockIcon size={16} /></span>
+              <div className="min-w-0 text-fh-sm">
+                <p className="font-semibold text-fh-fg">
+                  This conversation has been locked{issue.lockReason ? <> as <span className="lowercase">{issue.lockReason}</span></> : null}.
+                </p>
+                <p className="mt-0.5 text-fh-fg-muted">
+                  Only collaborators with write access can add new comments.
+                </p>
               </div>
             </div>
-          </form>
+          ) : (
+            <form onSubmit={submitComment} className="border border-fh-border rounded-md overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border text-fh-sm">
+                <Avatar name={user.displayName ?? user.handle} size={20} />
+                <span className="font-semibold text-fh-fg">Add a comment</span>
+              </div>
+              <div className="p-3 bg-fh-surface">
+                {isLocked && (
+                  <div className="mb-2 flex items-center gap-1.5 text-fh-xs text-fh-warning-fg">
+                    <LockIcon size={12} />
+                    This conversation is locked — only collaborators can comment.
+                  </div>
+                )}
+                <Textarea
+                  rows={5}
+                  placeholder="Leave a comment"
+                  value={commentBody}
+                  onChange={(e) => setCommentBody(e.target.value)}
+                />
+                <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">Styling with Markdown is supported.</p>
+                {error && <p className="mt-2 text-fh-sm text-fh-danger-fg">{error}</p>}
+                <div className="flex items-center justify-end gap-2 mt-3">
+                  {canEdit && (
+                    <Button
+                      variant="default"
+                      loading={toggling}
+                      onClick={toggleState}
+                      leadingIcon={isOpen ? <IssueClosedIcon size={16} /> : <IssueOpenedIcon size={16} />}
+                    >
+                      {isOpen ? "Close issue" : "Reopen issue"}
+                    </Button>
+                  )}
+                  <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
+                    Comment
+                  </Button>
+                </div>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -327,6 +458,39 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
           </section>
         </aside>
       </div>
+
+      {/* Transfer dialog (#120) */}
+      <Dialog
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        title="Transfer issue"
+        description="Move this issue to another repository you own. It is re-numbered in the target and this URL becomes a pointer."
+        footer={
+          <>
+            <Button variant="default" onClick={() => setTransferOpen(false)}>Cancel</Button>
+            <Button variant="primary" loading={transferring} disabled={!transferTarget.trim()} onClick={submitTransfer}>
+              Transfer
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={submitTransfer}>
+          <label htmlFor="transfer-target" className="block text-fh-sm font-medium text-fh-fg mb-1">
+            Target repository
+          </label>
+          <TextInput
+            id="transfer-target"
+            placeholder="repository-name"
+            value={transferTarget}
+            onChange={(e) => setTransferTarget(e.target.value)}
+            autoFocus
+          />
+          <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">
+            A repository owned by <span className="font-semibold">{handle}</span>. v0 only supports same-owner transfers.
+          </p>
+          {transferError && <p className="mt-2 text-fh-sm text-fh-danger-fg">{transferError}</p>}
+        </form>
+      </Dialog>
     </div>
   );
 }

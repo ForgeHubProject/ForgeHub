@@ -37,10 +37,12 @@ model User {
   prComments       PullRequestComment[]       @relation("PRCommentAuthor")
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
+  resolvedReviewComments PullRequestReviewComment[] @relation("PRReviewCommentResolver")
   releases         Release[]                  @relation("ReleaseAuthor")
   releaseAssets    ReleaseAsset[]             @relation("ReleaseAssetUploader")
   notifications    Notification[]
   personalAccessTokens PersonalAccessToken[]
+  savedFilters     SavedFilter[]              @relation("SavedFilterOwner")
 }
 
 model PersonalAccessToken {
@@ -79,6 +81,7 @@ model Repo {
   topics          RepoTopic[]
   timelineEvents  TimelineEvent[]
   crossReferences CrossReference[]
+  savedFilters    SavedFilter[]
 
   @@unique([ownerId, name])
 }
@@ -253,6 +256,29 @@ model Issue {
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
+  // ─── Time tracking (issue #122 · quick-actions) ───────────────────────────────
+  // GitLab-style time tracking, stored as whole minutes. `estimateMinutes` is an
+  // absolute target set by /estimate; `spentMinutes` accumulates via /spend (and
+  // is floored at 0). Kept in their own block so the concurrent triage work
+  // (pinning / locking fields on this same model) merges without conflict.
+  estimateMinutes Int @default(0)
+  spentMinutes    Int @default(0)
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  // ─── Issue triage (issue #120): pinning + locking ─────────────────────────────
+  // Owned by the ISSUE-TRIAGE feature. Kept in one block so a concurrent edit that
+  // adds other Issue fields (quick-actions round) merges trivially.
+  //   pinnedAt   — non-null ⇒ pinned; capped at 3 per repo (enforced in routes),
+  //                surfaced in a distinct card row above the list, newest-pin first.
+  //   locked     — when true, only writers may comment (API-enforced); the composer
+  //                is replaced by a "Conversation locked" banner for non-writers.
+  //   lockedAt / lockedById / lockReason — denormalized lock provenance for display.
+  pinnedAt   DateTime?
+  locked     Boolean    @default(false)
+  lockedAt   DateTime?
+  lockedById String?
+  lockReason String?
+
   repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
   assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
@@ -282,6 +308,33 @@ model IssueComment {
 
   issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])
+}
+
+// ─── Saved filter views (issue #120) ─────────────────────────────────────────────
+
+/**
+ * A named, per-user snapshot of the issue/PR list filter bar — the
+ * state/label/assignee/author/sort/search combo serialized as a query string.
+ * Applied via a saved-views dropdown and shareable `?view=<id>` links. Pure
+ * metadata over the existing filtering: deleting one never touches issues.
+ * Scoped to a repo AND its owning user (each user keeps their own views), reusing
+ * the spine's ConversationSubjectType so the same model serves PR views later.
+ */
+model SavedFilter {
+  id        String                  @id @default(cuid())
+  repoId    String
+  ownerId   String
+  name      String
+  query     String
+  scope     ConversationSubjectType @default(ISSUE)
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  repo  Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  owner User @relation("SavedFilterOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, ownerId, scope, name])
+  @@index([repoId, ownerId])
 }
 
 // ─── Conversation spine: timeline events + cross-references ──────────────────────
@@ -437,6 +490,13 @@ model PullRequestReview {
   state         ReviewState @default(PENDING)
   body          String?
   submittedAt   DateTime?
+  /**
+   * Head (`fromBranch`) commit SHA at submission time; null for pending reviews.
+   * Staleness is computed, not stored: a submitted review is "stale" when this
+   * SHA differs from the PR head's current SHA (dismiss-on-push). Kept as a value
+   * rather than a flag so a force-push back to the reviewed SHA un-stales it.
+   */
+  commitSha     String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -464,10 +524,24 @@ model PullRequestReviewComment {
   body          String
   filePath      String
   position      String
+  /**
+   * Threads: a root comment has `inReplyToId` null; replies point at the root.
+   * Resolution state (resolvedAt/resolvedById) lives on the root comment only —
+   * a resolved root collapses the whole thread in the UI. Replies attach to the
+   * root's review, so answering a reviewer never opens a new pending review.
+   */
+  inReplyToId   String?
+  resolvedAt    DateTime?
+  resolvedById  String?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
   review        PullRequestReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
   pullRequest   PullRequest       @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   author        User              @relation("PRReviewCommentAuthor", fields: [authorId], references: [id])
+  resolvedBy    User?             @relation("PRReviewCommentResolver", fields: [resolvedById], references: [id])
+  inReplyTo     PullRequestReviewComment?  @relation("ReviewCommentThread", fields: [inReplyToId], references: [id], onDelete: Cascade)
+  replies       PullRequestReviewComment[] @relation("ReviewCommentThread")
+
+  @@index([pullRequestId, inReplyToId])
 }

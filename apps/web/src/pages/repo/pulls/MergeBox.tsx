@@ -63,26 +63,40 @@ export function MergeBox({
   const [resolving, setResolving] = useState<null | "ours" | "theirs">(null);
   const [reverting, setReverting] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
+  const [confirmMergeMethod, setConfirmMergeMethod] = useState<MergeMethod | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [method, setMethod] = useState<MergeMethod>(() => readMergeMethod(handle, repoName, browserStorage()));
 
   const busy = merging || closing || resolving !== null;
   const hasConflict = pr.mergeable === false;
 
+  const summary = pr.reviewSummary;
+  // Active (non-stale) change requests soft-gate the merge — confirm to override.
+  const changesRequested = summary?.changesRequested ?? 0;
+  const needsOverride = changesRequested > 0;
+
   function selectMethod(next: MergeMethod) {
     setMethod(next);
     writeMergeMethod(handle, repoName, next, browserStorage());
   }
 
-  async function doMerge(useMethod: MergeMethod) {
+  /** Merge — routes through a confirm step first when changes are requested. */
+  function requestMerge(useMethod: MergeMethod) {
+    if (needsOverride) setConfirmMergeMethod(useMethod);
+    else void doMerge(useMethod, false);
+  }
+
+  async function doMerge(useMethod: MergeMethod, override: boolean) {
     setMerging(true);
     setError(null);
     try {
-      await mergePull(token, handle, repoName, pr.number, useMethod);
+      await mergePull(token, handle, repoName, pr.number, useMethod, undefined, override);
+      setConfirmMergeMethod(null);
       onUpdate({ ...pr, state: "merged", mergeMethod: useMethod, mergedAt: new Date().toISOString() });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Merge failed";
       setError(msg);
+      setConfirmMergeMethod(null);
       if (isConflictError(msg)) onUpdate({ ...pr, mergeable: false });
     } finally {
       setMerging(false);
@@ -93,7 +107,7 @@ export function MergeBox({
     setResolving(strategy);
     setError(null);
     try {
-      await resolveMergePr(token, handle, repoName, pr.number, { strategy });
+      await resolveMergePr(token, handle, repoName, pr.number, { strategy }, undefined, needsOverride);
       onUpdate({ ...pr, state: "merged", mergedAt: new Date().toISOString() });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Resolution failed");
@@ -228,6 +242,9 @@ export function MergeBox({
         </div>
       </div>
 
+      {/* Review status */}
+      <ReviewStatusStrip summary={summary} />
+
       <div className="px-4 py-3">
         {error && (
           <p className="mb-3 text-fh-sm text-fh-danger-fg flex items-start gap-1.5">
@@ -283,12 +300,12 @@ export function MergeBox({
             {/* GitHub-style split button: primary action + method picker. */}
             <div className="inline-flex">
               <Button
-                variant="primary"
+                variant={needsOverride ? "danger" : "primary"}
                 leadingIcon={<GitMergeIcon size={15} />}
                 loading={merging}
                 disabled={busy}
                 className="rounded-r-none"
-                onClick={() => doMerge(method)}
+                onClick={() => requestMerge(method)}
               >
                 {activeOption.buttonLabel}
               </Button>
@@ -297,7 +314,7 @@ export function MergeBox({
                 width={340}
                 trigger={
                   <Button
-                    variant="primary"
+                    variant={needsOverride ? "danger" : "primary"}
                     disabled={busy}
                     aria-label="Choose a merge method"
                     className="rounded-l-none border-l border-fh-on-emphasis/25 px-2"
@@ -335,6 +352,56 @@ export function MergeBox({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmMergeMethod !== null}
+        title="Merge with requested changes?"
+        message={
+          <>
+            {changesRequested} reviewer{changesRequested === 1 ? " has" : "s have"} requested changes on this
+            pull request. Merging now overrides those requests.
+          </>
+        }
+        warning="A hard required-review policy (branch protection) isn't enforced yet — this override is intentional and soft (#85)."
+        confirmLabel="Merge anyway"
+        tone="danger"
+        loading={merging}
+        onConfirm={() => { if (confirmMergeMethod) void doMerge(confirmMergeMethod, true); }}
+        onCancel={() => setConfirmMergeMethod(null)}
+      />
+    </div>
+  );
+}
+
+/** Compact per-reviewer review status line for the merge box. */
+function ReviewStatusStrip({ summary }: { summary: PullRequest["reviewSummary"] }) {
+  if (!summary || (summary.reviewers.length === 0 && summary.unresolvedThreads === 0)) return null;
+
+  const parts: string[] = [];
+  if (summary.approvals > 0) parts.push(`${summary.approvals} approval${summary.approvals === 1 ? "" : "s"}`);
+  if (summary.changesRequested > 0) parts.push(`${summary.changesRequested} change${summary.changesRequested === 1 ? "" : "s"} requested`);
+  if (summary.commented > 0) parts.push(`${summary.commented} comment${summary.commented === 1 ? "" : "s"}`);
+  if (summary.staleCount > 0) parts.push(`${summary.staleCount} stale`);
+
+  const warn = summary.changesRequested > 0;
+  const good = !warn && summary.approvals > 0;
+
+  return (
+    <div
+      className={cx(
+        "flex items-center gap-2 flex-wrap px-4 py-2 border-b border-fh-border text-fh-sm",
+        warn ? "bg-fh-danger-muted/30 text-fh-danger-fg"
+          : good ? "bg-fh-success-muted/25 text-fh-success-fg"
+          : "text-fh-fg-muted",
+      )}
+    >
+      {warn ? <AlertIcon size={14} className="shrink-0" /> : good ? <CheckCircleIcon size={14} className="shrink-0" /> : null}
+      <span className="font-medium">{parts.length > 0 ? parts.join(" · ") : "No reviews yet"}</span>
+      {summary.unresolvedThreads > 0 && (
+        <span className="ml-auto text-fh-xs text-fh-fg-muted">
+          {summary.unresolvedThreads} unresolved thread{summary.unresolvedThreads === 1 ? "" : "s"}
+        </span>
+      )}
     </div>
   );
 }

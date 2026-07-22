@@ -2,16 +2,20 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getPRFileDiff } from "../../../api";
 import type { FileDiff, PRFileEntry } from "../../../types";
-import { resolveFileDiffViewer } from "../../../views/fileDiffViewerRegistry";
+import type { RepoRef } from "../../../lib/autolink";
+import { resolveFileDiffViewer, extensionForFilename } from "../../../views/fileDiffViewerRegistry";
 import { useSemanticExtensions } from "../../../lib/fhrFormats";
 import { Badge, Skeleton, cx } from "../../../ui";
 import { ChevronRightIcon } from "./prShared";
+import { CommentableTextDiff } from "./CommentableTextDiff";
+import { FileThreadList, groupThreads, type ReviewInteraction } from "./reviewShared";
+import type { ReviewComment } from "../../../types";
+import { CommentIcon } from "./reviewShared";
 
 /**
- * One expandable per-file diff card. The chrome (header, counts, status,
- * expand/collapse) is restyled to tokens; the diff body is still rendered by the
- * manifest-driven viewer registry — semantic (FHR) viewers included — so the
- * wiring is untouched and only framed natively here.
+ * One expandable per-file diff card. Text files render through the commentable
+ * diff (line-hover → inline review threads); semantic (FHR) and binary files keep
+ * the manifest-driven viewer, with any anchored review threads listed beneath.
  */
 export function PRFileRow({
   token,
@@ -21,6 +25,9 @@ export function PRFileRow({
   file,
   base,
   headRef,
+  repoRef,
+  comments,
+  review,
 }: {
   token: string;
   handle: string;
@@ -29,28 +36,44 @@ export function PRFileRow({
   file: PRFileEntry;
   base: string;
   headRef: string;
+  repoRef: RepoRef;
+  comments: ReviewComment[];
+  review: ReviewInteraction;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const fileComments = comments.filter((c) => c.filePath === file.path);
+  const threads = groupThreads(fileComments);
+  const openThreadCount = threads.filter((t) => !t.root.resolved).length;
+  // Auto-expand when a file carries review conversation.
+  const [expanded, setExpanded] = useState(threads.length > 0);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const filename = file.path.split("/").pop() ?? file.path;
   const semanticExtensions = useSemanticExtensions();
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
+  const isSemantic = semanticExtensions?.has(extensionForFilename(filename)) ?? false;
+
+  async function loadDiff() {
+    if (loaded || diffLoading) return;
+    setDiffLoading(true);
+    try {
+      const result = await getPRFileDiff(token, handle, repoName, prNumber, file.path);
+      setDiff(result.files[0] ?? null);
+    } catch {
+      setDiff(null);
+    } finally {
+      setDiffLoading(false);
+      setLoaded(true);
+    }
+  }
 
   async function toggle() {
-    if (!expanded && !diff) {
-      setDiffLoading(true);
-      try {
-        const result = await getPRFileDiff(token, handle, repoName, prNumber, file.path);
-        setDiff(result.files[0] ?? null);
-      } catch {
-        setDiff(null);
-      } finally {
-        setDiffLoading(false);
-      }
-    }
+    if (!expanded) await loadDiff();
     setExpanded((e) => !e);
   }
+
+  // Load the diff up-front when the card starts expanded (has threads).
+  if (expanded && !loaded && !diffLoading) void loadDiff();
 
   const displayPath =
     file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
@@ -87,6 +110,12 @@ export function PRFileRow({
           {displayPath}
         </Link>
         <div className="flex items-center gap-2 shrink-0 text-fh-xs font-mono">
+          {threads.length > 0 && (
+            <Badge tone={openThreadCount > 0 ? "accent" : "neutral"} pill={false} className="font-sans gap-1">
+              <CommentIcon size={11} />
+              {threads.length}
+            </Badge>
+          )}
           {!file.binary && file.additions > 0 && (
             <span className="text-fh-success-fg font-semibold">+{file.additions}</span>
           )}
@@ -108,9 +137,26 @@ export function PRFileRow({
               <Skeleton key={i} variant="text" width={`${50 + i * 10}%`} />
             ))}
           </div>
+        ) : diff && !isSemantic ? (
+          <CommentableTextDiff
+            file={diff}
+            filePath={file.path}
+            threads={threads}
+            repo={repoRef}
+            review={review}
+          />
         ) : diff ? (
           <div className="bg-fh-surface">
             <Viewer file={diff} repoBase={base} headRef={headRef} token={token} />
+            {threads.length > 0 && (
+              <div className="px-4 py-3 border-t border-fh-border">
+                <FileThreadList threads={threads} repo={repoRef} review={review} />
+              </div>
+            )}
+          </div>
+        ) : threads.length > 0 ? (
+          <div className="px-4 py-3">
+            <FileThreadList threads={threads} repo={repoRef} review={review} />
           </div>
         ) : (
           <p className="px-4 py-3 text-fh-sm text-fh-fg-muted italic">No diff available.</p>
