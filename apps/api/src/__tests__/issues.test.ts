@@ -47,6 +47,16 @@ vi.mock("../prisma.js", () => ({
       findFirst: vi.fn(),
       create: vi.fn(),
       delete: vi.fn(),
+      deleteMany: vi.fn(),
+    },
+    savedFilter: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      delete: vi.fn(),
+    },
+    timelineEvent: {
+      findFirst: vi.fn(),
     },
     $transaction: vi.fn(),
   },
@@ -105,6 +115,7 @@ vi.mock("bcryptjs", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
+import { recordEvent } from "../timeline-service.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -172,6 +183,20 @@ function makeComment(overrides = {}) {
     createdAt: new Date(),
     updatedAt: new Date(),
     author: { handle: "dev" },
+    ...overrides,
+  };
+}
+
+function makeSavedFilter(overrides = {}) {
+  return {
+    id: "sf-1",
+    repoId: "repo-issues-1",
+    ownerId: AUTHOR_ID,
+    name: "My open bugs",
+    query: "state=open&label=bug",
+    scope: "ISSUE" as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
     ...overrides,
   };
 }
@@ -787,5 +812,362 @@ describe("Issue labels", () => {
       headers: { authorization: ownerToken },
     });
     expect(res.statusCode).toBe(204);
+  });
+});
+
+// ─── Pinned issues (#120) ───────────────────────────────────────────────────────
+
+describe("Pinned issues", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let otherToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+    otherToken = await authHeader(app, OTHER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue() as never);
+    vi.mocked(prisma.issue.count).mockResolvedValue(0 as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ pinnedAt: new Date() }) as never);
+  });
+
+  it("POST pin → 200 and pins the issue (writer/owner)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/pin",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pinnedAt).not.toBeNull();
+  });
+
+  it("POST pin → 403 for a non-writer", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/pin",
+      headers: { authorization: otherToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("POST pin → 409 when the repo is already at the pin cap", async () => {
+    vi.mocked(prisma.issue.count).mockResolvedValue(3 as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/pin",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/pinned/i);
+  });
+
+  it("POST pin → 200 (no cap check) when the issue is already pinned", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ pinnedAt: new Date() }) as never);
+    vi.mocked(prisma.issue.count).mockResolvedValue(3 as never); // at cap, but this one is already pinned
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/pin",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("DELETE pin → 200 unpins (writer/owner)", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ pinnedAt: new Date() }) as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ pinnedAt: null }) as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/issues/1/pin",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pinnedAt).toBeNull();
+  });
+});
+
+// ─── Locked conversations (#120) ────────────────────────────────────────────────
+
+describe("Locked conversations", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let otherToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+    otherToken = await authHeader(app, OTHER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue() as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ locked: true }) as never);
+    vi.mocked(prisma.issueComment.create).mockResolvedValue(makeComment() as never);
+  });
+
+  it("POST lock → 200 (writer/owner)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/lock",
+      headers: { authorization: ownerToken },
+      payload: { reason: "too heated" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().locked).toBe(true);
+  });
+
+  it("POST lock → 403 for a non-writer", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/lock",
+      headers: { authorization: otherToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("DELETE lock → 200 unlocks (writer/owner)", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ locked: true }) as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ locked: false }) as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/issues/1/lock",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().locked).toBe(false);
+  });
+
+  it("blocks a non-collaborator comment with 403 when locked", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ locked: true }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/comments",
+      headers: { authorization: otherToken },
+      payload: { body: "let me chime in" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/locked/i);
+  });
+
+  it("still allows a collaborator (owner) to comment when locked", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ locked: true }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/comments",
+      headers: { authorization: ownerToken },
+      payload: { body: "official response" },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+});
+
+// ─── Saved filter views (#120) ──────────────────────────────────────────────────
+
+describe("Saved filter views", () => {
+  let app: FastifyInstance;
+  let authorToken: string;
+  let otherToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    authorToken = await authHeader(app, AUTHOR_ID);
+    otherToken = await authHeader(app, OTHER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.savedFilter.findMany).mockResolvedValue([makeSavedFilter()] as never);
+    vi.mocked(prisma.savedFilter.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.savedFilter.create).mockResolvedValue(makeSavedFilter() as never);
+    vi.mocked(prisma.savedFilter.delete).mockResolvedValue(makeSavedFilter() as never);
+  });
+
+  it("GET → 200 with the caller's saved views", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/repos/alice/my-repo/saved-filters",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.savedFilters).toHaveLength(1);
+    expect(body.savedFilters[0].name).toBe("My open bugs");
+    expect(body.savedFilters[0].scope).toBe("issue");
+  });
+
+  it("POST → 201 creating a view", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/saved-filters",
+      headers: { authorization: authorToken },
+      payload: { name: "My open bugs", query: "state=open&label=bug" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().name).toBe("My open bugs");
+  });
+
+  it("POST → 400 when name is missing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/saved-filters",
+      headers: { authorization: authorToken },
+      payload: { query: "state=open" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST → 409 on a duplicate name for the same user/scope", async () => {
+    vi.mocked(prisma.savedFilter.findFirst).mockResolvedValue(makeSavedFilter() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/saved-filters",
+      headers: { authorization: authorToken },
+      payload: { name: "My open bugs", query: "state=open" },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("POST → 401 when unauthenticated", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/saved-filters",
+      payload: { name: "x", query: "state=open" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("DELETE → 204 for the view's owner", async () => {
+    vi.mocked(prisma.savedFilter.findFirst).mockResolvedValue(makeSavedFilter({ ownerId: AUTHOR_ID }) as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/saved-filters/sf-1",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("DELETE → 403 when deleting another user's view", async () => {
+    vi.mocked(prisma.savedFilter.findFirst).mockResolvedValue(makeSavedFilter({ ownerId: AUTHOR_ID }) as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/saved-filters/sf-1",
+      headers: { authorization: otherToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("DELETE → 404 when the view doesn't exist", async () => {
+    vi.mocked(prisma.savedFilter.findFirst).mockResolvedValue(null);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/saved-filters/nope",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── Issue transfer (#120) ──────────────────────────────────────────────────────
+
+describe("Issue transfer", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(prisma.label.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.issueLabel.deleteMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue() as never);
+    vi.mocked(prisma.$transaction).mockImplementation(
+      async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma as unknown as typeof prisma),
+    );
+  });
+
+  it("re-numbers in the target sequence and records a timeline event on both sides", async () => {
+    // resolveRepo: source, then target (both owned by OWNER_ID).
+    vi.mocked(prisma.repo.findFirst)
+      .mockResolvedValueOnce(makeRepo() as never)
+      .mockResolvedValueOnce(makeRepo({ id: "repo-target", name: "other-repo" }) as never);
+    // issue.findFirst: source issue (with labels), then the target's top number.
+    vi.mocked(prisma.issue.findFirst)
+      .mockResolvedValueOnce(makeIssue({ labels: [] }) as never)
+      .mockResolvedValueOnce({ number: 5 } as never);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/transfer",
+      headers: { authorization: ownerToken },
+      payload: { targetRepo: "other-repo" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.number).toBe(6); // max(5) + 1 in the target
+    expect(body.repo).toBe("alice/other-repo");
+
+    // The moved row is updated to the target repo + fresh number.
+    expect(vi.mocked(prisma.issue.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ repoId: "repo-target", number: 6 }) }),
+    );
+    // A timeline event on each side (out + in).
+    const kinds = vi.mocked(recordEvent).mock.calls.map((c) => (c[0] as { kind: string; data?: { direction?: string } }));
+    expect(kinds.some((k) => k.kind === "transferred" && k.data?.direction === "out")).toBe(true);
+    expect(kinds.some((k) => k.kind === "transferred" && k.data?.direction === "in")).toBe(true);
+  });
+
+  it("rejects a transfer to a repo owned by a different owner (v0 same-owner constraint)", async () => {
+    vi.mocked(prisma.repo.findFirst)
+      .mockResolvedValueOnce(makeRepo() as never)
+      .mockResolvedValueOnce(makeRepo({ id: "repo-target", name: "other-repo", ownerId: "someone-else" }) as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValueOnce(makeIssue({ labels: [] }) as never);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/transfer",
+      headers: { authorization: ownerToken },
+      payload: { targetRepo: "other-repo" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/same owner/i);
+  });
+
+  it("400 when targetRepo is missing", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValueOnce(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValueOnce(makeIssue({ labels: [] }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/issues/1/transfer",
+      headers: { authorization: ownerToken },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns a 410 pointer at the old URL after an issue was transferred out", async () => {
+    // The row is gone from the source, but a transfer tombstone event remains.
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.timelineEvent.findFirst).mockResolvedValue({
+      id: "tl-1",
+      data: JSON.stringify({ direction: "out", repo: "alice/other-repo", number: 6 }),
+      createdAt: new Date(),
+    } as never);
+
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues/1" });
+    expect(res.statusCode).toBe(410);
+    expect(res.json().transferredTo).toMatchObject({ repo: "alice/other-repo", number: 6 });
   });
 });

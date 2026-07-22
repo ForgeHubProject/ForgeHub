@@ -21,6 +21,10 @@ const MergeMark = (p: IconProps) => <Svg {...p}><path d="M5.45 5.154A4.25 4.25 0
 const LinkMark = (p: IconProps) => <Svg {...p}><path d="M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 .75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z" /></Svg>;
 const PushMark = (p: IconProps) => <Svg {...p}><path d="M1 2.5A2.5 2.5 0 0 1 3.5 0h8.75a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0V1.5h-8a1 1 0 0 0-1 1v6.708A2.492 2.492 0 0 1 3.5 9h3.25a.75.75 0 0 1 0 1.5H3.5a1 1 0 0 0 0 2h5.75a.75.75 0 0 1 0 1.5H3.5A2.5 2.5 0 0 1 1 11.5Zm13.23 7.79a.75.75 0 0 0 1.06-1.06l-2.505-2.505a.75.75 0 0 0-1.06 0L9.72 9.229a.75.75 0 1 0 1.06 1.061l1.225-1.224v6.184a.75.75 0 0 0 1.5 0V9.066Z" /></Svg>;
 const PencilMark = (p: IconProps) => <Svg {...p}><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z" /></Svg>;
+const PinMark = (p: IconProps) => <Svg {...p}><path d="M9.884.32a1.75 1.75 0 0 1 2.474 0l2.322 2.322c.683.683.683 1.79 0 2.474l-1.157 1.157 1.415 4.132a.75.75 0 0 1-.18.77l-1.5 1.5a.75.75 0 0 1-1.155-.113L9.5 10.56l-3.72 3.72a.75.75 0 1 1-1.06-1.06l3.72-3.72-2.023-2.603a.75.75 0 0 1-.113-1.155l1.5-1.5a.75.75 0 0 1 .77-.18l4.132 1.415L13.6 3.116a.25.25 0 0 0 0-.354L11.278.44a.25.25 0 0 0-.354 0L9.767 1.597a.75.75 0 0 1-1.06-1.06Z" /></Svg>;
+const LockMark = (p: IconProps) => <Svg {...p}><path d="M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z" /></Svg>;
+const UnlockMark = (p: IconProps) => <Svg {...p}><path d="M5.5 4a2.5 2.5 0 0 1 4.607-1.346.75.75 0 1 0 1.264-.808A4 4 0 0 0 4 4v2h-.25C2.784 6 2 6.784 2 7.75v5.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25v-5.5C14 6.784 13.216 6 12.25 6H5.5Zm6.75 3.5a.25.25 0 0 1 .25.25v5.5a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25v-5.5a.25.25 0 0 1 .25-.25Z" /></Svg>;
+const TransferMark = (p: IconProps) => <Svg {...p}><path d="M2.75 1a.75.75 0 0 1 .75.75v10a.25.25 0 0 0 .25.25h9.5a.75.75 0 0 1 0 1.5h-9.5A1.75 1.75 0 0 1 2 11.75v-10A.75.75 0 0 1 2.75 1Zm10.5 2.44 2.03 2.03a.75.75 0 0 1 0 1.06l-2.03 2.03a.75.75 0 1 1-1.06-1.06l.72-.72H7.75a.75.75 0 0 1 0-1.5h5.16l-.72-.72a.75.75 0 0 1 1.06-1.06Z" /></Svg>;
 
 // ─── Data helpers ────────────────────────────────────────────────────────────────
 
@@ -101,6 +105,34 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
       return {
         icon: <PencilMark />, tone: "text-fh-fg-subtle",
         body: <>changed the title{from && to && <> from <span className="line-through text-fh-fg-subtle">{from}</span> to <span className="text-fh-fg">{to}</span></>}</>,
+      };
+    }
+    case "pinned":
+      return { icon: <PinMark />, tone: "text-fh-accent-fg", body: <>pinned this issue</> };
+    case "unpinned":
+      return { icon: <PinMark />, tone: "text-fh-fg-subtle", body: <>unpinned this issue</> };
+    case "locked": {
+      const reason = str(d.reason);
+      return {
+        icon: <LockMark />, tone: "text-fh-warning-fg",
+        body: <>locked this conversation{reason && <> as <span className="text-fh-fg">{reason}</span></>}</>,
+      };
+    }
+    case "unlocked":
+      return { icon: <UnlockMark />, tone: "text-fh-fg-subtle", body: <>unlocked this conversation</> };
+    case "transferred": {
+      const dir = str(d.direction);
+      const other = str(d.repo);
+      const otherNumber = num(d.number);
+      const ref = other && otherNumber != null ? `${other}#${otherNumber}` : other;
+      const link = other && otherNumber != null
+        ? <Link to={`/${other}/issues/${otherNumber}`} className="text-fh-accent-fg hover:underline">{ref}</Link>
+        : ref;
+      return {
+        icon: <TransferMark />, tone: "text-fh-fg-subtle",
+        body: dir === "in"
+          ? <>transferred this issue from {link}</>
+          : <>transferred this issue to {link}</>,
       };
     }
     default:
