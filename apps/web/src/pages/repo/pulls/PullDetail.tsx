@@ -1,14 +1,27 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  createPullComment, getPull, listPRCommits, listPRFiles, listPullComments, listPullTimeline,
+  createPullComment, createReview, createReviewComment, deleteReview, getPull,
+  listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
+  listReviews, replyToReviewThread, setReviewThreadResolved, submitReview,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
-import type { CommitInfo, IssueComment, PRFileEntry, PullRequest, TimelineEvent, User } from "../../../types";
+import type {
+  CommitInfo, IssueComment, PRFileEntry, PullRequest, Review, ReviewComment,
+  ReviewCommentPosition, TimelineEvent, User,
+} from "../../../types";
 import { Avatar, Button, RelativeTime, Skeleton, TabItem, TabNav, Textarea } from "../../../ui";
 import { MergeBox } from "./MergeBox";
 import { PRFileRow } from "./PRFileRow";
+import {
+  ReviewCard,
+  ReviewSubmitPanel,
+  ReviewVerdictIcon,
+  type ComposeMode,
+  type ReviewInteraction,
+  type Verdict,
+} from "./reviewShared";
 import {
   ArrowLeftIcon,
   BranchChip,
@@ -46,6 +59,10 @@ export function PullDetail({
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
+  const [reviewBusy, setReviewBusy] = useState(false);
+
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [prFiles, setPrFiles] = useState<PRFileEntry[] | null>(null);
@@ -68,6 +85,24 @@ export function PullDetail({
       setComments(c.comments);
       setEvents(tl.events);
     });
+  }, [token, handle, repoName, number]);
+
+  const refreshReviews = useCallback(() => {
+    Promise.all([
+      listReviews(token, handle, repoName, number).catch(() => ({ reviews: [] as Review[] })),
+      listReviewComments(token, handle, repoName, number).catch(() => ({ comments: [] as ReviewComment[] })),
+    ]).then(([r, c]) => {
+      setReviews(r.reviews);
+      setReviewComments(c.comments);
+    });
+  }, [token, handle, repoName, number]);
+
+  useEffect(() => { refreshReviews(); }, [refreshReviews]);
+
+  const refreshPr = useCallback(() => {
+    getPull(token, handle, repoName, number)
+      .then(setPr)
+      .catch(() => { /* keep prior PR on failure */ });
   }, [token, handle, repoName, number]);
 
   function refreshTimeline() {
@@ -142,10 +177,113 @@ export function PullDetail({
   const totalAdditions = prFiles?.reduce((s, f) => s + f.additions, 0) ?? 0;
   const totalDeletions = prFiles?.reduce((s, f) => s + f.deletions, 0) ?? 0;
 
-  // Comments and non-comment events, interleaved chronologically.
+  // ── Review derived state ──────────────────────────────────────────────────────
+  const isAuthor = pr.author === user.handle;
+  const isOwner = user.handle === handle; // repo owner handle == route handle
+  const pendingReview = reviews.find((r) => r.state === "pending" && r.author === user.handle) ?? null;
+  const hasPendingReview = pendingReview != null;
+  const pendingCount = reviewComments.filter((c) => c.pending).length;
+  const submittedReviews = reviews.filter((r) => r.state !== "pending" && r.submittedAt);
+  const canComment = !isAuthor && pr.state === "open";
+
+  async function onCreateReviewComment(
+    filePath: string,
+    position: ReviewCommentPosition,
+    body: string,
+    mode: ComposeMode,
+  ) {
+    setReviewBusy(true);
+    setError(null);
+    try {
+      const c = await createReviewComment(token, handle, repoName, number, { body, filePath, position });
+      // "Add single comment" submits a one-comment COMMENTED review immediately.
+      if (mode === "single") await submitReview(token, handle, repoName, number, c.reviewId, { state: "commented" });
+      refreshReviews();
+      refreshPr();
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add comment");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function onReplyThread(rootId: string, body: string) {
+    setReviewBusy(true);
+    setError(null);
+    try {
+      await replyToReviewThread(token, handle, repoName, number, rootId, body);
+      refreshReviews();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reply");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function onToggleResolve(rootId: string, resolved: boolean) {
+    setReviewBusy(true);
+    setError(null);
+    try {
+      await setReviewThreadResolved(token, handle, repoName, number, rootId, resolved);
+      refreshReviews();
+      refreshPr();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update thread");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function onSubmitReview(state: Verdict, body: string) {
+    setReviewBusy(true);
+    setError(null);
+    try {
+      if (pendingReview) {
+        await submitReview(token, handle, repoName, number, pendingReview.id, { state, body: body || undefined });
+      } else {
+        await createReview(token, handle, repoName, number, { state, body: body || undefined });
+      }
+      refreshReviews();
+      refreshPr();
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit review");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function onDiscardReview() {
+    if (!pendingReview) return;
+    setReviewBusy(true);
+    setError(null);
+    try {
+      await deleteReview(token, handle, repoName, number, pendingReview.id);
+      refreshReviews();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to discard review");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  const reviewInteraction: ReviewInteraction = {
+    currentUser: user.handle,
+    hasPendingReview,
+    canComment,
+    canResolve: (author) => isOwner || author === user.handle,
+    busy: reviewBusy,
+    onCreate: onCreateReviewComment,
+    onReply: onReplyThread,
+    onToggleResolve,
+  };
+
+  // Comments, non-comment events, and submitted reviews, interleaved chronologically.
   const stream = [
     ...comments.map((c) => ({ kind: "comment" as const, at: c.createdAt, comment: c })),
     ...events.map((ev) => ({ kind: "event" as const, at: ev.createdAt, event: ev })),
+    ...submittedReviews.map((rv) => ({ kind: "review" as const, at: rv.submittedAt ?? rv.createdAt, review: rv })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
   return (
@@ -200,7 +338,7 @@ export function PullDetail({
             </div>
           </div>
 
-          {/* Conversation: comments interleaved with timeline events */}
+          {/* Conversation: comments, submitted reviews, and timeline events */}
           {stream.map((item) =>
             item.kind === "comment" ? (
               <div key={`c-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
@@ -213,7 +351,11 @@ export function PullDetail({
                   <MarkdownRenderer content={item.comment.body} repo={repoRef} />
                 </div>
               </div>
+            ) : item.kind === "review" ? (
+              <ReviewCard key={`r-${item.review.id}`} review={item.review} repo={repoRef} />
             ) : (
+              // `reviewed` timeline events are intentionally rendered by ReviewCard
+              // above (from the reviews feed), so TimelineEventRow no-ops on them.
               <TimelineEventRow key={`e-${item.event.id}`} event={item.event} repo={repoRef} />
             ),
           )}
@@ -315,12 +457,19 @@ export function PullDetail({
               </div>
             ) : prFiles ? (
               <div className="space-y-3">
-                <p className="text-fh-sm text-fh-fg-muted">
-                  Showing <span className="font-semibold text-fh-fg">{prFiles.length}</span> changed file
-                  {prFiles.length !== 1 ? "s" : ""} with{" "}
-                  <span className="font-mono font-semibold text-fh-success-fg">+{totalAdditions}</span>{" "}
-                  <span className="font-mono font-semibold text-fh-danger-fg">−{totalDeletions}</span>
-                </p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-fh-sm text-fh-fg-muted">
+                    Showing <span className="font-semibold text-fh-fg">{prFiles.length}</span> changed file
+                    {prFiles.length !== 1 ? "s" : ""} with{" "}
+                    <span className="font-mono font-semibold text-fh-success-fg">+{totalAdditions}</span>{" "}
+                    <span className="font-mono font-semibold text-fh-danger-fg">−{totalDeletions}</span>
+                  </p>
+                  {canComment && (
+                    <span className="text-fh-xs text-fh-fg-subtle ml-auto">
+                      Hover a line and click <span className="font-semibold text-fh-accent-fg">+</span> to comment
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {prFiles.map((file) => (
                     <PRFileRow
@@ -332,21 +481,54 @@ export function PullDetail({
                       file={file}
                       base={base}
                       headRef={pr.fromBranch}
+                      repoRef={repoRef}
+                      comments={reviewComments}
+                      review={reviewInteraction}
                     />
                   ))}
                 </div>
               </div>
             ) : null)}
 
+          {/* Finish-your-review panel (open PRs) */}
+          {pr.state === "open" && (
+            <ReviewSubmitPanel
+              currentUser={user.handle}
+              isAuthor={isAuthor}
+              pendingCount={pendingCount}
+              hasPendingReview={hasPendingReview}
+              busy={reviewBusy}
+              onSubmit={onSubmitReview}
+              onDiscard={onDiscardReview}
+            />
+          )}
+
           {/* Merge box */}
-          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={(p) => { setPr(p); refreshTimeline(); }} />
+          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
         </div>
 
         {/* Sidebar */}
         <aside className="w-full lg:w-56 shrink-0 text-fh-sm">
           <div className="border-b border-fh-border pb-3 mb-3">
             <p className="font-semibold text-fh-fg mb-1.5">Reviewers</p>
-            <p className="text-fh-xs text-fh-fg-subtle">No reviewers assigned.</p>
+            {pr.reviewSummary && pr.reviewSummary.reviewers.length > 0 ? (
+              <ul className="space-y-1.5">
+                {pr.reviewSummary.reviewers.map((rv) => (
+                  <li key={rv.author} className="flex items-center gap-1.5">
+                    <Avatar name={rv.author} size={18} />
+                    <Link to={`/${rv.author}`} className="text-fh-sm text-fh-fg hover:text-fh-accent-fg truncate no-underline">
+                      {rv.author}
+                    </Link>
+                    <span className="ml-auto inline-flex items-center gap-1">
+                      {rv.stale && <span className="text-fh-xs text-fh-fg-subtle">stale</span>}
+                      <ReviewVerdictIcon state={rv.state} size={14} className={rv.stale ? "opacity-40" : undefined} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-fh-xs text-fh-fg-subtle">No reviews yet.</p>
+            )}
           </div>
           <div>
             <p className="font-semibold text-fh-fg mb-1.5">Labels</p>
