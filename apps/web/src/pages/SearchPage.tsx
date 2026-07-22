@@ -3,23 +3,38 @@ import { Link, useSearchParams } from "react-router-dom";
 import { search } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
-import type { SearchIssueResult, SearchRepoResult, SearchUserResult, User } from "../types";
+import type {
+  SearchCodeResult,
+  SearchEntityResult,
+  SearchIssueResult,
+  SearchRepoResult,
+  SearchUserResult,
+  User,
+} from "../types";
 import { Avatar, Badge, Button, EmptyState, Icons, RelativeTime, Skeleton, TextInput, cx } from "../ui";
 import { IssueClosedIcon, IssueOpenIcon, PersonIcon, RepoIcon, RepoRow, RowList } from "./listShared";
+import { CodeFileIcon, CodeResultCard, CubeIcon, EntityResultRow } from "./searchResults";
 
 type Props = { token: string; user: User; onLogout: () => void };
-type SearchType = "repos" | "issues" | "users";
+type SearchType = "repos" | "issues" | "users" | "code" | "entities";
 
 type SearchData = {
   repos: SearchRepoResult[];
   issues: SearchIssueResult[];
   users: SearchUserResult[];
+  code: SearchCodeResult[];
+  entities: SearchEntityResult[];
 };
 
-const EMPTY: SearchData = { repos: [], issues: [], users: [] };
+type CodeMeta = { truncated: boolean; timedOut: boolean; reposSearched: number };
+
+const EMPTY: SearchData = { repos: [], issues: [], users: [], code: [], entities: [] };
+const EMPTY_CODE_META: CodeMeta = { truncated: false, timedOut: false, reposSearched: 0 };
 
 const TYPES: { key: SearchType; label: string; icon: React.ReactNode }[] = [
   { key: "repos", label: "Repositories", icon: <RepoIcon size={16} /> },
+  { key: "code", label: "Code", icon: <CodeFileIcon size={16} /> },
+  { key: "entities", label: "Entities", icon: <CubeIcon size={16} /> },
   { key: "issues", label: "Issues", icon: <IssueOpenIcon size={16} /> },
   { key: "users", label: "Users", icon: <PersonIcon size={16} /> },
 ];
@@ -133,6 +148,7 @@ export function SearchPage({ token, user, onLogout }: Props) {
 
   const [inputValue, setInputValue] = useState(q);
   const [data, setData] = useState<SearchData>(EMPTY);
+  const [codeMeta, setCodeMeta] = useState<CodeMeta>(EMPTY_CODE_META);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,6 +159,7 @@ export function SearchPage({ token, user, onLogout }: Props) {
   useEffect(() => {
     if (!activeQuery) {
       setData(EMPTY);
+      setCodeMeta(EMPTY_CODE_META);
       setError(null);
       setLoading(false);
       return;
@@ -154,20 +171,34 @@ export function SearchPage({ token, user, onLogout }: Props) {
       search(token, activeQuery, "repos"),
       search(token, activeQuery, "issues"),
       search(token, activeQuery, "users"),
+      search(token, activeQuery, "code"),
+      search(token, activeQuery, "entities"),
     ])
-      .then(([repos, issues, users]) => {
+      .then(([repos, issues, users, code, entities]) => {
         if (cancelled) return;
-        if (repos.status === "rejected" && issues.status === "rejected" && users.status === "rejected") {
-          const reason = repos.reason;
+        if ([repos, issues, users, code, entities].every((r) => r.status === "rejected")) {
+          const reason = repos.status === "rejected" ? repos.reason : undefined;
           setError(reason instanceof Error ? reason.message : "Search failed");
           setData(EMPTY);
+          setCodeMeta(EMPTY_CODE_META);
           return;
         }
         setData({
           repos: repos.status === "fulfilled" ? (repos.value.results as SearchRepoResult[]) : [],
           issues: issues.status === "fulfilled" ? (issues.value.results as SearchIssueResult[]) : [],
           users: users.status === "fulfilled" ? (users.value.results as SearchUserResult[]) : [],
+          code: code.status === "fulfilled" ? (code.value.results as SearchCodeResult[]) : [],
+          entities: entities.status === "fulfilled" ? (entities.value.results as SearchEntityResult[]) : [],
         });
+        setCodeMeta(
+          code.status === "fulfilled"
+            ? {
+                truncated: Boolean(code.value.truncated),
+                timedOut: Boolean(code.value.timedOut),
+                reposSearched: code.value.reposSearched ?? 0,
+              }
+            : EMPTY_CODE_META,
+        );
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -190,6 +221,8 @@ export function SearchPage({ token, user, onLogout }: Props) {
 
   const counts: Record<SearchType, number> = {
     repos: data.repos.length,
+    code: data.code.length,
+    entities: data.entities.length,
     issues: data.issues.length,
     users: data.users.length,
   };
@@ -284,6 +317,45 @@ export function SearchPage({ token, user, onLogout }: Props) {
                   </RowList>
                 ))}
 
+              {!loading && !error && type === "code" &&
+                (data.code.length === 0 ? (
+                  <EmptyState
+                    bordered
+                    icon={<CodeFileIcon size={28} />}
+                    title="No code found"
+                    description={`No file contents match “${activeQuery}”. Try a fixed string, or narrow with path: / ext: / repo: qualifiers.`}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-3" aria-label="Code results">
+                    {(codeMeta.truncated || codeMeta.timedOut) && (
+                      <div className="rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-3 py-2 text-fh-xs text-fh-warning-fg">
+                        {codeMeta.timedOut
+                          ? "Search timed out on some repositories — results are partial."
+                          : "Showing the first matches — refine your query to narrow the results."}
+                      </div>
+                    )}
+                    {data.code.map((r) => (
+                      <CodeResultCard key={`${r.repo.ownerHandle}/${r.repo.name}:${r.path}`} result={r} query={activeQuery} />
+                    ))}
+                  </div>
+                ))}
+
+              {!loading && !error && type === "entities" &&
+                (data.entities.length === 0 ? (
+                  <EmptyState
+                    bordered
+                    icon={<CubeIcon size={28} />}
+                    title="No entities found"
+                    description={`No ingested artifact has a scene node matching “${activeQuery}”. Entity search covers glTF and other FHR structures across repos you can read.`}
+                  />
+                ) : (
+                  <RowList aria-label="Entity results">
+                    {data.entities.map((e) => (
+                      <EntityResultRow key={e.id} result={e} query={activeQuery} />
+                    ))}
+                  </RowList>
+                ))}
+
               {!loading && !error && type === "issues" &&
                 (data.issues.length === 0 ? (
                   <EmptyState
@@ -322,7 +394,7 @@ export function SearchPage({ token, user, onLogout }: Props) {
             className="py-20"
             icon={<Icons.SearchIcon size={40} />}
             title="Search ForgeHub"
-            description="Find repositories, issues, and users. Type at least two characters to begin."
+            description="Find repositories, code, FHR entities, issues, and users. Type at least two characters to begin."
           />
         )}
       </div>
