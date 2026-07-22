@@ -28,6 +28,13 @@ vi.mock("../prisma.js", () => ({
       update: vi.fn(),
       count: vi.fn(),
     },
+    // Review summary (merge gate + PR detail) reads these; default to "no reviews".
+    pullRequestReview: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    pullRequestReviewComment: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -556,6 +563,100 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
       url: "/repos/alice/my-repo/pulls/1/merge",
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe("POST /repos/:handle/:name/pulls/:number/merge — review gate", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  // A submitted CHANGES_REQUESTED review left against the current head SHA.
+  function changesRequestedReview(overrides = {}) {
+    return {
+      id: "rev-1", pullRequestId: "pr-1", authorId: "user-reviewer",
+      state: "CHANGES_REQUESTED", body: null, submittedAt: new Date(),
+      commitSha: "abc1234", createdAt: new Date(), updatedAt: new Date(),
+      author: { handle: "reviewer" }, ...overrides,
+    };
+  }
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+    vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
+  });
+
+  it("409 when an active change request blocks the merge", async () => {
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([changesRequestedReview()] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().changesRequested).toBe(true);
+    expect(res.json().error).toMatch(/changes were requested/i);
+  });
+
+  it("merges anyway with override:true", async () => {
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([changesRequestedReview()] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { override: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(true);
+  });
+
+  it("stale change request (head moved) no longer blocks — dismiss-on-push", async () => {
+    // Review was left against an old head; resolveBranchSha resolves head to abc1234.
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([
+      changesRequestedReview({ commitSha: "oldsha0" }),
+    ] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(true);
+  });
+});
+
+describe("GET /repos/:handle/:name/pulls/:number — review summary", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => { app = await createTestServer(); });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
+  });
+
+  it("includes a reviewSummary with counts, dropping stale approvals", async () => {
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([
+      { id: "r1", authorId: "u1", state: "APPROVED", submittedAt: new Date(1), commitSha: "abc1234", author: { handle: "amy" } },
+      { id: "r2", authorId: "u2", state: "APPROVED", submittedAt: new Date(2), commitSha: "stale00", author: { handle: "ben" } },
+      { id: "r3", authorId: "u3", state: "CHANGES_REQUESTED", submittedAt: new Date(3), commitSha: "abc1234", author: { handle: "cid" } },
+    ] as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.statusCode).toBe(200);
+    const s = res.json().reviewSummary;
+    expect(s.approvals).toBe(1);          // amy counts, ben is stale
+    expect(s.changesRequested).toBe(1);   // cid
+    expect(s.staleCount).toBe(1);         // ben
+    expect(s.reviewers).toHaveLength(3);
   });
 });
 
