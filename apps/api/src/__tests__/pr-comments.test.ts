@@ -786,3 +786,136 @@ describe("DELETE /repos/:handle/:name/pulls/:number/review-comments/:commentId",
     expect(res.statusCode).toBe(204);
   });
 });
+
+// ─── Thread replies ────────────────────────────────────────────────────────────
+
+describe("POST /repos/:handle/:name/pulls/:number/review-comments/:commentId/replies", () => {
+  let app: FastifyInstance;
+  let aliceToken: string;
+  let bobToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    aliceToken = await authHeader(app, ALICE_ID);
+    bobToken = await authHeader(app, BOB_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    // Root comment (inReplyToId: null) authored by alice, under review-1.
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      makeReviewComment({ inReplyToId: null }) as never,
+    );
+    vi.mocked(prisma.pullRequestReviewComment.create).mockResolvedValue(
+      makeReviewComment({ id: "reply-1", authorId: BOB_ID, author: { handle: "bob" }, body: "Fixed", inReplyToId: "rev-comment-1" }) as never,
+    );
+  });
+
+  it("PR author may reply to a reviewer's thread → 201 (no new pending review)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/rev-comment-1/replies",
+      headers: { authorization: bobToken },
+      payload: { body: "Fixed" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.author).toBe("bob");
+    expect(body.inReplyToId).toBe("rev-comment-1");
+    // Reply attaches to the root's existing review; no review was created.
+    expect(vi.mocked(prisma.pullRequestReview.create)).not.toHaveBeenCalled();
+    expect(vi.mocked(prisma.pullRequestReviewComment.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ reviewId: "review-1", inReplyToId: "rev-comment-1" }) }),
+    );
+  });
+
+  it("→ 400 when body is empty", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/rev-comment-1/replies",
+      headers: { authorization: aliceToken },
+      payload: { body: "  " },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("→ 404 when the target comment is missing", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(null);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/ghost/replies",
+      headers: { authorization: aliceToken },
+      payload: { body: "hello?" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── Thread resolution ─────────────────────────────────────────────────────────
+
+describe("POST/DELETE /repos/:handle/:name/pulls/:number/review-comments/:commentId/resolve", () => {
+  let app: FastifyInstance;
+  let aliceToken: string;   // repo owner (writer)
+  let otherToken: string;   // neither writer nor thread author
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    aliceToken = await authHeader(app, ALICE_ID);
+    otherToken = await authHeader(app, OTHER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      makeReviewComment({ inReplyToId: null }) as never,
+    );
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(
+      makeReviewComment({ resolvedAt: new Date(), resolvedBy: { handle: "alice" } }) as never,
+    );
+  });
+
+  it("writer resolves a thread → 200 resolved:true", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/rev-comment-1/resolve",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().resolved).toBe(true);
+    expect(vi.mocked(prisma.pullRequestReviewComment.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "rev-comment-1" }, data: expect.objectContaining({ resolvedById: ALICE_ID }) }),
+    );
+  });
+
+  it("non-writer non-author → 403", async () => {
+    // root authored by alice; OTHER_ID is not a writer
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/rev-comment-1/resolve",
+      headers: { authorization: otherToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("DELETE unresolves a thread → 200", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(
+      makeReviewComment({ resolvedAt: null, resolvedById: null }) as never,
+    );
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/rev-comment-1/resolve",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().resolved).toBe(false);
+    expect(vi.mocked(prisma.pullRequestReviewComment.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ resolvedAt: null, resolvedById: null }) }),
+    );
+  });
+});

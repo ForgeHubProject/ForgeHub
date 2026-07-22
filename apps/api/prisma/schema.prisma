@@ -37,6 +37,7 @@ model User {
   prComments       PullRequestComment[]       @relation("PRCommentAuthor")
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
+  resolvedReviewComments PullRequestReviewComment[] @relation("PRReviewCommentResolver")
   releases         Release[]                  @relation("ReleaseAuthor")
   releaseAssets    ReleaseAsset[]             @relation("ReleaseAssetUploader")
   notifications    Notification[]
@@ -480,6 +481,13 @@ model PullRequestReview {
   state         ReviewState @default(PENDING)
   body          String?
   submittedAt   DateTime?
+  /**
+   * Head (`fromBranch`) commit SHA at submission time; null for pending reviews.
+   * Staleness is computed, not stored: a submitted review is "stale" when this
+   * SHA differs from the PR head's current SHA (dismiss-on-push). Kept as a value
+   * rather than a flag so a force-push back to the reviewed SHA un-stales it.
+   */
+  commitSha     String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -507,10 +515,24 @@ model PullRequestReviewComment {
   body          String
   filePath      String
   position      String
+  /**
+   * Threads: a root comment has `inReplyToId` null; replies point at the root.
+   * Resolution state (resolvedAt/resolvedById) lives on the root comment only —
+   * a resolved root collapses the whole thread in the UI. Replies attach to the
+   * root's review, so answering a reviewer never opens a new pending review.
+   */
+  inReplyToId   String?
+  resolvedAt    DateTime?
+  resolvedById  String?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
   review        PullRequestReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
   pullRequest   PullRequest       @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   author        User              @relation("PRReviewCommentAuthor", fields: [authorId], references: [id])
+  resolvedBy    User?             @relation("PRReviewCommentResolver", fields: [resolvedById], references: [id])
+  inReplyTo     PullRequestReviewComment?  @relation("ReviewCommentThread", fields: [inReplyToId], references: [id], onDelete: Cascade)
+  replies       PullRequestReviewComment[] @relation("ReviewCommentThread")
+
+  @@index([pullRequestId, inReplyToId])
 }
