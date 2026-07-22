@@ -1,7 +1,8 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
   Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
+  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
+  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -809,6 +810,62 @@ export async function createIssueComment(
     token,
     body: JSON.stringify({ body }),
   });
+}
+
+// ─── issue triage: pin / lock / transfer (#120) ────────────────────────────────
+
+export async function pinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "POST", token });
+}
+
+export async function unpinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "DELETE", token });
+}
+
+export async function lockIssue(token: string, handle: string, repoName: string, number: number, reason?: string): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, {
+    method: "POST", token, body: JSON.stringify({ reason }),
+  });
+}
+
+export async function unlockIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, { method: "DELETE", token });
+}
+
+/** Move an issue to another repo owned by the same owner (v0). Returns the new location. */
+export async function transferIssue(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  targetRepo: string,
+): Promise<{ id: string; number: number; repo: string; handle: string; name: string; url: string }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/transfer`, {
+    method: "POST", token, body: JSON.stringify({ targetRepo }),
+  });
+}
+
+// ─── saved filter views (#120) — per user, per repo ────────────────────────────
+
+export async function listSavedFilters(token: string, handle: string, repoName: string): Promise<{ savedFilters: SavedFilter[] }> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, { token });
+}
+
+export async function createSavedFilter(
+  token: string,
+  handle: string,
+  repoName: string,
+  name: string,
+  query: string,
+  scope: "issue" | "pull_request" = "issue",
+): Promise<SavedFilter> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, {
+    method: "POST", token, body: JSON.stringify({ name, query, scope: scope.toUpperCase() }),
+  });
+}
+
+export async function deleteSavedFilter(token: string, handle: string, repoName: string, id: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/saved-filters/${id}`, { method: "DELETE", token });
 }
 
 // ─── timelines & PR conversation ─────────────────────────────────────────────────────────

@@ -355,6 +355,19 @@ export type Issue = {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  // Issue triage (#120) — optional so older list payloads still parse.
+  pinnedAt?: string | null;
+  locked?: boolean;
+  lockReason?: string | null;
+};
+
+/** A named, per-user snapshot of the issue-list filter bar (issue #120). */
+export type SavedFilter = {
+  id: string;
+  name: string;
+  query: string;
+  scope: "issue" | "pull_request";
+  createdAt: string;
 };
 
 export type IssueComment = {
