@@ -399,3 +399,47 @@ export type SearchUserResult = {
   displayName: string | null;
   createdAt: string;
 };
+
+/** One matching source line inside a code-search result file. `line` is 1-based. */
+export type CodeMatchLine = { line: number; preview: string };
+
+/**
+ * A code-search hit, grouped per file. `sha` is the canonical commit the ref
+ * resolved to, so line links can deep-link to a permalink `#L` anchor that
+ * never rots.
+ */
+export type SearchCodeResult = {
+  repo: { ownerHandle: string; name: string };
+  ref: string;
+  sha: string;
+  path: string;
+  matches: CodeMatchLine[];
+};
+
+/** Envelope of a `type=code` search response. */
+export type SearchCodeResponse = {
+  type: "code";
+  results: SearchCodeResult[];
+  truncated: boolean;
+  timedOut: boolean;
+  reposSearched: number;
+};
+
+/**
+ * An FHR entity hit — a structural match over ingested artifacts (e.g. a glTF
+ * scene node), something byte-level code search structurally cannot surface.
+ */
+export type SearchEntityResult = {
+  id: string;
+  name: string;
+  kind: string;
+  path: string;
+  repo: { ownerHandle: string; name: string };
+  snapshot: {
+    id: string;
+    sourceFile: string;
+    label: string | null;
+    handlerId: string;
+    gitCommitSha: string | null;
+  };
+};
