@@ -355,6 +355,9 @@ export type Issue = {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  /** Time tracking (issue #122): whole minutes; 0 = unset. */
+  estimateMinutes: number;
+  spentMinutes: number;
   // Issue triage (#120) — optional so older list payloads still parse.
   pinnedAt?: string | null;
   locked?: boolean;
