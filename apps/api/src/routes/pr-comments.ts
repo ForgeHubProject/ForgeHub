@@ -3,6 +3,7 @@ import { prisma } from "../prisma.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { notifyUser } from "../notifications-service.js";
 import { syncBodyReferences } from "../references-service.js";
+import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -164,25 +165,42 @@ export async function prCommentRoutes(app: FastifyInstance) {
       if (!ctx) return;
 
       const { body } = request.body as { body?: string };
-      if (!body?.trim()) return reply.status(400).send({ error: "body is required" });
 
-      const comment = await prisma.pullRequestComment.create({
-        data: {
-          pullRequestId: ctx.pr.id,
-          authorId: userId,
-          body: body.trim(),
+      // Strip leading `/command` lines out of the body (quick actions). On PRs,
+      // only /close and /reopen map onto a mutation — the rest are reported back.
+      const { commands, body: stripped } = parseQuickActions(body);
+      if (commands.length === 0 && !stripped) return reply.status(400).send({ error: "body is required" });
+
+      const comment = stripped
+        ? await prisma.pullRequestComment.create({
+            data: { pullRequestId: ctx.pr.id, authorId: userId, body: stripped },
+            include: { author: { select: { handle: true } } },
+          })
+        : null;
+
+      if (comment) {
+        await syncBodyReferences({
+          repo: ctx.repo, actorId: userId,
+          source: { type: "PR_COMMENT", id: comment.id },
+          container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
+          body: comment.body,
+        }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr comment)"));
+      }
+
+      const actions = await applyQuickActions({
+        repo: ctx.repo, actorId: userId, commands,
+        subject: {
+          type: "PULL_REQUEST",
+          pr: { id: ctx.pr.id, number: ctx.pr.number, authorId: ctx.pr.authorId, state: ctx.pr.state },
         },
-        include: { author: { select: { handle: true } } },
+        log: request.log,
+      }).catch((err) => {
+        request.log.error({ err }, "applyQuickActions (pr comment)");
+        return { applied: [], rejected: [] };
       });
 
-      await syncBodyReferences({
-        repo: ctx.repo, actorId: userId,
-        source: { type: "PR_COMMENT", id: comment.id },
-        container: { subjectType: "PULL_REQUEST", id: ctx.pr.id, number: ctx.pr.number, title: ctx.pr.title },
-        body: comment.body,
-      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr comment)"));
-
-      return reply.status(201).send(formatPRComment(comment));
+      const cf = comment ? formatPRComment(comment) : null;
+      return reply.status(201).send({ ...(cf ?? {}), comment: cf, actions });
     },
   );
 

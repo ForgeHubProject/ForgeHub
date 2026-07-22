@@ -253,6 +253,15 @@ model Issue {
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
+  // ─── Time tracking (issue #122 · quick-actions) ───────────────────────────────
+  // GitLab-style time tracking, stored as whole minutes. `estimateMinutes` is an
+  // absolute target set by /estimate; `spentMinutes` accumulates via /spend (and
+  // is floored at 0). Kept in their own block so the concurrent triage work
+  // (pinning / locking fields on this same model) merges without conflict.
+  estimateMinutes Int @default(0)
+  spentMinutes    Int @default(0)
+  // ──────────────────────────────────────────────────────────────────────────────
+
   repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
   assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
