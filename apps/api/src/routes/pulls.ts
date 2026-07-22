@@ -8,6 +8,7 @@ import { syncBodyReferences, closeIssuesForMergedPull } from "../references-serv
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
+import { computeReviewSummary } from "../review-summary.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -20,6 +21,31 @@ async function resolveActorIdentity(userId: string): Promise<CommitAuthor> {
   const name = user?.displayName?.trim() || user?.handle || "ForgeHub";
   const email = user?.email || "merge@forgehub.io";
   return { name, email };
+}
+
+/**
+ * Soft review gate for merges. Blocks when an ACTIVE (non-stale)
+ * CHANGES_REQUESTED review exists and the caller hasn't passed `override: true`.
+ * Intentionally soft — any writer can override via the merge box's confirm step;
+ * a hard required-approvals policy belongs to branch protection (issue #85).
+ */
+async function reviewGate(
+  storageKey: string | null,
+  prId: string,
+  fromBranch: string,
+  override: boolean,
+): Promise<{ blocked: boolean; changesRequested: number }> {
+  let headSha: string | null = null;
+  if (storageKey) {
+    try { headSha = await resolveBranchSha(storageKey, fromBranch); } catch { headSha = null; }
+  }
+  const summary = await computeReviewSummary(prId, headSha);
+  return { blocked: summary.changesRequested > 0 && !override, changesRequested: summary.changesRequested };
+}
+
+function changesRequestedError(count: number): string {
+  return `Changes were requested by ${count} reviewer${count === 1 ? "" : "s"}. `
+    + "Resolve the requested changes, or merge with override to proceed anyway.";
 }
 
 export async function pullRoutes(app: FastifyInstance) {
@@ -144,15 +170,21 @@ export async function pullRoutes(app: FastifyInstance) {
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    // Compute mergeable status if open and has storage
+    // Resolve the head SHA (drives mergeable + review staleness) and compute the
+    // review summary that the merge box renders and gates on.
     let mergeable: boolean | null = null;
-    if (pr.state === "OPEN" && repo.storageKey) {
+    let headSha: string | null = null;
+    if (repo.storageKey) {
       try {
-        const fromSha = await resolveBranchSha(repo.storageKey, pr.fromBranch);
-        const toSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
-        mergeable = !!(fromSha && toSha);
-      } catch { mergeable = false; }
+        headSha = await resolveBranchSha(repo.storageKey, pr.fromBranch);
+        if (pr.state === "OPEN") {
+          const toSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
+          mergeable = !!(headSha && toSha);
+        }
+      } catch { mergeable = pr.state === "OPEN" ? false : null; }
     }
+
+    const reviewSummary = await computeReviewSummary(pr.id, headSha);
 
     return {
       id: pr.id,
@@ -163,6 +195,8 @@ export async function pullRoutes(app: FastifyInstance) {
       toBranch: pr.toBranch,
       state: pr.state.toLowerCase(),
       mergeable,
+      headSha,
+      reviewSummary,
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
@@ -185,10 +219,16 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
 
-    const { commitMessage, mergeMethod: rawMethod } = (request.body ?? {}) as { commitMessage?: string; mergeMethod?: string };
+    const { commitMessage, mergeMethod: rawMethod, override } = (request.body ?? {}) as { commitMessage?: string; mergeMethod?: string; override?: boolean };
     const mergeMethod: MergeMethod = (rawMethod ?? "merge") as MergeMethod;
     if (!MERGE_METHODS.includes(mergeMethod)) {
       return reply.status(400).send({ error: `mergeMethod must be one of: ${MERGE_METHODS.join(", ")}` });
+    }
+
+    // Soft review gate: block on active change requests unless overridden.
+    const gate = await reviewGate(repo.storageKey, pr.id, pr.fromBranch, override === true);
+    if (gate.blocked) {
+      return reply.status(409).send({ error: changesRequestedError(gate.changesRequested), changesRequested: true });
     }
     const message = commitMessage?.trim() || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number})`;
 
@@ -265,6 +305,7 @@ export async function pullRoutes(app: FastifyInstance) {
       strategy?: string;
       commitMessage?: string;
       files?: MergeFileResolution[];
+      override?: boolean;
     };
 
     const hasFiles = Array.isArray(body.files) && body.files.length > 0;
@@ -273,6 +314,12 @@ export async function pullRoutes(app: FastifyInstance) {
       return reply.status(400).send({
         error: "Provide strategy ('ours' | 'theirs') or a non-empty files resolution list",
       });
+    }
+
+    // Soft review gate: block on active change requests unless overridden.
+    const gate = await reviewGate(repo.storageKey, pr.id, pr.fromBranch, body.override === true);
+    if (gate.blocked) {
+      return reply.status(409).send({ error: changesRequestedError(gate.changesRequested), changesRequested: true });
     }
 
     const message =

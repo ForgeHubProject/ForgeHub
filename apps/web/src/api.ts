@@ -1,7 +1,8 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
   Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
+  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
+  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
 
 /**
@@ -427,11 +428,12 @@ export async function mergePull(
   number: number,
   mergeMethod: MergeMethod = "merge",
   commitMessage?: string,
+  override?: boolean,
 ): Promise<{ merged: boolean; sha: string; method: MergeMethod }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge`, {
     method: "POST",
     token,
-    body: JSON.stringify({ mergeMethod, commitMessage }),
+    body: JSON.stringify({ mergeMethod, commitMessage, override }),
   });
 }
 
@@ -474,11 +476,12 @@ export async function resolveMergePr(
   number: number,
   options: { strategy: "ours" | "theirs" } | { files: MergeFileResolution[] },
   commitMessage?: string,
+  override?: boolean,
 ): Promise<{ merged: boolean; sha: string }> {
   const body =
     "strategy" in options
-      ? { strategy: options.strategy, commitMessage }
-      : { files: options.files, commitMessage };
+      ? { strategy: options.strategy, commitMessage, override }
+      : { files: options.files, commitMessage, override };
   return req(`/repos/${handle}/${repoName}/pulls/${number}/merge-resolve`, {
     method: "POST",
     token,
@@ -809,6 +812,62 @@ export async function createIssueComment(
   });
 }
 
+// ─── issue triage: pin / lock / transfer (#120) ────────────────────────────────
+
+export async function pinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "POST", token });
+}
+
+export async function unpinIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/pin`, { method: "DELETE", token });
+}
+
+export async function lockIssue(token: string, handle: string, repoName: string, number: number, reason?: string): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, {
+    method: "POST", token, body: JSON.stringify({ reason }),
+  });
+}
+
+export async function unlockIssue(token: string, handle: string, repoName: string, number: number): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/lock`, { method: "DELETE", token });
+}
+
+/** Move an issue to another repo owned by the same owner (v0). Returns the new location. */
+export async function transferIssue(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  targetRepo: string,
+): Promise<{ id: string; number: number; repo: string; handle: string; name: string; url: string }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/transfer`, {
+    method: "POST", token, body: JSON.stringify({ targetRepo }),
+  });
+}
+
+// ─── saved filter views (#120) — per user, per repo ────────────────────────────
+
+export async function listSavedFilters(token: string, handle: string, repoName: string): Promise<{ savedFilters: SavedFilter[] }> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, { token });
+}
+
+export async function createSavedFilter(
+  token: string,
+  handle: string,
+  repoName: string,
+  name: string,
+  query: string,
+  scope: "issue" | "pull_request" = "issue",
+): Promise<SavedFilter> {
+  return req(`/repos/${handle}/${repoName}/saved-filters`, {
+    method: "POST", token, body: JSON.stringify({ name, query, scope: scope.toUpperCase() }),
+  });
+}
+
+export async function deleteSavedFilter(token: string, handle: string, repoName: string, id: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/saved-filters/${id}`, { method: "DELETE", token });
+}
+
 // ─── timelines & PR conversation ─────────────────────────────────────────────────────────
 
 export async function listIssueTimeline(
@@ -925,6 +984,149 @@ export async function setIssueSpent(
     token,
     body: JSON.stringify({ minutes }),
   });
+}
+
+// ─── PR reviews: submissions, inline comments, threads ──────────────────────────
+
+export type ReviewVerdict = "approved" | "changes_requested" | "commented";
+
+/** All reviews visible to the caller (submitted reviews + the caller's own draft). */
+export async function listReviews(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ reviews: Review[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews`, { token: token ?? undefined });
+}
+
+/** All visible inline review comments (submitted, plus the caller's own drafts). */
+export async function listReviewComments(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ comments: ReviewComment[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments`, { token: token ?? undefined });
+}
+
+/**
+ * Add an inline review comment. Auto-attaches to (or opens) the caller's pending
+ * review; the returned comment carries its `reviewId` so a single-comment flow can
+ * immediately submit that review.
+ */
+export async function createReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  input: { body: string; filePath: string; position: ReviewCommentPosition },
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Submit a fresh review (summary only — no pre-composed inline drafts). */
+export async function createReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  input: { state: ReviewVerdict; body?: string },
+): Promise<Review> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Submit the caller's pending review (folding in its draft inline comments). */
+export async function submitReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  reviewId: string,
+  input: { state: ReviewVerdict; body?: string },
+): Promise<Review> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews/${reviewId}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Discard the caller's pending (draft) review. */
+export async function deleteReview(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  reviewId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/reviews/${reviewId}`, { method: "DELETE", token });
+}
+
+/** Reply to a review thread (attaches to the thread's root review). */
+export async function replyToReviewThread(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  body: string,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}/replies`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Resolve (true) or unresolve (false) a review thread by any comment in it. */
+export async function setReviewThreadResolved(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  resolved: boolean,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}/resolve`, {
+    method: resolved ? "POST" : "DELETE",
+    token,
+  });
+}
+
+/** Edit an inline review comment body (author only). */
+export async function updateReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+  body: string,
+): Promise<ReviewComment> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Delete an inline review comment (author or repo owner). */
+export async function deleteReviewComment(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}`, { method: "DELETE", token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────

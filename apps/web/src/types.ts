@@ -216,6 +216,62 @@ export type PRFileEntry = {
   status: "added" | "modified" | "deleted" | "renamed";
 };
 
+/** Latest-submitted review state for one reviewer (server-computed). */
+export type ReviewerSummary = {
+  author: string;
+  state: "approved" | "changes_requested" | "commented";
+  stale: boolean;
+  submittedAt: string | null;
+  commitSha: string | null;
+};
+
+/** Server-computed review status surfaced on the PR detail + merge box. */
+export type ReviewSummary = {
+  reviewers: ReviewerSummary[];
+  approvals: number;
+  changesRequested: number;
+  commented: number;
+  staleCount: number;
+  unresolvedThreads: number;
+};
+
+/** A position a review comment is anchored to. */
+export type ReviewCommentPosition =
+  | { type: "text"; line: number; side: "base" | "incoming" }
+  | { type: "gltf"; entityId: string };
+
+/** One inline review comment (thread root when inReplyToId is null). */
+export type ReviewComment = {
+  id: string;
+  reviewId: string;
+  body: string;
+  author: string;
+  filePath: string;
+  position: ReviewCommentPosition;
+  inReplyToId: string | null;
+  resolved: boolean;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  /** True while the comment belongs to the viewer's own unsubmitted (draft) review. */
+  pending: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** A submitted or pending pull-request review. */
+export type Review = {
+  id: string;
+  state: "pending" | "approved" | "changes_requested" | "commented";
+  body: string | null;
+  author: string;
+  submittedAt: string | null;
+  commitSha: string | null;
+  stale: boolean;
+  commentCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PullRequest = {
   id: string;
   number: number;
@@ -225,6 +281,8 @@ export type PullRequest = {
   toBranch: string;
   state: "open" | "merged" | "closed";
   mergeable?: boolean | null;
+  headSha?: string | null;
+  reviewSummary?: ReviewSummary;
   mergedAt: string | null;
   mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;
@@ -300,6 +358,19 @@ export type Issue = {
   /** Time tracking (issue #122): whole minutes; 0 = unset. */
   estimateMinutes: number;
   spentMinutes: number;
+  // Issue triage (#120) — optional so older list payloads still parse.
+  pinnedAt?: string | null;
+  locked?: boolean;
+  lockReason?: string | null;
+};
+
+/** A named, per-user snapshot of the issue-list filter bar (issue #120). */
+export type SavedFilter = {
+  id: string;
+  name: string;
+  query: string;
+  scope: "issue" | "pull_request";
+  createdAt: string;
 };
 
 export type IssueComment = {

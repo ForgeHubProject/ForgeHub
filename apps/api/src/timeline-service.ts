@@ -16,9 +16,16 @@ export type TimelineEventKind =
   | "closed"
   | "reopened"
   | "merged"
+  | "reviewed"
   | "referenced"
   | "head_pushed"
-  | "title_changed";
+  | "title_changed"
+  // Issue triage (#120)
+  | "pinned"
+  | "unpinned"
+  | "locked"
+  | "unlocked"
+  | "transferred";
 
 export type RecordEventParams = {
   repoId: string;
