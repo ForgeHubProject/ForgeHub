@@ -852,6 +852,81 @@ export async function createPullComment(
   });
 }
 
+// ─── quick actions + time tracking (issue #122) ───────────────────────────────────────────
+
+/** One quick action that was applied or rejected when a comment was posted. */
+export type QuickAction = { command: string; summary?: string; reason?: string };
+
+/** Applied/rejected quick-action summary the UI can toast after posting a comment. */
+export type CommentActionSummary = { applied: QuickAction[]; rejected: QuickAction[] };
+
+/** A posted comment plus the quick-action summary. `comment` is null for a command-only body. */
+export type CommentWithActions = { comment: IssueComment | null; actions: CommentActionSummary };
+
+/**
+ * Post an issue comment and surface any quick actions (`/close`, `/label …`,
+ * `/estimate 2h` …) it triggered. Command lines are stripped server-side; if the
+ * body was only commands, `comment` comes back null but the actions still applied.
+ */
+export async function createIssueCommentWithActions(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<CommentWithActions> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Post a PR comment, surfacing any quick actions (on PRs: `/close`, `/reopen`). */
+export async function createPullCommentWithActions(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  body: string,
+): Promise<CommentWithActions> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ body }),
+  });
+}
+
+/** Set an issue's time estimate (absolute whole minutes; 0 clears it). Writer-only. */
+export async function setIssueEstimate(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  minutes: number,
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/estimate`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ minutes }),
+  });
+}
+
+/** Set an issue's total spent time (absolute whole minutes; 0 clears it). Writer-only. */
+export async function setIssueSpent(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  minutes: number,
+): Promise<Issue> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/spent`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ minutes }),
+  });
+}
+
 // ─── labels ─────────────────────────────────────────────────────────────────────────────
 
 export async function listLabels(
