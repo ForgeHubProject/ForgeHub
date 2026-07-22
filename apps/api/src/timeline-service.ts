@@ -16,6 +16,7 @@ export type TimelineEventKind =
   | "closed"
   | "reopened"
   | "merged"
+  | "reviewed"
   | "referenced"
   | "head_pushed"
   | "title_changed";
