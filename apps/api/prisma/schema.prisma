@@ -23,6 +23,9 @@ model User {
   passwordHash   String
   handle         String             @unique
   displayName    String?
+  // Global opt-in for email delivery of notifications. Default OFF so existing
+  // users are never surprised by mail; they enable it from the Notifications page.
+  emailNotifications Boolean         @default(false)
   bio            String?
   location       String?
   website        String?
