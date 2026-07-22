@@ -6,6 +6,7 @@ import { loginBodySchema, registerBodySchema } from "../validation.js";
 type DbUser = {
   id: string; email: string; handle: string; displayName: string | null;
   bio: string | null; location: string | null; website: string | null; createdAt: Date;
+  emailNotifications: boolean;
 };
 
 function publicUser(u: DbUser) {
@@ -17,6 +18,7 @@ function publicUser(u: DbUser) {
     bio: u.bio,
     location: u.location,
     website: u.website,
+    emailNotifications: u.emailNotifications,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -89,15 +91,16 @@ export async function authRoutes(app: FastifyInstance) {
 
   // Update own profile
   app.patch("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { displayName, bio, location, website } = request.body as {
-      displayName?: string; bio?: string; location?: string; website?: string;
+    const { displayName, bio, location, website, emailNotifications } = request.body as {
+      displayName?: string; bio?: string; location?: string; website?: string; emailNotifications?: boolean;
     };
 
-    const data: Record<string, string | null> = {};
+    const data: Record<string, string | boolean | null> = {};
     if (displayName !== undefined) data.displayName = displayName.trim() || null;
     if (bio !== undefined) data.bio = bio.trim() || null;
     if (location !== undefined) data.location = location.trim() || null;
     if (website !== undefined) data.website = website.trim() || null;
+    if (emailNotifications !== undefined) data.emailNotifications = Boolean(emailNotifications);
 
     if (Object.keys(data).length === 0) {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user.sub } });
