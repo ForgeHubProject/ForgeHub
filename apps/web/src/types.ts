@@ -6,6 +6,8 @@ export type User = {
   bio?: string | null;
   location?: string | null;
   website?: string | null;
+  /** Global opt-in for email delivery of notifications. */
+  emailNotifications?: boolean;
   createdAt?: string;
 };
 
@@ -419,7 +421,7 @@ export type Notification = {
   subjectType: "issue" | "pull_request" | "release";
   subjectId: string;
   subjectTitle: string;
-  reason: "assigned" | "comment" | "review_requested" | "subscribed";
+  reason: "assigned" | "comment" | "review_requested" | "subscribed" | "mentioned";
   read: boolean;
   repo: string;
   updatedAt: string;

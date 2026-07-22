@@ -16,7 +16,7 @@ vi.mock("../prisma.js", () => ({
     pullRequestComment: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     pullRequestReview: { findMany: vi.fn().mockResolvedValue([]) },
     pullRequestReviewComment: { findMany: vi.fn().mockResolvedValue([]) },
-    notification: { upsert: vi.fn() },
+    notification: { upsert: vi.fn(), findUnique: vi.fn() },
     crossReference: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
     timelineEvent: { create: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn(),
@@ -94,6 +94,7 @@ beforeEach(() => {
   vi.mocked(prisma.timelineEvent.create).mockResolvedValue({} as never);
   vi.mocked(prisma.crossReference.create).mockResolvedValue({} as never);
   vi.mocked(prisma.notification.upsert).mockResolvedValue({} as never);
+  vi.mocked(prisma.notification.findUnique).mockResolvedValue(null as never);
 });
 
 function lastCreate(kind?: string) {

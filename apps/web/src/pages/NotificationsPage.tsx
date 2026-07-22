@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { deleteNotification, listNotifications, markAllNotificationsRead, markNotificationRead } from "../api";
+import { deleteNotification, listNotifications, markAllNotificationsRead, markNotificationRead, setEmailNotifications } from "../api";
 import { Header } from "../components/Header";
 import type { Notification, User } from "../types";
 import {
@@ -13,6 +13,8 @@ type Props = {
   token: string;
   user: User;
   onLogout: () => void;
+  /** Propagate a preference change back up so the cached user stays in sync. */
+  onUserChange?: (user: User) => void;
 };
 
 // ── local Octicon-style marks ─────────────────────────────────────────────────
@@ -43,10 +45,10 @@ function subjectColor(type: Notification["subjectType"]) {
 }
 
 const REASON_LABEL: Record<Notification["reason"], string> = {
-  assigned: "Assigned", comment: "Comment", review_requested: "Review requested", subscribed: "Subscribed",
+  assigned: "Assigned", comment: "Comment", review_requested: "Review requested", subscribed: "Subscribed", mentioned: "Mentioned",
 };
 const REASON_TONE: Record<Notification["reason"], BadgeTone> = {
-  assigned: "warning", comment: "accent", review_requested: "purple", subscribed: "neutral",
+  assigned: "warning", comment: "accent", review_requested: "purple", subscribed: "neutral", mentioned: "success",
 };
 
 function groupByRepo(items: Notification[]): Array<{ repo: string; items: Notification[] }> {
@@ -58,12 +60,31 @@ function groupByRepo(items: Notification[]): Array<{ repo: string; items: Notifi
   return Array.from(map.entries()).map(([repo, items]) => ({ repo, items }));
 }
 
-export function NotificationsPage({ token, user, onLogout }: Props) {
+export function NotificationsPage({ token, user, onLogout, onUserChange }: Props) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<"unread" | "all">("unread");
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState<boolean>(!!user.emailNotifications);
+  const [savingEmail, setSavingEmail] = useState(false);
   const { toast } = useToast();
+
+  async function toggleEmail() {
+    const next = !emailEnabled;
+    setEmailEnabled(next);
+    setSavingEmail(true);
+    try {
+      const res = await setEmailNotifications(token, next);
+      setEmailEnabled(!!res.user.emailNotifications);
+      onUserChange?.(res.user);
+      toast(next ? "Email notifications enabled" : "Email notifications turned off", { tone: "success" });
+    } catch {
+      setEmailEnabled(!next); // revert the optimistic flip
+      toast("Couldn't update email notifications", { tone: "danger" });
+    } finally {
+      setSavingEmail(false);
+    }
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -116,7 +137,43 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
           }
         />
 
-        <TabNav aria-label="Filter notifications" className="mt-4 mb-5">
+        {/* Email delivery preference — global opt-in, default off. */}
+        <div className="mt-4 flex items-start justify-between gap-4 rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-fh-sm font-semibold text-fh-fg">Email notifications</span>
+              <Badge tone={emailEnabled ? "success" : "neutral"}>{emailEnabled ? "On" : "Off"}</Badge>
+            </div>
+            <p className="mt-1 text-fh-xs text-fh-fg-muted leading-snug max-w-[62ch]">
+              When on, ForgeHub emails you when you're mentioned, assigned, or there's new activity on things you
+              follow — to <span className="font-medium text-fh-fg-muted">{user.email}</span>. Every email includes a
+              one-click unsubscribe link.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={emailEnabled}
+            aria-label="Toggle email notifications"
+            disabled={savingEmail}
+            onClick={() => void toggleEmail()}
+            className={cx(
+              "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors mt-0.5",
+              "cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fh-accent-emphasis focus-visible:ring-offset-2 focus-visible:ring-offset-fh-canvas",
+              emailEnabled ? "bg-fh-accent-emphasis" : "bg-fh-border",
+            )}
+          >
+            <span
+              className={cx(
+                "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform",
+                emailEnabled ? "translate-x-[22px]" : "translate-x-0.5",
+              )}
+            />
+          </button>
+        </div>
+
+        <TabNav aria-label="Filter notifications" className="mt-5 mb-5">
           <TabItem active={filter === "unread"} count={unreadCount} onClick={() => setFilter("unread")}>Unread</TabItem>
           <TabItem active={filter === "all"} count={notifications.length} onClick={() => setFilter("all")}>All</TabItem>
         </TabNav>

@@ -135,6 +135,11 @@ export async function updateMyProfile(
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
 }
 
+/** Toggle the current user's global email-notifications preference. */
+export async function setEmailNotifications(token: string, enabled: boolean): Promise<{ user: User }> {
+  return req("/users/me", { method: "PATCH", token, body: JSON.stringify({ emailNotifications: enabled }) });
+}
+
 export async function getUserRepos(token: string | null, handle: string): Promise<{ repos: Repo[] }> {
   return req(`/users/${handle}/repos`, { token: token ?? undefined });
 }
