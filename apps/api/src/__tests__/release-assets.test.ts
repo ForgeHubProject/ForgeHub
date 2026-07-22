@@ -115,16 +115,13 @@ describe("release asset upload/download roundtrip", () => {
       randomBytes(2048),
     ]);
 
-    vi.mocked(prisma.releaseAsset.create).mockImplementation(
-      async (args: { data: Record<string, unknown> }) =>
-        ({
-          id: "asset-1",
-          ...args.data,
-          downloadCount: 0,
-          uploadedBy: { handle: "alice" },
-          createdAt: NOW,
-        }) as never,
-    );
+    vi.mocked(prisma.releaseAsset.create).mockImplementation((async (args: { data: Record<string, unknown> }) => ({
+      id: "asset-1",
+      ...args.data,
+      downloadCount: 0,
+      uploadedBy: { handle: "alice" },
+      createdAt: NOW,
+    })) as never);
 
     const up = multipart("payload.bin", original);
     const upRes = await app.inject({
@@ -168,10 +165,8 @@ describe("release asset upload/download roundtrip", () => {
   });
 
   it("increments downloadCount on each download", async () => {
-    vi.mocked(prisma.releaseAsset.create).mockImplementation(
-      async (args: { data: Record<string, unknown> }) =>
-        ({ id: "asset-2", ...args.data, downloadCount: 0, uploadedBy: { handle: "alice" }, createdAt: NOW }) as never,
-    );
+    vi.mocked(prisma.releaseAsset.create).mockImplementation((async (args: { data: Record<string, unknown> }) =>
+      ({ id: "asset-2", ...args.data, downloadCount: 0, uploadedBy: { handle: "alice" }, createdAt: NOW })) as never);
     const up = multipart("count.dat", randomBytes(64));
     await app.inject({
       method: "POST",
