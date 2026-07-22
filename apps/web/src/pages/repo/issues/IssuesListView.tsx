@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Avatar, Button, DropdownMenu, DropdownItem, DropdownLabel,
+  Avatar, Button, cx, Dialog, DropdownMenu, DropdownItem, DropdownLabel,
   EmptyState, LabelChip, RelativeTime, Spinner, TextInput,
 } from "../../../ui";
-import { CheckIcon, SearchIcon } from "../../../ui/icons";
-import { listIssues, listLabels, listRepoMembers, RepoMember } from "../../../api";
-import type { Issue, Label } from "../../../types";
+import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "../../../ui/icons";
+import {
+  createSavedFilter, deleteSavedFilter, listIssues, listLabels, listRepoMembers,
+  listSavedFilters, RepoMember,
+} from "../../../api";
+import type { Issue, Label, SavedFilter } from "../../../types";
 import { StateIcon } from "./parts";
-import { FilterTrigger } from "./pickers";
-import { CommentIcon, IssueOpenedIcon, PersonIcon, SortIcon, TagIcon } from "./icons";
+import { FilterTrigger, Popover } from "./pickers";
+import { BookmarkIcon, CommentIcon, IssueOpenedIcon, PersonIcon, PinIcon, SortIcon, TagIcon } from "./icons";
 
 type Sort = "newest" | "oldest";
 
@@ -17,11 +20,13 @@ export function IssuesListView({ token, handle, repoName }: {
   token: string; handle: string; repoName: string;
 }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const base = `/${handle}/${repoName}`;
 
   const [all, setAll] = useState<Issue[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [members, setMembers] = useState<RepoMember[]>([]);
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,6 +37,13 @@ export function IssuesListView({ token, handle, repoName }: {
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("newest");
 
+  // Saved views (#120): save dialog + one-time apply of a `?view=` deep link.
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const appliedViewRef = useRef<string | null>(null);
+
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -39,17 +51,86 @@ export function IssuesListView({ token, handle, repoName }: {
       listIssues(token, handle, repoName, "all"),
       listLabels(token, handle, repoName).catch(() => ({ labels: [] })),
       listRepoMembers(token, handle, repoName).catch(() => ({ members: [] })),
+      listSavedFilters(token, handle, repoName).catch(() => ({ savedFilters: [] })),
     ])
-      .then(([iss, lbl, mem]) => {
+      .then(([iss, lbl, mem, sf]) => {
         setAll(iss.issues);
         setLabels(lbl.labels);
         setMembers(mem.members);
+        setSavedFilters(sf.savedFilters);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load issues"))
       .finally(() => setLoading(false));
   }, [token, handle, repoName]);
 
+  /** Serialize the current filter combo to a query string (for a saved view). */
+  function currentQuery(): string {
+    const p = new URLSearchParams();
+    p.set("state", state);
+    if (search.trim()) p.set("q", search.trim());
+    if (labelFilter) p.set("label", labelFilter);
+    if (authorFilter) p.set("author", authorFilter);
+    if (assigneeFilter) p.set("assignee", assigneeFilter);
+    if (sort !== "newest") p.set("sort", sort);
+    return p.toString();
+  }
+
+  /** Apply a serialized filter combo back onto the controls. */
+  function applyQuery(query: string) {
+    const p = new URLSearchParams(query);
+    setState(p.get("state") === "closed" ? "closed" : "open");
+    setSearch(p.get("q") ?? "");
+    setLabelFilter(p.get("label"));
+    setAuthorFilter(p.get("author"));
+    setAssigneeFilter(p.get("assignee"));
+    setSort(p.get("sort") === "oldest" ? "oldest" : "newest");
+  }
+
+  function applyView(view: SavedFilter) {
+    applyQuery(view.query);
+    setSearchParams({ view: view.id });
+  }
+
+  async function removeView(view: SavedFilter) {
+    try {
+      await deleteSavedFilter(token, handle, repoName, view.id);
+      setSavedFilters((prev) => prev.filter((f) => f.id !== view.id));
+      if (searchParams.get("view") === view.id) setSearchParams({});
+    } catch { /* keep list on failure */ }
+  }
+
+  async function submitSaveView(e: React.FormEvent) {
+    e.preventDefault();
+    if (!saveName.trim()) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const created = await createSavedFilter(token, handle, repoName, saveName.trim(), currentQuery());
+      setSavedFilters((prev) => [...prev, created]);
+      setSaveOpen(false);
+      setSaveName("");
+      setSearchParams({ view: created.id });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Couldn't save this view");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Apply a `?view=<id>` deep link once its saved filter has loaded.
+  useEffect(() => {
+    const viewId = searchParams.get("view");
+    if (!viewId || appliedViewRef.current === viewId) return;
+    const match = savedFilters.find((f) => f.id === viewId);
+    if (match) {
+      appliedViewRef.current = viewId;
+      applyQuery(match.query);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedFilters, searchParams]);
+
   const hasActiveFilter = !!(search.trim() || labelFilter || authorFilter || assigneeFilter);
+  const activeView = searchParams.get("view");
 
   // Everything but the open/closed toggle is applied first, so the counts reflect
   // the current query the way GitHub's do.
@@ -76,6 +157,16 @@ export function IssuesListView({ token, handle, repoName }: {
     });
     return rows;
   }, [matched, state, sort]);
+
+  // Pinned issues (#120): a distinct card row above the list, most-recently-pinned
+  // first. Independent of the open/closed toggle and the search box.
+  const pinned = useMemo(
+    () =>
+      all
+        .filter((i) => !!i.pinnedAt)
+        .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
+    [all],
+  );
 
   function clearFilters() {
     setSearch(""); setLabelFilter(null); setAuthorFilter(null); setAssigneeFilter(null);
@@ -182,6 +273,64 @@ export function IssuesListView({ token, handle, repoName }: {
           Oldest
         </DropdownItem>
       </DropdownMenu>
+
+      {/* Saved views (#120): apply / delete own views, or save the current combo. */}
+      <Popover
+        align="end"
+        width={264}
+        trigger={(_open, toggle) => (
+          <button
+            type="button"
+            onClick={toggle}
+            className={cx(
+              "inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-fh-sm font-medium transition-colors hover:bg-fh-surface-muted",
+              activeView ? "text-fh-fg" : "text-fh-fg-muted hover:text-fh-fg",
+            )}
+          >
+            <span className="inline-flex shrink-0 text-fh-fg-subtle"><BookmarkIcon size={14} /></span>
+            Views
+            <ChevronDownIcon size={12} className="text-fh-fg-subtle" />
+          </button>
+        )}
+      >
+        <DropdownLabel>Saved views</DropdownLabel>
+        {savedFilters.length === 0 && (
+          <div className="px-3 py-1.5 text-fh-sm text-fh-fg-muted">No saved views yet</div>
+        )}
+        {savedFilters.map((f) => (
+          <div key={f.id} className="flex items-center gap-1 px-1.5">
+            <button
+              type="button"
+              onClick={() => applyView(f)}
+              className={cx(
+                "flex-1 min-w-0 flex items-center gap-2 px-1.5 py-1.5 rounded text-left hover:bg-fh-surface-muted transition-colors",
+                activeView === f.id ? "text-fh-accent-fg font-medium" : "text-fh-fg",
+              )}
+            >
+              <BookmarkIcon size={14} className="shrink-0 text-fh-fg-subtle" />
+              <span className="truncate text-fh-sm">{f.name}</span>
+              {activeView === f.id && <CheckIcon size={14} className="ml-auto shrink-0" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => removeView(f)}
+              aria-label={`Delete view ${f.name}`}
+              className="shrink-0 p-1 rounded text-fh-fg-subtle hover:text-fh-danger-fg hover:bg-fh-danger-muted transition-colors"
+            >
+              <XIcon size={14} />
+            </button>
+          </div>
+        ))}
+        <div className="my-1 h-px bg-fh-border-muted" />
+        <button
+          type="button"
+          onClick={() => { setSaveError(null); setSaveName(""); setSaveOpen(true); }}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-fh-sm text-fh-fg hover:bg-fh-surface-muted transition-colors"
+        >
+          <BookmarkIcon size={14} className="text-fh-fg-subtle" />
+          Save current view…
+        </button>
+      </Popover>
     </div>
   );
 
@@ -200,6 +349,42 @@ export function IssuesListView({ token, handle, repoName }: {
         </div>
         <Button variant="primary" onClick={() => navigate(`${base}/issues/new`)}>New issue</Button>
       </div>
+
+      {/* Pinned issues card row (#120) — GitHub anatomy: a distinct band above the
+          list, capped at the server's pin limit. */}
+      {!loading && pinned.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-center gap-1.5 mb-2 text-fh-sm font-semibold text-fh-fg">
+            <PinIcon size={14} className="text-fh-accent-fg" />
+            Pinned {pinned.length === 1 ? "issue" : "issues"}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {pinned.map((issue) => (
+              <Link
+                key={issue.id}
+                to={`${base}/issues/${issue.number}`}
+                className="group flex flex-col border border-fh-border rounded-md bg-fh-surface p-3 hover:border-fh-border-strong transition-colors"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 shrink-0"><StateIcon state={issue.state} size={14} /></span>
+                  <span className="flex-1 min-w-0 text-fh-sm font-semibold text-fh-fg group-hover:text-fh-accent-fg line-clamp-2">
+                    {issue.title}
+                  </span>
+                  <span className="shrink-0 text-fh-accent-fg" aria-label="Pinned"><PinIcon size={14} /></span>
+                </div>
+                <div className="mt-1.5 text-fh-xs text-fh-fg-muted">#{issue.number}</div>
+                {issue.labels.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {issue.labels.map((l) => (
+                      <LabelChip key={l.id} name={l.name} color={l.color} />
+                    ))}
+                  </div>
+                )}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* No overflow-clip on the outer container: the filter menus need to
           escape it (short lists would otherwise clip the open panel). */}
@@ -291,6 +476,40 @@ export function IssuesListView({ token, handle, repoName }: {
           </ul>
         )}
       </div>
+
+      {/* Save-current-view dialog (#120) */}
+      <Dialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        title="Save this view"
+        description="Name the current filter combo to reuse it later or share it via a link."
+        size="sm"
+        footer={
+          <>
+            <Button variant="default" onClick={() => setSaveOpen(false)}>Cancel</Button>
+            <Button variant="primary" loading={saving} disabled={!saveName.trim()} onClick={submitSaveView}>
+              Save view
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={submitSaveView}>
+          <label htmlFor="save-view-name" className="block text-fh-sm font-medium text-fh-fg mb-1">
+            View name
+          </label>
+          <TextInput
+            id="save-view-name"
+            placeholder="e.g. My open bugs"
+            value={saveName}
+            onChange={(e) => setSaveName(e.target.value)}
+            autoFocus
+          />
+          <p className="mt-1.5 text-fh-xs text-fh-fg-subtle break-words">
+            Captures: <span className="font-mono">{currentQuery() || "state=open"}</span>
+          </p>
+          {saveError && <p className="mt-2 text-fh-sm text-fh-danger-fg">{saveError}</p>}
+        </form>
+      </Dialog>
     </div>
   );
 }
