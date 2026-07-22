@@ -48,6 +48,11 @@ function AppRoutes() {
     navigate("/login");
   }
 
+  function handleUserChange(u: User) {
+    localStorage.setItem("fh_user", JSON.stringify(u));
+    setUser(u);
+  }
+
   const authed = !!token && !!user;
 
   return (
@@ -79,7 +84,7 @@ function AppRoutes() {
         path="/notifications"
         element={
           authed ? (
-            <NotificationsPage token={token!} user={user!} onLogout={handleLogout} />
+            <NotificationsPage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} />
           ) : (
             <Navigate to="/login" replace />
           )
