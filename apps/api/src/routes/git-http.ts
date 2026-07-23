@@ -1,19 +1,11 @@
-import { execFile as execFileCb, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import bcrypt from "bcryptjs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { bareRepoPathFromKey } from "../git-storage.js";
-import { ingestCommitRange } from "../ingest.js";
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
-import { emitHeadPushedForPush } from "../timeline-service.js";
-import { triggerWorkflowsForPrSync } from "../ci/trigger.js";
-import { emitPushEvents } from "../push-events.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
-import { installPreReceiveHook } from "../git-hooks.js";
-import { syncProtectionConfig } from "../branch-protection.js";
-
-const execFile = promisify(execFileCb);
+import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 
 /**
  * The authenticated actor plus the scopes their credential carries. Session/JWT
@@ -308,61 +300,22 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     const repoPath = bareRepoPathFromKey(repo.storageKey);
 
     // Branch protection (issue #85): make sure the pre-receive hook is installed
-    // (backfills repos predating the feature) and refresh its rules file from
-    // the DB so it enforces the current policy. The hook rejects protected-branch
-    // violations BEFORE the pack is accepted (pre-receive); server-side merges
-    // push through local git with FORGEHUB_INTERNAL_PUSH=1 and bypass it.
-    await installPreReceiveHook(repoPath).catch((err) => app.log.error({ err }, "installPreReceiveHook (push)"));
-    await syncProtectionConfig(repo.id, repo.storageKey).catch((err) => app.log.error({ err }, "syncProtectionConfig (push)"));
+    // (backfills repos predating the feature) and refresh its rules file from the
+    // DB so it enforces the current policy. The hook rejects protected-branch
+    // violations BEFORE the pack is accepted (pre-receive); server-side merges push
+    // through local git with FORGEHUB_INTERNAL_PUSH=1 and bypass it. Shared with the
+    // SSH transport (issue #116) so both write paths enforce identically.
+    await preparePushProtection(app, repo.id, repo.storageKey, repoPath);
 
-    // Snapshot all branch SHAs before the push
-    const shasBefore = new Map<string, string>();
-    try {
-      const { stdout } = await execFile("git", [
-        "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)",
-      ], { cwd: repoPath });
-      for (const line of stdout.trim().split("\n").filter(Boolean)) {
-        const sep = line.indexOf("|");
-        shasBefore.set(line.slice(0, sep), line.slice(sep + 1));
-      }
-    } catch { /* empty repo — first push */ }
+    // Snapshot all branch SHAs before the push, run receive-pack, then fire the
+    // shared post-receive side effects (ingestion + webhooks + CI). Both effects
+    // are identical to the SSH transport's, so a push is indistinguishable
+    // downstream regardless of transport.
+    const shasBefore = await snapshotHeadShas(repoPath);
 
     await pipeGitService(reply, request, "git-receive-pack", repoPath, false);
 
-    // After push: ingest any branch whose SHA changed or is new (fire-and-forget)
-    try {
-      const { stdout } = await execFile("git", [
-        "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)",
-      ], { cwd: repoPath });
-      const repoId = repo.id;
-      const changed: Array<{ branch: string; oldSha: string; newSha: string }> = [];
-      for (const line of stdout.trim().split("\n").filter(Boolean)) {
-        const sep = line.indexOf("|");
-        const branchName = line.slice(0, sep);
-        const newSha = line.slice(sep + 1);
-        const oldSha = shasBefore.get(branchName) ?? "0".repeat(40);
-        if (newSha !== oldSha) {
-          changed.push({ branch: branchName, oldSha, newSha });
-          ingestCommitRange(repoId, repoPath, oldSha, newSha)
-            .catch((err: unknown) => app.log.error({ err }, `post-push ingestion failed for ${branchName}`));
-        }
-      }
-      // Emit head_pushed events on OPEN PRs whose head branch just moved.
-      emitHeadPushedForPush(repoId, actorId, changed)
-        .catch((err: unknown) => app.log.error({ err }, "post-push head_pushed events failed"));
-
-      // Outbound `push` webhooks + Actions-style `push` CI runs, one per changed
-      // ref (issues #87 / #86). Shared with the server-side merge path via
-      // emitPushEvents so a merge commit is indistinguishable from a client push
-      // downstream. No-op for CI unless FORGEHUB_CI=1. Best-effort throughout.
-      if (repo.storageKey) {
-        const storageKey = repo.storageKey;
-        emitPushEvents(repoId, storageKey, actorId, changed);
-        // `pull_request` CI runs for any open PR whose head branch just moved.
-        void triggerWorkflowsForPrSync(repoId, storageKey, changed)
-          .catch((err: unknown) => app.log.error({ err }, "post-push CI (pull_request) failed"));
-      }
-    } catch { /* nothing to ingest */ }
+    await runPostReceiveEffects(app, { id: repo.id, storageKey: repo.storageKey }, actorId, repoPath, shasBefore);
 
     return reply;
   });

@@ -44,6 +44,21 @@ function fromDbCollaboratorRole(role: CollaboratorRole): "reader" | "writer" {
   return role === "WRITER" ? "writer" : "reader";
 }
 
+/**
+ * SSH clone config (issue #116) surfaced on every repo payload so the clone box
+ * can offer an SSH tab. The port comes from server config (FORGEHUB_SSH_PORT);
+ * null means the SSH transport is disabled and the web hides the SSH option.
+ * `sshHost` is an optional explicit override (FORGEHUB_SSH_HOST) — when null the
+ * web falls back to the browser's current hostname.
+ */
+function sshCloneConfig(): { sshPort: number | null; sshHost: string | null } {
+  const portRaw = process.env["FORGEHUB_SSH_PORT"];
+  if (!portRaw || !portRaw.trim()) return { sshPort: null, sshHost: null };
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return { sshPort: null, sshHost: null };
+  return { sshPort: port, sshHost: process.env["FORGEHUB_SSH_HOST"]?.trim() || null };
+}
+
 /** A repo reference in a fork chain: the owner handle + repo name to link to. */
 type ForkRef = { handle: string; name: string };
 
@@ -86,6 +101,8 @@ function repoResponse(
     parent: lineage?.parent ?? null,
     source: lineage?.source ?? null,
     forkCount: lineage?.forkCount ?? 0,
+
+    ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };

@@ -158,6 +158,18 @@ export async function removeCiWorkspace(dir: string): Promise<void> {
   await rm(dir, { recursive: true, force: true });
 }
 
+// ─── SSH transport storage (issue #116) ──────────────────────────────────────
+//
+// The SSH front's persistent host key lives under a sibling of the git storage
+// root (`<root>-ssh`), never inside the bare repos — the same separation the
+// release assets and CI logs use. Generated on first start (ssh2 ed25519) and
+// reused thereafter so a client's known_hosts entry stays stable across restarts.
+
+/** Absolute path to the persisted SSH host private key: `<root>-ssh/host_key`. */
+export function sshHostKeyPath(): string {
+  return path.join(`${path.resolve(storageRoot())}-ssh`, "host_key");
+}
+
 export function buildStorageKey(ownerHandle: string, repoName: string): string {
   return `${ownerHandle}/${repoName}.git`;
 }
