@@ -179,3 +179,87 @@ describe("GET /users/:handle/contributions", () => {
     expect(body.days).toEqual([{ date: "2026-05-01", count: 1 }]);
   });
 });
+
+// ── Org-repo visibility (issue #114 follow-up) ──────────────────────────────────
+//
+// Regression for the round-4 integration finding: the contributions readable-repo
+// predicate predated organizations, so a user's OWN authored activity in a PRIVATE
+// org repo they can fully read (via org OWNER membership or a team grant) was
+// silently dropped — their contribution total stayed 0. The predicate now mirrors
+// repo-access.ts `canRead`'s full readable set. These tests model a PRIVATE org
+// repo (authored issue by the profile owner, alice = user-1) whose ONLY readers are
+// an org OWNER ("org-owner") and a team member ("team-reader"), and assert the
+// authored activity now surfaces for those principals while a stranger/guest is
+// still excluded — the visibility guarantee is preserved (never over-count/leak).
+describe("GET /users/:handle/contributions — org-repo visibility", () => {
+  // The mock honors the readable-repo filter the route builds for the CURRENT
+  // viewer: it returns alice's one private-org-repo issue only when the query's
+  // `repo.OR` carries a grant this modeled repo actually confers —
+  //   org OWNER "org-owner", or team member "team-reader".
+  function honorOrgVisibility() {
+    const impl = (args: unknown) => {
+      const or =
+        (args as { where?: { repo?: { OR?: Array<Record<string, any>> } } })?.where?.repo?.OR ?? [];
+      const readable = or.some((c) => {
+        const orgMember = c?.org?.memberships?.some;
+        if (orgMember && orgMember.userId === "org-owner" && orgMember.role === "OWNER") return true;
+        const teamMember = c?.teamAccess?.some?.team?.memberships?.some;
+        if (teamMember && teamMember.userId === "team-reader") return true;
+        return false;
+      });
+      return Promise.resolve(readable ? [{ createdAt: new Date("2026-05-01T10:00:00Z") }] : []);
+    };
+    vi.mocked(prisma.issue.findMany).mockImplementation(impl as never);
+  }
+
+  it("counts the author's own activity in a private org repo they OWN the org of (bug: was 0)", async () => {
+    honorOrgVisibility();
+    const owner = await authHeader(app, "org-owner");
+    const res = await app.inject({
+      method: "GET", url: "/users/alice/contributions", headers: { authorization: owner },
+    });
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.days).toEqual([{ date: "2026-05-01", count: 1 }]);
+  });
+
+  it("counts the author's activity for a team member with READ access to the private org repo", async () => {
+    honorOrgVisibility();
+    const reader = await authHeader(app, "team-reader");
+    const res = await app.inject({
+      method: "GET", url: "/users/alice/contributions", headers: { authorization: reader },
+    });
+    expect(res.json().total).toBe(1);
+  });
+
+  it("still hides that private-org-repo activity from a non-member stranger", async () => {
+    honorOrgVisibility();
+    const stranger = await authHeader(app, "stranger");
+    const res = await app.inject({
+      method: "GET", url: "/users/alice/contributions", headers: { authorization: stranger },
+    });
+    expect(res.json().total).toBe(0);
+  });
+
+  it("still hides that private-org-repo activity from a guest", async () => {
+    honorOrgVisibility();
+    const res = await app.inject({ method: "GET", url: "/users/alice/contributions" });
+    expect(res.json().total).toBe(0);
+  });
+
+  it("counts a PUBLIC org repo's activity for everyone (guest included)", async () => {
+    // Model a PUBLIC repo: readable whenever the OR admits the public predicate,
+    // which it always does — so a signed-out guest sees the author's activity.
+    const impl = (args: unknown) => {
+      const or =
+        (args as { where?: { repo?: { OR?: Array<Record<string, any>> } } })?.where?.repo?.OR ?? [];
+      const isPublic = or.some((c) => c?.visibility === "PUBLIC");
+      return Promise.resolve(isPublic ? [{ createdAt: new Date("2026-05-02T10:00:00Z") }] : []);
+    };
+    vi.mocked(prisma.issue.findMany).mockImplementation(impl as never);
+    const res = await app.inject({ method: "GET", url: "/users/alice/contributions" });
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.days).toEqual([{ date: "2026-05-02", count: 1 }]);
+  });
+});
