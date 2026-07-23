@@ -3,8 +3,8 @@ import type {
   CommitInfo, Composition, Constraint, DeployKey, Design, DesignCompareResult, DesignVersion,
   DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment, Label, Milestone,
   Notification, PRFileEntry, PatScope, PersonalAccessToken, ProjectColumn, ProjectDetail,
-  ProjectItem, ProjectSubjectType, ProjectSummary, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey,
+  ProjectItem, ProjectSubjectType, ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult,
+  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SessionInfo,
   SavedFilter, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, TimelineEvent, TreeEntry,
   User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
@@ -428,6 +428,38 @@ export async function listTags(
   repoName: string,
 ): Promise<{ tags: TagInfo[] }> {
   return req(`/repos/${handle}/${repoName}/tags`, { token: token ?? undefined });
+}
+
+// ─── protected tags (issue #117) ────────────────────────────────────────────────
+
+export async function listProtectedTags(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ protectedTags: ProtectedTag[] }> {
+  return req(`/repos/${handle}/${repoName}/protected-tags`, { token: token ?? undefined });
+}
+
+export async function addProtectedTag(
+  token: string,
+  handle: string,
+  repoName: string,
+  pattern: string,
+): Promise<ProtectedTag> {
+  return req(`/repos/${handle}/${repoName}/protected-tags`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ pattern }),
+  });
+}
+
+export async function removeProtectedTag(
+  token: string,
+  handle: string,
+  repoName: string,
+  id: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/protected-tags/${id}`, { method: "DELETE", token });
 }
 
 // ─── pull requests ────────────────────────────────────────────────────────────────
@@ -1667,6 +1699,22 @@ export async function createToken(
 
 export async function revokeToken(token: string, id: string): Promise<void> {
   return req(`/auth/tokens/${id}`, { method: "DELETE", token });
+}
+
+// ─── interactive login sessions (issue #117) ─────────────────────────────────────
+
+export async function listSessions(token: string): Promise<{ sessions: SessionInfo[] }> {
+  return req("/auth/sessions", { token });
+}
+
+/** Revoke a single session ("sign out this device"). */
+export async function revokeSession(token: string, id: string): Promise<void> {
+  return req(`/auth/sessions/${id}`, { method: "DELETE", token });
+}
+
+/** Revoke every session except the current one ("sign out everywhere"). */
+export async function revokeOtherSessions(token: string): Promise<{ revoked: number }> {
+  return req("/auth/sessions", { method: "DELETE", token });
 }
 
 // ─── webhooks (issue #87) ───────────────────────────────────────────────────────

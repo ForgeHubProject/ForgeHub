@@ -14,6 +14,7 @@ import {
   DiffStatBar,
   FileIcon,
   ShaChip,
+  SignatureBadge,
   formatDayHeading,
 } from "./commitUi";
 
@@ -246,6 +247,7 @@ function CommitDetailView({
           <span className="text-fh-fg-muted">
             committed <RelativeTime date={commit.date} />
           </span>
+          <SignatureBadge signature={commit.signature} />
           <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
             {commit.parents.length > 0 && (
               <span className="flex items-center gap-1.5 text-fh-sm text-fh-fg-muted">
@@ -358,6 +360,7 @@ function CommitRow({ commit, base, status }: { commit: CommitInfo; base: string;
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-2 pt-0.5">
+        <SignatureBadge signature={commit.signature} />
         {status && (
           <Link
             to={`${base}/actions`}
