@@ -506,7 +506,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
           />
         )}
         {activeTab === "actions" && (
-          <RepoActionsTab token={token} handle={h} repoName={r} splat={splat} />
+          <RepoActionsTab token={token} handle={h} repoName={r} splat={splat} user={user} />
         )}
         {activeTab === "commits" && (
           <RepoCommitsTab

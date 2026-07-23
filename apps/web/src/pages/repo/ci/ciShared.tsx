@@ -13,6 +13,7 @@ export function checkState(s: CheckSummary): CheckState {
 export function runState(run: Pick<WorkflowRun, "status" | "conclusion">): CheckState {
   if (run.status !== "completed") return "pending";
   if (run.conclusion === "failure") return "failure";
+  if (run.conclusion === "cancelled") return "cancelled";
   if (run.conclusion === "success") return "success";
   return "none";
 }
@@ -21,6 +22,7 @@ export function runState(run: Pick<WorkflowRun, "status" | "conclusion">): Check
 export function conclusionState(status: CiStatus, conclusion: CiConclusion): CheckState {
   if (status !== "completed") return "pending";
   if (conclusion === "failure") return "failure";
+  if (conclusion === "cancelled") return "cancelled";
   if (conclusion === "success") return "success";
   return "none";
 }
@@ -28,6 +30,7 @@ export function conclusionState(status: CiStatus, conclusion: CiConclusion): Che
 const STATE_COLOR: Record<CheckState, string> = {
   success: "text-fh-success-fg",
   failure: "text-fh-danger-fg",
+  cancelled: "text-fh-fg-muted",
   pending: "text-fh-warning-fg",
   none: "text-fh-fg-subtle",
 };
@@ -56,6 +59,10 @@ export function CheckStatusIcon({
   if (state === "failure") {
     return <Icons.XIcon size={size} className={cx(color, className)} aria-label={label} />;
   }
+  if (state === "cancelled") {
+    // A neutral, grey "stopped" square — cancelled is not a failure, not a pass.
+    return <Icons.StopIcon size={size} className={cx(color, className)} aria-label={label} />;
+  }
   // pending / none → a filled dot; pending pulses to read as "in progress".
   return (
     <span
@@ -71,6 +78,7 @@ export function CheckStatusIcon({
 export const STATE_LABEL: Record<CheckState, string> = {
   success: "All checks passed",
   failure: "Some checks failed",
+  cancelled: "Cancelled",
   pending: "Checks in progress",
   none: "No checks",
 };
@@ -79,7 +87,10 @@ export const STATE_LABEL: Record<CheckState, string> = {
 export function runStateLabel(run: Pick<WorkflowRun, "status" | "conclusion">): string {
   if (run.status === "queued") return "Queued";
   if (run.status === "running") return "In progress";
-  return run.conclusion === "success" ? "Success" : run.conclusion === "failure" ? "Failure" : "Completed";
+  if (run.conclusion === "success") return "Success";
+  if (run.conclusion === "failure") return "Failure";
+  if (run.conclusion === "cancelled") return "Cancelled";
+  return "Completed";
 }
 
 /** Short badge tone classes for a run/check state. */
@@ -91,6 +102,8 @@ export function stateBadgeClasses(state: CheckState): string {
       return "bg-fh-danger-muted text-fh-danger-fg";
     case "pending":
       return "bg-fh-warning-muted text-fh-warning-fg";
+    case "cancelled":
+      return "bg-fh-neutral-muted text-fh-fg-muted";
     default:
       return "bg-fh-neutral-muted text-fh-fg-muted";
   }

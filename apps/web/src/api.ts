@@ -1858,3 +1858,29 @@ export async function syncFork(
 ): Promise<SyncForkResult> {
   return req(`/repos/${handle}/${repoName}/sync`, { method: "POST", token });
 }
+
+/** Re-run a workflow run: creates + enqueues a fresh run for the same commit. Writer-only. */
+export async function rerunWorkflowRun(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  id: string,
+): Promise<WorkflowRun> {
+  return req(`/repos/${handle}/${repoName}/actions/runs/${id}/rerun`, {
+    method: "POST",
+    token: token ?? undefined,
+  });
+}
+
+/** Cancel a queued/running workflow run. Writer-only; 409 if already completed. */
+export async function cancelWorkflowRun(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  id: string,
+): Promise<WorkflowRun> {
+  return req(`/repos/${handle}/${repoName}/actions/runs/${id}/cancel`, {
+    method: "POST",
+    token: token ?? undefined,
+  });
+}
