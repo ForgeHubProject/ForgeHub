@@ -79,10 +79,9 @@ export async function milestoneRoutes(app: FastifyInstance) {
       : state === "open" ? "OPEN"
       : undefined; // default: all
 
-    const [milestones, issues, pulls] = await Promise.all([
+    const [milestonesRaw, issues, pulls] = await Promise.all([
       prisma.milestone.findMany({
         where: { repoId: repo.id, ...(stateFilter ? { state: stateFilter } : {}) },
-        orderBy: [{ state: "asc" }, { dueOn: "asc" }, { createdAt: "asc" }],
       }),
       prisma.issue.findMany({
         where: { repoId: repo.id, milestoneId: { not: null } },
@@ -93,6 +92,16 @@ export async function milestoneRoutes(app: FastifyInstance) {
         select: { milestoneId: true, state: true },
       }),
     ]);
+
+    // GitHub-style ordering: open milestones before closed, then soonest due date
+    // first with undated milestones last, then creation order as the tiebreaker.
+    const milestones = [...milestonesRaw].sort((a, b) => {
+      if (a.state !== b.state) return a.state === "OPEN" ? -1 : 1;
+      const ad = a.dueOn ? a.dueOn.getTime() : Number.POSITIVE_INFINITY;
+      const bd = b.dueOn ? b.dueOn.getTime() : Number.POSITIVE_INFINITY;
+      if (ad !== bd) return ad - bd;
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
 
     // Bucket associated items by milestone id, then compute progress per milestone.
     const byMilestone = new Map<string, ItemState[]>();
