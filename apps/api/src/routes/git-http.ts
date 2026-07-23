@@ -7,8 +7,18 @@ import { ingestCommitRange } from "../ingest.js";
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { emitHeadPushedForPush } from "../timeline-service.js";
+import { emitRepoEvent } from "../webhook-service.js";
+import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
 
 const execFile = promisify(execFileCb);
+
+/**
+ * The authenticated actor plus the scopes their credential carries. Session/JWT
+ * and interactive-password auth are unscoped (full power); a Personal Access
+ * Token carries exactly the scopes it was minted with, so a push can require
+ * `repo:write` (issue #87).
+ */
+type ActorAuth = { userId: string; scopes: PatScope[] };
 
 type GitService = "git-upload-pack" | "git-receive-pack";
 
@@ -25,10 +35,10 @@ function parseRepoNameWithGitSuffix(rawRepo: string): string | null {
   return repo.slice(0, -4);
 }
 
-async function resolveActorIdFromAuthHeader(
+async function resolveActorFromAuthHeader(
   app: FastifyInstance,
   request: FastifyRequest,
-): Promise<string | undefined> {
+): Promise<ActorAuth | undefined> {
   const header = request.headers.authorization;
   if (!header) return undefined;
 
@@ -37,7 +47,7 @@ async function resolveActorIdFromAuthHeader(
     if (!token) return undefined;
     try {
       const payload = await app.jwt.verify<{ sub?: string }>(token);
-      return payload.sub;
+      return payload.sub ? { userId: payload.sub, scopes: [...FULL_SCOPES] } : undefined;
     } catch {
       return undefined;
     }
@@ -54,10 +64,10 @@ async function resolveActorIdFromAuthHeader(
       const password = decoded.slice(sep + 1).trim();
       if (!password) return undefined;
 
-      // Accept JWT token as password (for scripted/CI usage)
+      // Accept JWT token as password (for scripted/CI usage) — unscoped/full.
       try {
         const payload = await app.jwt.verify<{ sub?: string }>(password);
-        return payload.sub;
+        if (payload.sub) return { userId: payload.sub, scopes: [...FULL_SCOPES] };
       } catch { /* not a JWT, fall through */ }
 
       // Accept a Personal Access Token as password (scoped, named, revocable — see /auth/tokens)
@@ -65,16 +75,16 @@ async function resolveActorIdFromAuthHeader(
       if (pat) {
         if (pat.expiresAt && pat.expiresAt.getTime() < Date.now()) return undefined;
         prisma.personalAccessToken.update({ where: { id: pat.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
-        return pat.userId;
+        return { userId: pat.userId, scopes: parseScopes(pat.scopes) };
       }
 
-      // Accept handle-or-email + ForgeHub password (for interactive git prompts)
+      // Accept handle-or-email + ForgeHub password (for interactive git prompts) — full.
       const user = await prisma.user.findFirst({
         where: { OR: [{ handle: username.toLowerCase() }, { email: username.toLowerCase() }] },
         select: { id: true, passwordHash: true },
       });
       if (user && await bcrypt.compare(password, user.passwordHash)) {
-        return user.id;
+        return { userId: user.id, scopes: [...FULL_SCOPES] };
       }
     } catch { /* ignore */ }
   }
@@ -192,9 +202,11 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const actorId = await resolveActorIdFromAuthHeader(app, request);
+    const actor = await resolveActorFromAuthHeader(app, request);
+    const actorId = actor?.userId;
     const read = canRead(repo, actorId);
-    const write = canWrite(repo, actorId);
+    // A push needs both repo-role write AND (for PAT credentials) the repo:write scope.
+    const write = canWrite(repo, actorId) && (!actor || hasScope(actor.scopes, "repo:write"));
 
     if (service === "git-receive-pack" && !write) {
       // 401 + WWW-Authenticate so git knows to prompt for credentials.
@@ -202,6 +214,10 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       if (!actorId) {
         reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
         return reply.status(401).send({ error: "Authentication required" });
+      }
+      // Authenticated but the token lacks repo:write → scope error, not a role error.
+      if (canWrite(repo, actorId) && actor && !hasScope(actor.scopes, "repo:write")) {
+        return reply.status(403).send({ error: "Token is missing the 'repo:write' scope" });
       }
       return reply.status(403).send({ error: "Write access denied" });
     }
@@ -240,8 +256,8 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const actorId = await resolveActorIdFromAuthHeader(app, request);
-    if (!canRead(repo, actorId)) {
+    const actor = await resolveActorFromAuthHeader(app, request);
+    if (!canRead(repo, actor?.userId)) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
@@ -272,13 +288,18 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const actorId = await resolveActorIdFromAuthHeader(app, request);
-    if (!actorId) {
+    const actor = await resolveActorFromAuthHeader(app, request);
+    if (!actor) {
       reply.header("WWW-Authenticate", 'Basic realm="ForgeHub"');
       return reply.status(401).send({ error: "Authentication required" });
     }
+    const actorId = actor.userId;
     if (!canWrite(repo, actorId)) {
       return reply.status(403).send({ error: "Write access denied" });
+    }
+    // PAT credentials must carry the repo:write scope to push (issue #87).
+    if (!hasScope(actor.scopes, "repo:write")) {
+      return reply.status(403).send({ error: "Token is missing the 'repo:write' scope" });
     }
 
     const repoPath = bareRepoPathFromKey(repo.storageKey);
@@ -318,6 +339,14 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       // Emit head_pushed events on OPEN PRs whose head branch just moved.
       emitHeadPushedForPush(repoId, actorId, changed)
         .catch((err: unknown) => app.log.error({ err }, "post-push head_pushed events failed"));
+
+      // Outbound `push` webhooks — one per changed ref (issue #87). Best-effort.
+      for (const c of changed) {
+        void emitRepoEvent({
+          repoId, event: "push", senderId: actorId,
+          subject: { ref: `refs/heads/${c.branch}`, branch: c.branch, before: c.oldSha, after: c.newSha },
+        });
+      }
     } catch { /* nothing to ingest */ }
 
     return reply;
