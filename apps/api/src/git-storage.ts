@@ -58,6 +58,54 @@ export async function removeAsset(key: string): Promise<void> {
   await rm(assetPathFromKey(key), { force: true });
 }
 
+// ─── CI (Actions) storage (issue #86) ────────────────────────────────────────
+//
+// Workflow-run logs and the runner's throwaway commit clones live under a sibling
+// of the git storage root (`<root>-ci`), never inside the bare repos — the same
+// separation the release assets use. Logs are keyed by
+// `<storageKey>/<runId>/<jobId>.log`; the runner clones each job into a temp
+// workspace under `<root>-ci/.work/` and deletes it when the job finishes.
+
+function ciRoot(): string {
+  return `${path.resolve(storageRoot())}-ci`;
+}
+
+/** Resolve a path under the CI root, guarding against traversal. */
+function ciPathFromKey(key: string): string {
+  const root = path.resolve(ciRoot());
+  const full = path.resolve(root, key);
+  const rel = path.relative(root, full);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("Invalid CI storage key path");
+  }
+  return full;
+}
+
+/** Absolute path to a job's log file: `<root>-ci/<storageKey>/<runId>/<jobId>.log`. */
+export function ciLogPath(storageKey: string, runId: string, jobId: string): string {
+  return ciPathFromKey(path.join(storageKey, runId, `${jobId}.log`));
+}
+
+/** Directory holding one run's logs: `<root>-ci/<storageKey>/<runId>`. */
+export function ciRunDir(storageKey: string, runId: string): string {
+  return ciPathFromKey(path.join(storageKey, runId));
+}
+
+/** Throwaway per-job clone workspace: `<root>-ci/.work/<runId>-<jobId>`. */
+export function ciWorkspaceDir(runId: string, jobId: string): string {
+  return ciPathFromKey(path.join(".work", `${runId}-${jobId}`));
+}
+
+/** Ensure a directory exists (used before writing a log / cloning a workspace). */
+export async function ensureCiDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+}
+
+/** Remove a CI workspace clone (idempotent). */
+export async function removeCiWorkspace(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true });
+}
+
 export function buildStorageKey(ownerHandle: string, repoName: string): string {
   return `${ownerHandle}/${repoName}.git`;
 }
