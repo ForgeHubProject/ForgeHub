@@ -15,6 +15,7 @@ vi.mock("../prisma.js", () => ({
     },
     issue: { findMany: vi.fn() },
     pullRequest: { findMany: vi.fn() },
+    personalAccessToken: { findUnique: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -22,6 +23,7 @@ vi.mock("../prisma.js", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
+import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -292,6 +294,51 @@ describe("PATCH /repos/:handle/:name/milestones/:number", () => {
       headers: { authorization: writerToken }, payload: { title: "x" },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── PAT scope enforcement (#87 wave-A D1) ──────────────────────────────────────
+// A read-scoped PAT owned by a writer must be rejected at the scope preHandler,
+// before the route's own canWrite check runs. A session JWT stays unscoped.
+
+describe("POST /milestones — PAT scope enforcement", () => {
+  const READ_PAT = "fhp_read_ms";
+  let app: FastifyInstance;
+  let writerSession: string;
+  beforeAll(async () => {
+    app = await createTestServer();
+    writerSession = await authHeader(app, WRITER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    // The token belongs to a writer, so only its scope — not repo access — blocks it.
+    vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) =>
+      Promise.resolve(args.where.tokenHash === hashToken(READ_PAT)
+        ? { id: "pat-1", userId: WRITER_ID, scopes: "repo:read", expiresAt: null }
+        : null)) as never);
+    vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+    vi.mocked(prisma.milestone.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.milestone.create).mockResolvedValue(makeMilestone() as never);
+  });
+
+  it("403s a repo:read PAT creating a milestone", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/milestones",
+      headers: { authorization: `Bearer ${READ_PAT}` }, payload: { title: "v1.0" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(prisma.milestone.create).not.toHaveBeenCalled();
+  });
+
+  it("still lets a session JWT (unscoped) create a milestone", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/milestones",
+      headers: { authorization: writerSession }, payload: { title: "v1.0" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(prisma.milestone.create).toHaveBeenCalled();
   });
 });
 

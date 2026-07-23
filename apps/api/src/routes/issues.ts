@@ -5,6 +5,8 @@ import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { syncBodyReferences } from "../references-service.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
+import { emitRepoEvent } from "../webhook-service.js";
+import { resolveMilestoneFilter } from "../milestone-filter.js";
 
 function formatIssue(issue: {
   id: string;
@@ -85,6 +87,11 @@ const issueInclude = {
 } as const;
 
 export async function issueRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to mutate; session/JWT auth is unscoped and
+  // no-ops this guard (issue #87). Route bodies keep their own author/writer
+  // checks — this is the scope layer on top of them.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/issues
   app.get("/repos/:handle/:name/issues", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
@@ -106,13 +113,11 @@ export async function issueRoutes(app: FastifyInstance) {
       : state === "all" ? undefined
       : "OPEN";
 
-    // `?milestone=` accepts a title, the special value "none" (unassociated), or "*"
-    // (any milestone) — mirroring GitHub's issue-list milestone filter.
-    const milestoneWhere =
-      milestone === undefined ? {}
-      : milestone === "none" ? { milestoneId: null }
-      : milestone === "*" ? { milestoneId: { not: null } }
-      : { milestone: { title: milestone } };
+    // `?milestone=` accepts a milestone NUMBER or TITLE, plus "none" (unassociated)
+    // and "*" (any milestone). The web serializes this filter by number while the
+    // original API took a title, so the resolver accepts either (wave-A D2). See
+    // resolveMilestoneFilter for the number-first-then-title resolution.
+    const milestoneWhere = await resolveMilestoneFilter(repo.id, milestone);
 
     const issues = await prisma.issue.findMany({
       where: {
@@ -134,7 +139,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/issues
-  app.post("/repos/:handle/:name/issues", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -170,6 +175,13 @@ export async function issueRoutes(app: FastifyInstance) {
     if (issue.assigneeId) {
       void notifyUser(issue.assigneeId, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "ASSIGNED" });
     }
+
+    // Outbound webhook: issues.opened (#87 / wave-A S5a). Best-effort; the shared
+    // timeline bridge only covers close/reopen/label/etc., so open is emitted here.
+    void emitRepoEvent({
+      repoId: repo.id, event: "issues", action: "opened", senderId: userId,
+      subject: { number: issue.number, title: issue.title },
+    });
 
     // Parse #N / !N / @handle out of the body into cross-refs, link-backs, mentions.
     await syncBodyReferences({
@@ -218,7 +230,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/issues/:number
-  app.patch("/repos/:handle/:name/issues/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/issues/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -314,7 +326,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/issues/:number
-  app.delete("/repos/:handle/:name/issues/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/issues/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -357,7 +369,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/issues/:number/comments
-  app.post("/repos/:handle/:name/issues/:number/comments", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues/:number/comments", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -394,6 +406,16 @@ export async function issueRoutes(app: FastifyInstance) {
         void notifyUser(uid, { actorId: userId, repoId: repo.id, subjectType: "ISSUE", subjectId: issue.id, subjectTitle: issue.title, reason: "COMMENT" });
       }
 
+      // Outbound webhook: issue_comment.created (#87 / wave-A S5b). Only real prose
+      // comments emit — a command-only body creates no comment, so nothing fires.
+      void emitRepoEvent({
+        repoId: repo.id, event: "issue_comment", action: "created", senderId: userId,
+        subject: {
+          issue: { number: issue.number, title: issue.title },
+          comment: { id: comment.id, author: comment.author.handle },
+        },
+      });
+
       await syncBodyReferences({
         repo, actorId: userId,
         source: { type: "ISSUE_COMMENT", id: comment.id },
@@ -428,7 +450,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/issues/:number/comments/:commentId
-  app.patch("/repos/:handle/:name/issues/:number/comments/:commentId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/issues/:number/comments/:commentId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number, commentId } = request.params as {
       handle: string; name: string; number: string; commentId: string;
     };
@@ -468,7 +490,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/issues/:number/comments/:commentId
-  app.delete("/repos/:handle/:name/issues/:number/comments/:commentId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/issues/:number/comments/:commentId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number, commentId } = request.params as {
       handle: string; name: string; number: string; commentId: string;
     };
@@ -496,7 +518,7 @@ export async function issueRoutes(app: FastifyInstance) {
   // ─── Issue Labels ─────────────────────────────────────────────────────────────
 
   // POST /repos/:handle/:name/issues/:number/labels
-  app.post("/repos/:handle/:name/issues/:number/labels", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues/:number/labels", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -527,7 +549,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/issues/:number/labels/:labelId
-  app.delete("/repos/:handle/:name/issues/:number/labels/:labelId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/issues/:number/labels/:labelId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number, labelId } = request.params as {
       handle: string; name: string; number: string; labelId: string;
     };
@@ -566,7 +588,7 @@ export async function issueRoutes(app: FastifyInstance) {
   // matching the /estimate + /spend quick actions.
 
   // PUT /repos/:handle/:name/issues/:number/estimate  { minutes }
-  app.put("/repos/:handle/:name/issues/:number/estimate", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.put("/repos/:handle/:name/issues/:number/estimate", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -591,7 +613,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // PUT /repos/:handle/:name/issues/:number/spent  { minutes }
-  app.put("/repos/:handle/:name/issues/:number/spent", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.put("/repos/:handle/:name/issues/:number/spent", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -618,7 +640,7 @@ export async function issueRoutes(app: FastifyInstance) {
   // ─── Pinned issues (#120) ─────────────────────────────────────────────────────
 
   // POST /repos/:handle/:name/issues/:number/pin — writer-gated, cap PIN_CAP/repo.
-  app.post("/repos/:handle/:name/issues/:number/pin", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues/:number/pin", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -651,7 +673,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/issues/:number/pin — writer-gated unpin.
-  app.delete("/repos/:handle/:name/issues/:number/pin", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/issues/:number/pin", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -679,7 +701,7 @@ export async function issueRoutes(app: FastifyInstance) {
   // ─── Locked conversations (#120) ──────────────────────────────────────────────
 
   // POST /repos/:handle/:name/issues/:number/lock — writer-gated; optional { reason }.
-  app.post("/repos/:handle/:name/issues/:number/lock", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues/:number/lock", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -710,7 +732,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/issues/:number/lock — writer-gated unlock.
-  app.delete("/repos/:handle/:name/issues/:number/lock", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/issues/:number/lock", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -742,7 +764,7 @@ export async function issueRoutes(app: FastifyInstance) {
   // v0 constraint: the target repo must be owned by the SAME owner. Re-numbers in
   // the target's sequence, remaps labels by name, and leaves a timeline event on
   // both sides. The old URL then resolves to a 410 pointer (see GET above).
-  app.post("/repos/:handle/:name/issues/:number/transfer", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/issues/:number/transfer", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -848,7 +870,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/saved-filters  body { name, query, scope? }
-  app.post("/repos/:handle/:name/saved-filters", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/saved-filters", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -871,7 +893,7 @@ export async function issueRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/saved-filters/:id — owner of the view only.
-  app.delete("/repos/:handle/:name/saved-filters/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/saved-filters/:id", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, id } = request.params as { handle: string; name: string; id: string };
     const userId = request.user.sub;
 

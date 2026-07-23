@@ -27,7 +27,7 @@ export type PersonalAccessToken = {
 // ─── Outbound webhooks (issue #87) ────────────────────────────────────────────
 
 /** Subscribable webhook events shown as checkboxes; "*" means all. */
-export type WebhookEvent = "push" | "issues" | "pull_request" | "release";
+export type WebhookEvent = "push" | "issues" | "issue_comment" | "pull_request" | "release";
 
 export type Webhook = {
   id: string;

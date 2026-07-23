@@ -32,6 +32,7 @@ vi.mock("../prisma.js", () => ({
     },
     issue: { findFirst: vi.fn(), findMany: vi.fn() },
     pullRequest: { findFirst: vi.fn(), findMany: vi.fn() },
+    personalAccessToken: { findUnique: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -47,6 +48,7 @@ vi.mock("../git-storage.js", () => ({
 }));
 
 import { prisma } from "../prisma.js";
+import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -148,6 +150,47 @@ describe("GET /repos/:handle/:name/projects", () => {
 });
 
 // ─── Project create ─────────────────────────────────────────────────────────────
+
+// ─── PAT scope enforcement (#87 wave-A D1) ──────────────────────────────────────
+// A read-scoped PAT owned by a writer is rejected at the scope preHandler, before
+// the route's canWrite check. A session JWT stays unscoped and creates normally.
+
+describe("POST /projects — PAT scope enforcement", () => {
+  const READ_PAT = "fhp_read_proj";
+  beforeEach(() => {
+    vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) =>
+      Promise.resolve(args.where.tokenHash === hashToken(READ_PAT)
+        ? { id: "pat-1", userId: WRITER_ID, scopes: "repo:read", expiresAt: null }
+        : null)) as never);
+    vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+    vi.mocked(prisma.project.count).mockResolvedValue(0 as never);
+    vi.mocked(prisma.project.create).mockResolvedValue(makeProject() as never);
+    vi.mocked(prisma.projectColumn.createMany).mockResolvedValue({ count: 3 } as never);
+    vi.mocked(prisma.projectColumn.findMany).mockResolvedValue([
+      { id: "col-1", name: "Todo", position: 0 },
+    ] as never);
+    vi.mocked(prisma.projectItem.findMany).mockResolvedValue([] as never);
+  });
+
+  it("403s a repo:read PAT creating a project", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/projects",
+      headers: { authorization: `Bearer ${READ_PAT}` }, payload: { name: "Roadmap" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(prisma.project.create).not.toHaveBeenCalled();
+  });
+
+  it("still lets a session JWT (unscoped) create a project", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/projects",
+      headers: { authorization: writerToken }, payload: { name: "Roadmap" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(prisma.project.create).toHaveBeenCalled();
+  });
+});
 
 describe("POST /repos/:handle/:name/projects", () => {
   beforeEach(() => {

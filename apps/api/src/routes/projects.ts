@@ -177,6 +177,11 @@ async function loadDetail(repoId: string, project: {
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 export async function projectRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to mutate the board; session/JWT auth is
+  // unscoped and no-ops this guard (issue #87). Route bodies keep their canWrite
+  // check — this is the scope layer on top of it.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/projects?state=open|closed|all
   app.get("/repos/:handle/:name/projects", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
@@ -198,7 +203,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/projects  { name, description? } — writer, seeds columns.
-  app.post("/repos/:handle/:name/projects", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/projects", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -245,7 +250,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/projects/:number  { name?, description?, closed? } — writer.
-  app.patch("/repos/:handle/:name/projects/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/projects/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -279,7 +284,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/projects/:number — writer.
-  app.delete("/repos/:handle/:name/projects/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/projects/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -318,7 +323,7 @@ export async function projectRoutes(app: FastifyInstance) {
   }
 
   // POST /repos/:handle/:name/projects/:number/columns  { name } — append.
-  app.post("/repos/:handle/:name/projects/:number/columns", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/projects/:number/columns", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
 
@@ -338,7 +343,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/projects/:number/columns/:columnId  { name } — rename.
-  app.patch("/repos/:handle/:name/projects/:number/columns/:columnId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/projects/:number/columns/:columnId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
     const { columnId } = request.params as { columnId: string };
@@ -359,7 +364,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // PUT /repos/:handle/:name/projects/:number/columns/order  { order: string[] } — reorder.
-  app.put("/repos/:handle/:name/projects/:number/columns/order", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.put("/repos/:handle/:name/projects/:number/columns/order", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
 
@@ -385,7 +390,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/projects/:number/columns/:columnId — must be empty.
-  app.delete("/repos/:handle/:name/projects/:number/columns/:columnId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/projects/:number/columns/:columnId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
     const { columnId } = request.params as { columnId: string };
@@ -413,7 +418,7 @@ export async function projectRoutes(app: FastifyInstance) {
   // ─── Items ────────────────────────────────────────────────────────────────
 
   // POST /repos/:handle/:name/projects/:number/items  { columnId, type, number } — add.
-  app.post("/repos/:handle/:name/projects/:number/items", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/projects/:number/items", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
 
@@ -470,7 +475,7 @@ export async function projectRoutes(app: FastifyInstance) {
   // PATCH /repos/:handle/:name/projects/:number/items/:itemId  { columnId?, position } — move.
   // `position` is the target 0-based index within the destination column. The
   // destination (and the source, when it differs) is renumbered densely.
-  app.patch("/repos/:handle/:name/projects/:number/items/:itemId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/projects/:number/items/:itemId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
     const { itemId } = request.params as { itemId: string };
@@ -530,7 +535,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/projects/:number/items/:itemId — remove + renumber column.
-  app.delete("/repos/:handle/:name/projects/:number/items/:itemId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/projects/:number/items/:itemId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const ctx = await requireWritableProject(request, reply);
     if (!ctx) return reply;
     const { itemId } = request.params as { itemId: string };
