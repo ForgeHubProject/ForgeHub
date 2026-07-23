@@ -1,6 +1,6 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
-  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry,
+  Issue, IssueComment, Label, Milestone, Notification, PersonalAccessToken, PRFileEntry,
   ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType, ProjectSummary,
   PublicProfile, PullRequest, RefCompareResult,
   Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
@@ -735,12 +735,14 @@ export async function listIssues(
   assignee?: string,
   author?: string,
   sort?: "newest" | "oldest",
+  milestone?: string,
 ): Promise<{ issues: Issue[] }> {
   const qs = new URLSearchParams({ state });
   if (label) qs.set("label", label);
   if (assignee) qs.set("assignee", assignee);
   if (author) qs.set("author", author);
   if (sort) qs.set("sort", sort);
+  if (milestone) qs.set("milestone", milestone);
   return req(`/repos/${handle}/${repoName}/issues?${qs}`, { token: token ?? undefined });
 }
 
@@ -779,7 +781,7 @@ export async function updateIssue(
   handle: string,
   repoName: string,
   number: number,
-  patch: { state?: "open" | "closed"; title?: string; body?: string; assigneeId?: string | null },
+  patch: { state?: "open" | "closed"; title?: string; body?: string; assigneeId?: string | null; milestoneId?: string | null },
 ): Promise<Issue> {
   return req(`/repos/${handle}/${repoName}/issues/${number}`, {
     method: "PATCH",
@@ -873,6 +875,61 @@ export async function createSavedFilter(
 
 export async function deleteSavedFilter(token: string, handle: string, repoName: string, id: string): Promise<void> {
   return req(`/repos/${handle}/${repoName}/saved-filters/${id}`, { method: "DELETE", token });
+}
+
+// ─── milestones (#83) ──────────────────────────────────────────────────────────
+
+export async function listMilestones(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  state?: "open" | "closed" | "all",
+): Promise<{ milestones: Milestone[]; counts: { open: number; closed: number } }> {
+  const qs = state && state !== "all" ? `?state=${state}` : "";
+  return req(`/repos/${handle}/${repoName}/milestones${qs}`, { token: token ?? undefined });
+}
+
+export async function getMilestone(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<Milestone> {
+  return req(`/repos/${handle}/${repoName}/milestones/${number}`, { token: token ?? undefined });
+}
+
+export async function createMilestone(
+  token: string,
+  handle: string,
+  repoName: string,
+  input: { title: string; description?: string; dueOn?: string | null },
+): Promise<Milestone> {
+  return req(`/repos/${handle}/${repoName}/milestones`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function updateMilestone(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  patch: { title?: string; description?: string; dueOn?: string | null; state?: "open" | "closed" },
+): Promise<Milestone> {
+  return req(`/repos/${handle}/${repoName}/milestones/${number}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+export async function deleteMilestone(token: string, handle: string, repoName: string, number: number): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/milestones/${number}`, { method: "DELETE", token });
+}
+
+/** Set (or clear, with null) the milestone on an issue. Writer-gated on the server. */
+export async function setIssueMilestone(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  milestoneId: string | null,
+): Promise<Issue> {
+  return updateIssue(token, handle, repoName, number, { milestoneId });
 }
 
 // ─── timelines & PR conversation ─────────────────────────────────────────────────────────

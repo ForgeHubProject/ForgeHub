@@ -112,6 +112,7 @@ type IssueSubject = {
     assigneeId: string | null;
     estimateMinutes: number;
     spentMinutes: number;
+    milestoneId: string | null;
   };
 };
 
@@ -133,7 +134,23 @@ export type ApplyQuickActionsParams = {
 const KNOWN_COMMANDS = new Set([
   "close", "reopen", "label", "unlabel", "assign", "unassign", "title",
   "estimate", "spend", "remove_estimate", "remove_time_spent",
+  "milestone", "remove_milestone",
 ]);
+
+/**
+ * Extract a milestone title from a `/milestone` arg. Honors the GitLab `%` sigil
+ * and single/double quoting so multi-word titles survive: `%"v1.0 beta"`,
+ * `%'Sprint 4'`, `%Backlog`, or just `Sprint 4` all yield the bare title.
+ */
+export function parseMilestoneTitle(arg: string): string {
+  let s = arg.trim();
+  if (s.startsWith("%")) s = s.slice(1).trim();
+  const quote = s[0];
+  if ((quote === '"' || quote === "'") && s.endsWith(quote) && s.length >= 2) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
 
 function isWriter(repo: RepoCtx, userId: string): boolean {
   if (repo.ownerId === userId) return true;
@@ -231,6 +248,19 @@ async function applyIssueCommands(p: ApplyQuickActionsParams, d: Dispatch): Prom
   let title = issue.title;
   let estimate = issue.estimateMinutes;
   let spent = issue.spentMinutes;
+  let milestoneId = issue.milestoneId;
+
+  // Lazily-loaded repo milestones (only when a /milestone command appears).
+  let repoMilestones: Array<{ id: string; number: number; title: string }> | null = null;
+  const loadMilestones = async () => {
+    if (!repoMilestones) {
+      repoMilestones = await prisma.milestone.findMany({
+        where: { repoId: p.repo.id },
+        select: { id: true, number: true, title: true },
+      });
+    }
+    return repoMilestones;
+  };
 
   // Lazily-loaded repo labels + currently-applied label ids (only if needed).
   let repoLabels: Array<{ id: string; name: string; color: string }> | null = null;
@@ -415,6 +445,34 @@ async function applyIssueCommands(p: ApplyQuickActionsParams, d: Dispatch): Prom
           await prisma.issue.update({ where: { id: issue.id }, data: { spentMinutes: 0 } });
           spent = 0;
           d.apply(label, "Removed all spent time");
+          break;
+        }
+
+        // ── Milestone (#83) ──────────────────────────────────────────────────────
+        case "milestone": {
+          if (!d.writer) { d.reject(label, "Write access is required to set a milestone"); break; }
+          const wanted = parseMilestoneTitle(cmd.arg);
+          if (!wanted) { d.reject(label, "A milestone title is required (try `/milestone \"v1.0\"`)"); break; }
+          const milestones = await loadMilestones();
+          const lower = wanted.toLowerCase();
+          const found = milestones.find((m) => m.title.toLowerCase() === lower);
+          if (!found) { d.reject(label, `Milestone “${wanted}” does not exist in this repository`); break; }
+          if (milestoneId === found.id) { d.apply(label, `Already on milestone ${found.title}`); break; }
+          await prisma.issue.update({ where: { id: issue.id }, data: { milestoneId: found.id } });
+          milestoneId = found.id;
+          await emit("milestoned", { milestone: { title: found.title, number: found.number } });
+          d.apply(label, `Added to milestone ${found.title}`);
+          break;
+        }
+        case "remove_milestone": {
+          if (!d.writer) { d.reject(label, "Write access is required to change the milestone"); break; }
+          if (!milestoneId) { d.apply(label, "This issue is not on a milestone"); break; }
+          const milestones = await loadMilestones();
+          const prev = milestones.find((m) => m.id === milestoneId) ?? null;
+          await prisma.issue.update({ where: { id: issue.id }, data: { milestoneId: null } });
+          milestoneId = null;
+          await emit("demilestoned", prev ? { milestone: { title: prev.title, number: prev.number } } : undefined);
+          d.apply(label, prev ? `Removed from milestone ${prev.title}` : "Removed from milestone");
           break;
         }
 
