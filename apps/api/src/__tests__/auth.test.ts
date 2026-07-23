@@ -16,6 +16,11 @@ vi.mock("../prisma.js", () => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    // Register consults the org table to enforce the shared handle space (issue
+    // #114); default to "no clash" so existing registration cases are unaffected.
+    organization: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 
@@ -141,6 +146,19 @@ describe("POST /auth/register", () => {
       method: "POST",
       url: "/auth/register",
       payload: { email: "alice@example.com", password: "hunter12", handle: "alice" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already taken/i);
+  });
+
+  // Shared handle space (issue #114), collision direction 2: a handle already
+  // owned by an ORG cannot be registered as a user handle.
+  it("409 when the handle is already taken by an org", async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValueOnce({ id: "org-1", handle: "acme" } as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: { email: "x@example.com", password: "hunter12", handle: "acme" },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toMatch(/already taken/i);
