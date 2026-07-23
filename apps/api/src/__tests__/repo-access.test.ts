@@ -13,6 +13,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
     ownerId: "owner-1",
     createdAt: new Date(),
     updatedAt: new Date(),
+    forkedFromId: null,
     collaborators: [],
     ...overrides,
   };

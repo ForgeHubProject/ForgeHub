@@ -99,6 +99,13 @@ model Repo {
 
   projects        Project[]
 
+  // Fork lineage (issue #113): the repo this was forked from (null for roots),
+  // and the inbound forks that point back at this repo. onDelete: SetNull so
+  // deleting an upstream orphans its forks rather than cascade-deleting them.
+  forkedFromId    String?
+  forkedFrom      Repo?              @relation("RepoForks", fields: [forkedFromId], references: [id], onDelete: SetNull)
+  forks           Repo[]             @relation("RepoForks")
+
   @@unique([ownerId, name])
 }
 

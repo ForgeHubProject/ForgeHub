@@ -455,6 +455,72 @@ export async function cloneMirror(sourceKey: string, destKey: string): Promise<v
   await execFile("git", ["clone", "--mirror", sourcePath, destPath], { maxBuffer: MAX });
 }
 
+// ─── fork sync (upstream tracking, issue #113) ─────────────────────────────────
+
+export type ForkSyncStatus = "up-to-date" | "fast-forwarded" | "diverged";
+
+export type ForkSyncResult = {
+  status: ForkSyncStatus;
+  ahead: number;
+  behind: number;
+  /** The branch that was synced (the parent's default branch). */
+  branch: string;
+  /** The fork's branch tip before the sync (null when the branch didn't exist). */
+  oldSha: string | null;
+  /** The fork's branch tip after the sync (== oldSha unless fast-forwarded). */
+  newSha: string | null;
+};
+
+/**
+ * Sync a fork's default branch from its upstream parent. Both repos are local
+ * bare dirs, so the parent's branch is fetched directly by path into the fork's
+ * object store (no ref is written by the fetch — it lands in FETCH_HEAD). The
+ * fork's branch is fast-forwarded **only** when it is strictly behind (no local
+ * commits of its own); history is never rewritten.
+ *
+ *  - `up-to-date`     the fork already contains the upstream tip (behind == 0)
+ *  - `fast-forwarded` the fork was behind-only and its branch ref was advanced
+ *  - `diverged`       the fork has local commits upstream lacks (behind>0 && ahead>0)
+ *
+ * On a fast-forward, `oldSha`→`newSha` brackets the pulled range so the caller
+ * can re-ingest artifacts and emit push events, exactly like a client push.
+ * ahead/behind are measured with the fork's branch as `head` and the upstream
+ * tip as `base` (ahead = commits only on the fork, behind = commits only upstream).
+ */
+export async function syncForkBranch(forkKey: string, parentKey: string): Promise<ForkSyncResult> {
+  const parentPath = bareRepoPathFromKey(parentKey);
+  const branch = await defaultBranch(parentKey);
+
+  // Fetch the parent's default branch into FETCH_HEAD without moving any ref.
+  await git(forkKey, ["fetch", parentPath, branch]);
+  const upstreamSha = await git(forkKey, ["rev-parse", "FETCH_HEAD"]);
+
+  const oldSha = await resolveBranchSha(forkKey, branch);
+
+  // The branch didn't exist on the fork yet (empty at fork time): create it at
+  // the upstream tip — a fast-forward from nothing.
+  if (!oldSha) {
+    await git(forkKey, ["update-ref", `refs/heads/${branch}`, upstreamSha]);
+    return { status: "fast-forwarded", ahead: 0, behind: 0, branch, oldSha: null, newSha: upstreamSha };
+  }
+
+  const { ahead, behind } = await countAheadBehind(forkKey, upstreamSha, branch);
+
+  // Already contains everything upstream has (it may be ahead — nothing to pull).
+  if (behind === 0) {
+    return { status: "up-to-date", ahead, behind, branch, oldSha, newSha: oldSha };
+  }
+  // Behind AND ahead — local commits would be lost by a fast-forward. Refuse.
+  if (ahead > 0) {
+    return { status: "diverged", ahead, behind, branch, oldSha, newSha: oldSha };
+  }
+
+  // Behind-only → advance the fork's branch ref to the upstream tip. The old-value
+  // guard makes the update atomic against a concurrent write.
+  await git(forkKey, ["update-ref", `refs/heads/${branch}`, upstreamSha, oldSha]);
+  return { status: "fast-forwarded", ahead, behind, branch, oldSha, newSha: upstreamSha };
+}
+
 // ─── branch SHA lookup for HEAD comparisons ────────────────────────────────────────────
 
 export async function resolveBranchSha(storageKey: string, branch: string): Promise<string | null> {
