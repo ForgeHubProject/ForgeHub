@@ -711,6 +711,10 @@ model WorkflowRun {
   createdAt    DateTime  @default(now())
   startedAt    DateTime?
   completedAt  DateTime?
+  // Set when this run was created by re-running another run (POST …/rerun). Points
+  // at the source WorkflowRun.id; null for runs created by a push/PR trigger. Kept
+  // as a plain column (not a self-relation) so a pruned source never dangles a FK.
+  rerunOfId    String?
 
   repo      Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
   checkRuns CheckRun[]

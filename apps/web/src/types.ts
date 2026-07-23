@@ -709,13 +709,13 @@ export type SearchEntityResult = {
 // ─── Actions-style CI: workflow runs + check runs (issue #86) ────────────────────
 
 export type CiStatus = "queued" | "running" | "completed";
-export type CiConclusion = "success" | "failure" | null;
+export type CiConclusion = "success" | "failure" | "cancelled" | null;
 
 /** Aggregate check counts for a commit — the /check-summary contract shape. */
 export type CheckSummary = { total: number; passing: number; failing: number; pending: number };
 
 /** Single-glyph rollup used by the status dots. */
-export type CheckState = "success" | "failure" | "pending" | "none";
+export type CheckState = "success" | "failure" | "cancelled" | "pending" | "none";
 
 export type CheckRun = {
   id: string;
@@ -742,6 +742,8 @@ export type WorkflowRun = {
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  /** Set when this run was created by re-running another run; points at its id. */
+  rerunOfId: string | null;
   summary: CheckSummary;
   checkRuns: CheckRun[];
 };

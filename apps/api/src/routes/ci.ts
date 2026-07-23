@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, resolveRepo } from "../repo-access.js";
+import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { summarizeCheckRuns, type CheckSummary } from "../ci/summary.js";
+import { createRerun } from "../ci/trigger.js";
+import { cancelRun, isCiEnabled } from "../ci/runner.js";
 
 /**
  * Actions-style CI read API (issue #86).
@@ -43,6 +45,7 @@ type RunRow = {
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  rerunOfId: string | null;
   checkRuns: CheckRunRow[];
 };
 
@@ -75,12 +78,17 @@ function serializeRun(run: RunRow) {
     createdAt: run.createdAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,
     completedAt: run.completedAt?.toISOString() ?? null,
+    rerunOfId: run.rerunOfId,
     summary,
     checkRuns: run.checkRuns.map(serializeCheck),
   };
 }
 
 export async function ciRoutes(app: FastifyInstance) {
+  // A PAT must carry repo:write for the mutating routes below; a session is unscoped
+  // and passes (issue #87). The route bodies still enforce canWrite on the repo.
+  const write = app.requireScope("repo:write");
+
   // ── GET check-summary (CONTRACT) ──────────────────────────────────────────────
   // {total, passing, failing, pending} across every CheckRun of every WorkflowRun
   // for this sha. 404 when the repo has no runs for the sha.
@@ -186,5 +194,68 @@ export async function ciRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Log not found" });
     }
     return reply.type("text/plain").send(content);
+  });
+
+  // ── POST re-run (writer-gated) ────────────────────────────────────────────────
+  // Creates a FRESH queued run for the same commit/workflow/trigger, linked to the
+  // source via rerunOfId, and enqueues it. Returns the new run (201).
+  app.post("/repos/:handle/:name/actions/runs/:id/rerun", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, id } = request.params as { handle: string; name: string; id: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+    // Re-running executes repo-controlled code, so honor the same hard-off gate as
+    // the trigger layer: with CI disabled the feature behaves as if it is absent.
+    if (!isCiEnabled()) return reply.status(409).send({ error: "CI is disabled on this instance" });
+    if (!repo.storageKey) return reply.status(404).send({ error: "Run not found" });
+
+    const source = await prisma.workflowRun.findFirst({
+      where: { id, repoId: repo.id },
+      include: { checkRuns: { select: { jobId: true, jobName: true } } },
+    });
+    if (!source) return reply.status(404).send({ error: "Run not found" });
+
+    const newId = await createRerun({
+      id: source.id,
+      repoId: repo.id,
+      storageKey: repo.storageKey,
+      commitSha: source.commitSha,
+      trigger: source.trigger,
+      ref: source.ref,
+      prId: source.prId,
+      workflowName: source.workflowName,
+      workflowPath: source.workflowPath,
+      checkRuns: source.checkRuns,
+    });
+
+    const created = await prisma.workflowRun.findFirst({ where: { id: newId }, include: { checkRuns: true } });
+    return reply.status(201).send(created ? serializeRun(created) : { id: newId });
+  });
+
+  // ── POST cancel (writer-gated) ────────────────────────────────────────────────
+  // Queued run → cancelled at once (never starts). Running run → the in-flight
+  // job's process group is killed and remaining jobs are marked cancelled. A
+  // completed run → 409. Cancelled counts as a non-success conclusion, so the
+  // check-summary rollup buckets it as failing for branch protection (cancelled ≠ green).
+  app.post("/repos/:handle/:name/actions/runs/:id/cancel", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, id } = request.params as { handle: string; name: string; id: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const run = await prisma.workflowRun.findFirst({
+      where: { id, repoId: repo.id },
+      select: { id: true, status: true },
+    });
+    if (!run) return reply.status(404).send({ error: "Run not found" });
+    if (run.status === "completed") return reply.status(409).send({ error: "Run already completed" });
+
+    await cancelRun(id);
+
+    const updated = await prisma.workflowRun.findFirst({ where: { id, repoId: repo.id }, include: { checkRuns: true } });
+    if (!updated) return reply.status(404).send({ error: "Run not found" });
+    return serializeRun(updated);
   });
 }

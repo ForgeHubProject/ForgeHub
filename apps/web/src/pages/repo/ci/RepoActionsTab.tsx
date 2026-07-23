@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { getCheckLog, getWorkflowRun, listWorkflowRuns } from "../../../api";
-import type { CheckRun, WorkflowRun } from "../../../types";
-import { EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../../ui";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  cancelWorkflowRun,
+  getCheckLog,
+  getWorkflowRun,
+  listWorkflowRuns,
+  rerunWorkflowRun,
+} from "../../../api";
+import type { CheckRun, User, WorkflowRun } from "../../../types";
+import { Button, EmptyState, Icons, RelativeTime, Skeleton, cx, useToast } from "../../../ui";
 import {
   CheckStatusIcon,
   conclusionState,
@@ -16,11 +22,91 @@ type Props = {
   handle: string;
   repoName: string;
   splat: string;
+  user: User;
 };
+
+// ─── Re-run / Cancel controls ─────────────────────────────────────────────────────
+
+/**
+ * Writer-only run controls. A completed run gets "Re-run" (creates + navigates to a
+ * fresh run); a queued/running run gets "Cancel". Rendered on both the runs list
+ * rows and the run-detail header. Non-writers see nothing (the server enforces too).
+ */
+function RunActions({
+  token,
+  handle,
+  repoName,
+  run,
+  canWrite,
+  onChanged,
+}: {
+  token: string;
+  handle: string;
+  repoName: string;
+  run: Pick<WorkflowRun, "id" | "status">;
+  canWrite: boolean;
+  onChanged: () => void;
+}) {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [busy, setBusy] = useState<null | "rerun" | "cancel">(null);
+  if (!canWrite) return null;
+
+  const completed = run.status === "completed";
+
+  const rerun = async () => {
+    setBusy("rerun");
+    try {
+      const fresh = await rerunWorkflowRun(token, handle, repoName, run.id);
+      toast("Re-run started", { tone: "success" });
+      navigate(`/${handle}/${repoName}/actions/runs/${fresh.id}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not re-run", { tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cancel = async () => {
+    setBusy("cancel");
+    try {
+      await cancelWorkflowRun(token, handle, repoName, run.id);
+      toast("Run cancelled", { tone: "info" });
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not cancel", { tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return completed ? (
+    <Button
+      size="sm"
+      variant="default"
+      loading={busy === "rerun"}
+      leadingIcon={<Icons.SyncIcon size={14} />}
+      onClick={rerun}
+    >
+      Re-run
+    </Button>
+  ) : (
+    <Button
+      size="sm"
+      variant="default"
+      loading={busy === "cancel"}
+      leadingIcon={<Icons.StopIcon size={13} />}
+      onClick={cancel}
+    >
+      Cancel
+    </Button>
+  );
+}
 
 // ─── Runs list ──────────────────────────────────────────────────────────────────
 
-function RunsList({ token, handle, repoName, base }: Props & { base: string }) {
+function RunsList({ token, handle, repoName, user, base }: Props & { base: string }) {
+  const canWrite = user.handle === handle;
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
   const [error, setError] = useState(false);
 
@@ -101,6 +187,9 @@ function RunsList({ token, handle, repoName, base }: Props & { base: string }) {
             <span className={cx("shrink-0 rounded-full px-2 py-0.5 text-fh-xs font-medium", stateBadgeClasses(runState(run)))}>
               {runStateLabel(run)}
             </span>
+            <div className="shrink-0">
+              <RunActions token={token} handle={handle} repoName={repoName} run={run} canWrite={canWrite} onChanged={() => void load()} />
+            </div>
           </li>
         ))}
       </ul>
@@ -154,7 +243,8 @@ function JobLog({ token, handle, repoName, runId, check, defaultOpen }: {
   );
 }
 
-function RunDetail({ token, handle, repoName, id, base }: Props & { id: string; base: string }) {
+function RunDetail({ token, handle, repoName, user, id, base }: Props & { id: string; base: string }) {
+  const canWrite = user.handle === handle;
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -222,11 +312,22 @@ function RunDetail({ token, handle, repoName, id, base }: Props & { id: string; 
               <span aria-hidden="true">·</span>
               <RelativeTime date={run.createdAt} />
               <span className="font-mono text-fh-fg-subtle">{run.workflowPath}</span>
+              {run.rerunOfId && (
+                <Link
+                  to={`${base}/actions/runs/${run.rerunOfId}`}
+                  className="inline-flex items-center gap-1 rounded bg-fh-neutral-muted px-1.5 py-0.5 font-medium text-fh-fg-muted no-underline hover:text-fh-accent-fg"
+                >
+                  <Icons.SyncIcon size={11} /> re-run
+                </Link>
+              )}
             </p>
           </div>
-          <span className={cx("shrink-0 rounded-full px-2.5 py-0.5 text-fh-xs font-medium", stateBadgeClasses(runState(run)))}>
-            {runStateLabel(run)}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={cx("rounded-full px-2.5 py-0.5 text-fh-xs font-medium", stateBadgeClasses(runState(run)))}>
+              {runStateLabel(run)}
+            </span>
+            <RunActions token={token} handle={handle} repoName={repoName} run={run} canWrite={canWrite} onChanged={() => void load()} />
+          </div>
         </div>
       </div>
 
@@ -251,11 +352,11 @@ function RunDetail({ token, handle, repoName, id, base }: Props & { id: string; 
 
 // ─── Entry ──────────────────────────────────────────────────────────────────────
 
-export function RepoActionsTab({ token, handle, repoName, splat }: Props) {
+export function RepoActionsTab({ token, handle, repoName, splat, user }: Props) {
   const base = `/${handle}/${repoName}`;
   const match = splat.match(/^actions\/runs\/([^/]+)$/);
   if (match) {
-    return <RunDetail token={token} handle={handle} repoName={repoName} splat={splat} id={match[1]} base={base} />;
+    return <RunDetail token={token} handle={handle} repoName={repoName} splat={splat} user={user} id={match[1]} base={base} />;
   }
-  return <RunsList token={token} handle={handle} repoName={repoName} splat={splat} base={base} />;
+  return <RunsList token={token} handle={handle} repoName={repoName} splat={splat} user={user} base={base} />;
 }

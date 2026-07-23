@@ -7,17 +7,35 @@ vi.mock("../prisma.js", () => ({
   prisma: {
     repo: { findFirst: vi.fn() },
     personalAccessToken: { findUnique: vi.fn(), update: vi.fn() },
-    workflowRun: { findMany: vi.fn(), findFirst: vi.fn() },
+    workflowRun: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
     checkRun: { findFirst: vi.fn() },
   },
 }));
 
+// The runner is mocked so the write routes never kick real background execution.
+vi.mock("../ci/runner.js", () => ({
+  isCiEnabled: vi.fn(() => true),
+  enqueueRun: vi.fn(),
+  cancelRun: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { prisma } from "../prisma.js";
+import { cancelRun, isCiEnabled } from "../ci/runner.js";
+import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
 const OWNER = "owner-1";
 const OUTSIDER = "outsider-2";
+
+/** Route a presented PAT (by its hash) to a scope string, else 401. */
+function wirePats(byHash: Record<string, { userId: string; scopes: string }>) {
+  vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) => {
+    const rec = byHash[args.where.tokenHash];
+    return Promise.resolve(rec ? { id: "pat", userId: rec.userId, scopes: rec.scopes, expiresAt: null } : null);
+  }) as never);
+  vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+}
 
 function publicRepo(overrides: Record<string, unknown> = {}) {
   return { id: "repo-1", name: "widget", ownerId: OWNER, visibility: "PUBLIC", storageKey: "owner/widget.git", collaborators: [], ...overrides };
@@ -158,5 +176,157 @@ describe("GET job log", () => {
     vi.mocked(prisma.checkRun.findFirst).mockResolvedValue(null as never);
     const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/none/log" });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── POST re-run / cancel (writer-gated, v1) ─────────────────────────────────────
+
+/** A full run row shaped for serializeRun. */
+function fullRun(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "run-new", commitSha: "abcdef1234567890", trigger: "push", ref: "main", prId: null,
+    workflowName: "CI", workflowPath: ".forgehub/workflows/ci.yml",
+    status: "queued", conclusion: null, rerunOfId: "run-1",
+    createdAt: new Date("2026-07-23T00:00:00Z"), startedAt: null, completedAt: null,
+    checkRuns: [{ id: "chk-1", jobId: "build", jobName: "Build", status: "queued", conclusion: null, startedAt: null, completedAt: null, logPath: null }],
+    ...overrides,
+  };
+}
+
+const READ_TOKEN = "fhp_read";
+const WRITE_TOKEN = "fhp_write";
+
+describe("POST re-run", () => {
+  beforeEach(() => {
+    vi.mocked(isCiEnabled).mockReturnValue(true);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never); // retention no-op
+    vi.mocked(prisma.workflowRun.deleteMany).mockResolvedValue({} as never);
+    vi.mocked(prisma.workflowRun.create).mockResolvedValue({ id: "run-new" } as never);
+  });
+
+  it("owner (session) re-runs → 201 with a fresh run linked to the source", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.workflowRun.findFirst)
+      .mockResolvedValueOnce({ id: "run-1", commitSha: "abcdef1234567890", trigger: "push", ref: "main", prId: null, workflowName: "CI", workflowPath: ".forgehub/workflows/ci.yml", checkRuns: [{ jobId: "build", jobName: "Build" }] } as never)
+      .mockResolvedValueOnce(fullRun() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/rerun",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().id).toBe("run-new");
+    expect(res.json().rerunOfId).toBe("run-1");
+    // The source run's job set was cloned into the new run.
+    const createArg = vi.mocked(prisma.workflowRun.create).mock.calls[0][0].data as Record<string, unknown>;
+    expect(createArg.rerunOfId).toBe("run-1");
+  });
+
+  it("403s a repo:read PAT (missing repo:write)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    wirePats({ [hashToken(READ_TOKEN)]: { userId: OWNER, scopes: "repo:read" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/rerun",
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+  });
+
+  it("403s a non-writer session on a public repo", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/rerun",
+      headers: { authorization: await authHeader(app, OUTSIDER) },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("409s when CI is disabled on the instance", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(isCiEnabled).mockReturnValue(false);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/rerun",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("404s when the source run does not exist", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.workflowRun.findFirst).mockResolvedValue(null as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/nope/rerun",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("POST cancel", () => {
+  it("owner cancels a running run → invokes the runner and returns the run", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.workflowRun.findFirst)
+      .mockResolvedValueOnce({ id: "run-1", status: "running" } as never)
+      .mockResolvedValueOnce(fullRun({ id: "run-1", status: "running", rerunOfId: null }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/cancel",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(cancelRun).toHaveBeenCalledWith("run-1");
+  });
+
+  it("409s cancelling an already-completed run", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.workflowRun.findFirst).mockResolvedValue({ id: "run-1", status: "completed" } as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/cancel",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("404s cancelling an unknown run", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.workflowRun.findFirst).mockResolvedValue(null as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/nope/cancel",
+      headers: { authorization: await authHeader(app, OWNER) },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("403s a repo:read PAT (missing repo:write)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    wirePats({ [hashToken(READ_TOKEN)]: { userId: OWNER, scopes: "repo:read" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/cancel",
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+  });
+
+  it("allows a repo:write PAT to cancel", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    wirePats({ [hashToken(WRITE_TOKEN)]: { userId: OWNER, scopes: "repo:read,repo:write" } });
+    vi.mocked(prisma.workflowRun.findFirst)
+      .mockResolvedValueOnce({ id: "run-1", status: "queued" } as never)
+      .mockResolvedValueOnce(fullRun({ id: "run-1", status: "queued", rerunOfId: null }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/owner/widget/actions/runs/run-1/cancel",
+      headers: { authorization: `Bearer ${WRITE_TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
   });
 });

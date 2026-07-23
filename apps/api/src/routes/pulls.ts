@@ -204,7 +204,7 @@ export async function pullRoutes(app: FastifyInstance) {
     if (repo.storageKey) {
       const storageKey = repo.storageKey;
       void resolveBranchSha(storageKey, fromBranch).then((headSha) => {
-        if (headSha) return triggerWorkflowsForPrOpen(repo.id, storageKey, pr.id, fromBranch, headSha);
+        if (headSha) return triggerWorkflowsForPrOpen(repo.id, storageKey, pr.id, fromBranch, headSha, pr.toBranch);
       }).catch((err) => request.log.error({ err }, "PR-open CI trigger failed"));
     }
 

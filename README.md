@@ -112,38 +112,60 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 | `POST` | `/repos/:handle/:name/forks` | Fork a repo into the caller's namespace |
 | `GET` | `/repos/:handle/:name/forks` | List forks |
 
-### Actions-style CI (issue #86, v0)
+### Actions-style CI (issue #86)
 
 Repos can define workflows in `.forgehub/workflows/*.yml` that run on `push`
 and/or `pull_request`:
 
 ```yaml
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main, "releases/*"]   # optional glob branch filter
+  pull_request:                      # unfiltered → every target branch
+env:
+  NODE_ENV: test                     # workflow-level env, merged into every step
 jobs:
   test:
     name: Type-check tests
+    env:
+      CI: "1"                        # job-level env (overrides workflow-level)
     steps:
       - run: npm ci
       - run: npm test
 ```
 
 A `push` (branch tip moves) or a PR (open / head-sync) enqueues a **WorkflowRun**
-holding one **CheckRun** per job. A built-in in-process runner (one job at a time
-in v0) makes a fresh clone of the triggering commit, runs each step with `sh -c`
-in that checkout, streams interleaved stdout+stderr to a per-job log, stops on the
-first failing step, and times each job out after `CI_JOB_TIMEOUT` seconds. An
-invalid workflow file never crashes the push — it surfaces as a failed CheckRun
-whose log holds the parse error. Results appear as status dots on commits and in a
-PR's Checks section, and in the repo's **Actions** tab (run list + monospace log
-view). Logs live on disk under `<GIT_STORAGE_ROOT>-ci/`, never in the database.
+holding one **CheckRun** per job. A built-in in-process runner (one job at a time)
+makes a fresh clone of the triggering commit, runs each step with `sh -c` in that
+checkout with the merged env applied, streams interleaved stdout+stderr to a per-job
+log, stops on the first failing step, and times each job out after `CI_JOB_TIMEOUT`
+seconds. An invalid workflow file (including a non-string `env:` value) never crashes
+the push — it surfaces as a failed CheckRun whose log holds the parse error. Results
+appear as status dots on commits and in a PR's Checks section, and in the repo's
+**Actions** tab (run list + monospace log view). Logs live on disk under
+`<GIT_STORAGE_ROOT>-ci/`, never in the database.
+
+**v1 controls.** A writer can **re-run** a run (creates a fresh queued run for the
+same commit/workflow, linked via `rerunOfId`) or **cancel** one — a queued run is
+cancelled before it starts, a running run has its in-flight job's process group
+killed and later jobs marked cancelled. A **cancelled** run counts as a non-success
+conclusion, so branch protection's `requireGreenChecks` treats it as failing
+(cancelled ≠ green, matching GitHub). **Branch filters** (`on.push.branches` /
+`on.pull_request.branches`) glob-match the pushed branch / the PR's target branch
+(`*` matches within a path segment); an unfiltered event keeps triggering on every
+branch. **Retention** caps a repo's completed-run history: after each new run is
+enqueued, runs older than `FORGEHUB_CI_RETENTION` (default 200) are pruned — DB rows
+and their on-disk logs.
 
 > ⚠️ **Security model — single-tenant, self-hosted only.** The runner executes
 > **repo-author-controlled shell** directly on the host as the API process user,
-> with no container/VM/user sandbox in v0. It is therefore **hard-off unless you
-> set `FORGEHUB_CI=1`**, and only meant for an instance where every pusher is
-> already trusted with shell access. When `FORGEHUB_CI` is unset, pushes record
-> nothing at all — no runs, no parsing. Multi-tenant isolation (containers,
+> with no container/VM/user sandbox. It is therefore **hard-off unless you set
+> `FORGEHUB_CI=1`**, and only meant for an instance where every pusher is already
+> trusted with shell access. When `FORGEHUB_CI` is unset, pushes record nothing at
+> all — no runs, no parsing, and re-run is refused. The v1 job timeout, cancel, and
+> retention controls **bound blast radius and disk/CPU use — they are containment,
+> not isolation**: they do not sandbox the code. Multi-tenant isolation (containers,
 > ephemeral runners, egress control) is a later stage of the epic and must land
 > before untrusted authors can be allowed to run CI.
 
@@ -154,9 +176,12 @@ view). Logs live on disk under `<GIT_STORAGE_ROOT>-ci/`, never in the database.
 | `GET` | `/repos/:handle/:name/actions/runs?sha=&prId=` | List workflow runs |
 | `GET` | `/repos/:handle/:name/actions/runs/:id` | Run detail with its check runs |
 | `GET` | `/repos/:handle/:name/actions/runs/:id/checks/:checkId/log` | Plain-text job log |
+| `POST` | `/repos/:handle/:name/actions/runs/:id/rerun` | Re-run a run (writer-only) → fresh queued run |
+| `POST` | `/repos/:handle/:name/actions/runs/:id/cancel` | Cancel a queued/running run (writer-only); 409 if completed |
 
 **Env:** `FORGEHUB_CI=1` enables the runner (default: off). `CI_JOB_TIMEOUT`
-bounds each job in seconds (default: 600).
+bounds each job in seconds (default: 600). `FORGEHUB_CI_RETENTION` caps a repo's
+retained completed runs (default: 200).
 
 ### Git over HTTPS
 
