@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { createBranch, getRepo, listBranches, listIssues, listPulls } from "../api";
+import { createBranch, getRepo, listBranches, listIssues, listProjects, listPulls } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { Badge, Button, Spinner, TabNav, TabItem } from "../ui";
@@ -23,6 +23,7 @@ import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
+import { RepoProjectsTab } from "./repo/projects/RepoProjectsTab";
 import { RepoSettingsTab } from "./repo/RepoSettingsTab";
 
 type Props = {
@@ -31,11 +32,12 @@ type Props = {
   onLogout: () => void;
 };
 
-type Tab = "code" | "issues" | "pulls" | "commits" | "releases" | "settings";
+type Tab = "code" | "issues" | "pulls" | "projects" | "commits" | "releases" | "settings";
 
 function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("issues")) return "issues";
   if (subpath.startsWith("pulls")) return "pulls";
+  if (subpath.startsWith("projects")) return "projects";
   if (subpath.startsWith("commits")) return "commits";
   if (subpath.startsWith("releases")) return "releases";
   if (subpath.startsWith("settings")) return "settings";
@@ -71,6 +73,14 @@ function CommitIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path fillRule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z" />
+    </svg>
+  );
+}
+
+function ProjectIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <path fillRule="evenodd" d="M1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0114.25 16H1.75A1.75 1.75 0 010 14.25V1.75C0 .784.784 0 1.75 0zM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V1.75a.25.25 0 00-.25-.25H1.75a.25.25 0 00-.25.25zM11.75 3a.75.75 0 01.75.75v7.5a.75.75 0 01-1.5 0v-7.5a.75.75 0 01.75-.75zm-8 0a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 013.75 3zm4 0a.75.75 0 01.75.75v9a.75.75 0 01-1.5 0v-9A.75.75 0 017.75 3z" />
     </svg>
   );
 }
@@ -144,6 +154,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
   const [openIssueCount, setOpenIssueCount] = useState<number | null>(null);
   const [openPrCount, setOpenPrCount] = useState<number | null>(null);
+  const [openProjectCount, setOpenProjectCount] = useState<number | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -176,7 +187,15 @@ export function RepoPage({ token, user, onLogout }: Props) {
     listPulls(token, h, r, "open")
       .then((d) => setOpenPrCount(d.pulls.length))
       .catch(() => {});
+
+    refreshProjectCount();
   }, [token, h, r]);
+
+  function refreshProjectCount() {
+    listProjects(token, h, r, "open")
+      .then((d) => setOpenProjectCount(d.projects.length))
+      .catch(() => {});
+  }
 
   function handleRefChange(newRef: string) {
     setCurrentRef(newRef);
@@ -280,6 +299,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             <TabItem to={base} active={activeTab === "code"} icon={<CodeIcon />}>Code</TabItem>
             <TabItem to={`${base}/issues`} active={activeTab === "issues"} icon={<IssueIcon />} count={openIssueCount ?? undefined}>Issues</TabItem>
             <TabItem to={`${base}/pulls`} active={activeTab === "pulls"} icon={<PRIcon />} count={openPrCount ?? undefined}>Pull requests</TabItem>
+            <TabItem to={`${base}/projects`} active={activeTab === "projects"} icon={<ProjectIcon />} count={openProjectCount ?? undefined}>Projects</TabItem>
             <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
             <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
             {user.handle === h && (
@@ -348,6 +368,16 @@ export function RepoPage({ token, user, onLogout }: Props) {
             defaultBranch={defaultBranch}
             currentRef={currentRef}
             splat={splat}
+          />
+        )}
+        {activeTab === "projects" && (
+          <RepoProjectsTab
+            token={token}
+            handle={h}
+            repoName={r}
+            user={user}
+            splat={splat}
+            onProjectsChanged={refreshProjectCount}
           />
         )}
         {activeTab === "releases" && (
