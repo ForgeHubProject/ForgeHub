@@ -12,6 +12,7 @@ import type {
   ReviewCommentPosition, TimelineEvent, User,
 } from "../../../types";
 import { Avatar, Button, RelativeTime, Skeleton, TabItem, TabNav, Textarea } from "../../../ui";
+import { SignatureBadge } from "../commitUi";
 import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
 import { PRFileRow } from "./PRFileRow";
@@ -428,6 +429,7 @@ export function PullDetail({
                   >
                     <Avatar name={c.authorName} size={20} />
                     <span className="flex-1 min-w-0 truncate text-fh-sm text-fh-fg">{c.subject}</span>
+                    <SignatureBadge signature={c.signature} />
                     <button
                       type="button"
                       className="font-mono text-fh-xs text-fh-fg-muted bg-fh-surface-muted border border-fh-border px-1.5 py-0.5 rounded hover:border-fh-border-strong hover:text-fh-accent-fg transition-colors shrink-0"

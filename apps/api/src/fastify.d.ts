@@ -5,8 +5,10 @@ import type { PatScope } from "./scopes.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
-    payload: { sub: string };
-    user: { sub: string };
+    // `sid` is the interactive-login Session id (issue #117); absent on PAT-derived
+    // identities and on tokens minted before sessions existed.
+    payload: { sub: string; sid?: string };
+    user: { sub: string; sid?: string };
   }
 }
 

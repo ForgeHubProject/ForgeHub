@@ -26,6 +26,24 @@ export type PersonalAccessToken = {
   createdAt: string;
 };
 
+/** An interactive login session (issue #117). */
+export type SessionInfo = {
+  id: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  /** True for the session backing the token making the request. */
+  current: boolean;
+};
+
+/** A protected-tag glob rule for a repo (issue #117). */
+export type ProtectedTag = {
+  id: string;
+  pattern: string;
+  createdAt: string;
+};
+
 // ─── Outbound webhooks (issue #87) ────────────────────────────────────────────
 
 /** Subscribable webhook events shown as checkboxes; "*" means all. */
@@ -458,6 +476,15 @@ export type PullRequest = {
   updatedAt: string;
 };
 
+/** Display status of a commit's git signature (Verified badge — issue #117). */
+export type CommitSignatureStatus = "verified" | "signed-unverified" | "unsigned";
+
+export type CommitSignature = {
+  status: CommitSignatureStatus;
+  signer: string | null;
+  keyId: string | null;
+};
+
 export type CommitInfo = {
   sha: string;
   shortSha: string;
@@ -467,6 +494,7 @@ export type CommitInfo = {
   authorEmail: string;
   date: string;
   parents: string[];
+  signature: CommitSignature;
 };
 
 export type DiffLine = {
