@@ -74,8 +74,35 @@ export type Repo = {
   topics?: string[];
   /** Detected license — present only on the repo detail payload; null when none. */
   license?: RepoLicense | null;
+  /** Fork lineage (issue #113) — populated on the repo detail payload. */
+  parent?: ForkRef | null;
+  /** Root of the fork chain; equals `parent` for a single-level fork. */
+  source?: ForkRef | null;
+  /** Number of direct forks the viewer is allowed to see. */
+  forkCount?: number;
   createdAt: string;
   updatedAt: string;
+};
+
+/** A repo referenced in a fork chain — owner handle + repo name. */
+export type ForkRef = { handle: string; name: string };
+
+/** One entry in a repo's forks list (`GET /repos/:handle/:name/forks`). */
+export type ForkSummary = {
+  id: string;
+  name: string;
+  ownerHandle: string;
+  fullName: string;
+  description: string | null;
+  visibility: "public" | "private";
+  updatedAt: string;
+};
+
+/** Outcome of a sync-fork action (`POST /repos/:handle/:name/sync`). */
+export type SyncForkResult = {
+  status: "up-to-date" | "fast-forwarded" | "diverged";
+  ahead: number;
+  behind: number;
 };
 
 export type SnapshotSummary = {
