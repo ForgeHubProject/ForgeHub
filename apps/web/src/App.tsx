@@ -135,7 +135,7 @@ function AppRoutes() {
         path="/:handle"
         element={
           authed ? (
-            <UserProfilePage token={token!} user={user!} onLogout={handleLogout} />
+            <UserProfilePage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} />
           ) : (
             <Navigate to="/login" replace />
           )

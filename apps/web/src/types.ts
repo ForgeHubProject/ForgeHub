@@ -8,6 +8,8 @@ export type User = {
   website?: string | null;
   /** Global opt-in for email delivery of notifications. */
   emailNotifications?: boolean;
+  /** Rotating cache-buster token; non-null ⇒ the user has an uploaded avatar (issue #115). */
+  avatarKey?: string | null;
   createdAt?: string;
 };
 
@@ -79,6 +81,8 @@ export type PublicProfile = {
   bio: string | null;
   location: string | null;
   website: string | null;
+  /** Rotating cache-buster token; non-null ⇒ the user has an uploaded avatar (issue #115). */
+  avatarKey: string | null;
   createdAt: string;
 };
 
@@ -808,4 +812,20 @@ export type WorkflowRun = {
   rerunOfId: string | null;
   summary: CheckSummary;
   checkRuns: CheckRun[];
+};
+
+// ─── Contribution graph (issue #115) ──────────────────────────────────────────
+
+/** One UTC day with a non-zero contribution count. */
+export type ContributionDay = { date: string; count: number };
+
+/**
+ * A user's contribution activity over a window. `days` is sparse (only dates
+ * with count > 0, ascending); the calendar heatmap fills the empty cells.
+ */
+export type Contributions = {
+  days: ContributionDay[];
+  total: number;
+  from: string;
+  to: string;
 };

@@ -6,7 +6,7 @@ import { loginBodySchema, registerBodySchema } from "../validation.js";
 type DbUser = {
   id: string; email: string; handle: string; displayName: string | null;
   bio: string | null; location: string | null; website: string | null; createdAt: Date;
-  emailNotifications: boolean;
+  emailNotifications: boolean; avatarKey: string | null;
 };
 
 function publicUser(u: DbUser) {
@@ -19,6 +19,7 @@ function publicUser(u: DbUser) {
     location: u.location,
     website: u.website,
     emailNotifications: u.emailNotifications,
+    avatarKey: u.avatarKey,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -31,6 +32,7 @@ function publicProfile(u: DbUser) {
     bio: u.bio,
     location: u.location,
     website: u.website,
+    avatarKey: u.avatarKey,
     createdAt: u.createdAt.toISOString(),
   };
 }
