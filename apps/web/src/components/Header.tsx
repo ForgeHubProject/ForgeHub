@@ -135,6 +135,7 @@ export function Header({ user, onLogout, token }: Props) {
           <DropdownSeparator />
           <DropdownItem onSelect={() => navigate("/settings/tokens")}>Settings</DropdownItem>
           <DropdownItem onSelect={() => navigate("/settings/tokens")}>Personal access tokens</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/settings/keys")}>SSH keys</DropdownItem>
           <DropdownSeparator />
           <DropdownItem
             onSelect={toggle}
