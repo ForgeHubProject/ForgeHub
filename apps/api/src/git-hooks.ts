@@ -9,8 +9,11 @@ import path from "node:path";
  * (querying the DB, resolving storage keys) lives in `branch-protection.ts`.
  */
 
-/** Basename of the rules file the pre-receive hook consumes (in $GIT_DIR). */
+/** Basename of the branch-rules file the pre-receive hook consumes (in $GIT_DIR). */
 export const PROTECTION_CONFIG_BASENAME = "forgehub-protection";
+
+/** Basename of the protected-tags rules file the pre-receive hook consumes (in $GIT_DIR). */
+export const PROTECTED_TAGS_CONFIG_BASENAME = "forgehub-protected-tags";
 
 /**
  * POSIX-sh pre-receive hook. Dependency-free (no node/jq) so it starts fast on
@@ -18,44 +21,74 @@ export const PROTECTION_CONFIG_BASENAME = "forgehub-protection";
  * merge pushes set that. Force-push detection uses `merge-base --is-ancestor`;
  * the pushed objects are visible in the hook's quarantine, so the new SHA
  * resolves even though refs haven't moved yet.
+ *
+ * Enforces two policies from files next to the git dir (both optional):
+ *  - branch protection ("${PROTECTION_CONFIG_BASENAME}", issue #85): rejects direct
+ *    pushes, force-pushes, and deletions of protected branches;
+ *  - tag protection ("${PROTECTED_TAGS_CONFIG_BASENAME}", issue #117): rejects
+ *    deletion or overwrite/move of a tag matching a protected glob pattern, while
+ *    still allowing brand-new matching tags (so releases keep working).
  */
 const PRE_RECEIVE_HOOK = `#!/bin/sh
-# ForgeHub branch protection — pre-receive hook. Managed by ForgeHub; do not edit.
-# Rejects direct pushes, force-pushes, and deletions of protected branches.
-# Rules come from the "${PROTECTION_CONFIG_BASENAME}" file in \$GIT_DIR
-# (one "<branch> <flags>" line per protected branch; flags = pr,force).
+# ForgeHub protection — pre-receive hook. Managed by ForgeHub; do not edit.
+# Branch rules: "${PROTECTION_CONFIG_BASENAME}" (one "<branch> <flags>" line; flags = pr,force).
+# Tag rules:    "${PROTECTED_TAGS_CONFIG_BASENAME}" (one "<glob-pattern>" line; * wildcard).
 [ "$FORGEHUB_INTERNAL_PUSH" = "1" ] && exit 0
 GITDIR=$(git rev-parse --git-dir 2>/dev/null) || GITDIR=.
 CONF="$GITDIR/${PROTECTION_CONFIG_BASENAME}"
-[ -f "$CONF" ] || exit 0
+TAGCONF="$GITDIR/${PROTECTED_TAGS_CONFIG_BASENAME}"
+[ -f "$CONF" ] || [ -f "$TAGCONF" ] || exit 0
 ZERO=0000000000000000000000000000000000000000
 rc=0
 while read -r oldsha newsha ref; do
   case "$ref" in
-    refs/heads/*) branch=\${ref#refs/heads/} ;;
-    *) continue ;;
-  esac
-  found=0
-  flags=
-  while read -r b f; do
-    if [ "$b" = "$branch" ]; then found=1; flags=$f; break; fi
-  done < "$CONF"
-  [ "$found" = 0 ] && continue
-  if [ "$newsha" = "$ZERO" ]; then
-    printf 'Branch protection: "%s" is a protected branch and cannot be deleted.\\n' "$branch" >&2
-    rc=1; continue
-  fi
-  case ",$flags," in
-    *,pr,*)
-      printf 'Branch protection: "%s" is protected — direct pushes are blocked. Open a pull request to merge your changes.\\n' "$branch" >&2
-      rc=1; continue ;;
-  esac
-  case ",$flags," in
-    *,force,*)
-      if [ "$oldsha" != "$ZERO" ] && ! git merge-base --is-ancestor "$oldsha" "$newsha" 2>/dev/null; then
-        printf 'Branch protection: non-fast-forward (force) push to "%s" is blocked.\\n' "$branch" >&2
+    refs/heads/*)
+      [ -f "$CONF" ] || continue
+      branch=\${ref#refs/heads/}
+      found=0
+      flags=
+      while read -r b f; do
+        if [ "$b" = "$branch" ]; then found=1; flags=$f; break; fi
+      done < "$CONF"
+      [ "$found" = 0 ] && continue
+      if [ "$newsha" = "$ZERO" ]; then
+        printf 'Branch protection: "%s" is a protected branch and cannot be deleted.\\n' "$branch" >&2
         rc=1; continue
-      fi ;;
+      fi
+      case ",$flags," in
+        *,pr,*)
+          printf 'Branch protection: "%s" is protected — direct pushes are blocked. Open a pull request to merge your changes.\\n' "$branch" >&2
+          rc=1; continue ;;
+      esac
+      case ",$flags," in
+        *,force,*)
+          if [ "$oldsha" != "$ZERO" ] && ! git merge-base --is-ancestor "$oldsha" "$newsha" 2>/dev/null; then
+            printf 'Branch protection: non-fast-forward (force) push to "%s" is blocked.\\n' "$branch" >&2
+            rc=1; continue
+          fi ;;
+      esac
+      ;;
+    refs/tags/*)
+      [ -f "$TAGCONF" ] || continue
+      tag=\${ref#refs/tags/}
+      # Guard deletes (new = zero) and overwrites/moves of an existing tag
+      # (old != zero). Creating a fresh matching tag is always allowed.
+      if [ "$newsha" = "$ZERO" ] || [ "$oldsha" != "$ZERO" ]; then
+        while read -r pattern; do
+          [ -z "$pattern" ] && continue
+          case "$tag" in
+            $pattern)
+              if [ "$newsha" = "$ZERO" ]; then
+                printf 'Tag protection: "%s" is a protected tag and cannot be deleted.\\n' "$tag" >&2
+              else
+                printf 'Tag protection: "%s" is a protected tag and cannot be moved or overwritten.\\n' "$tag" >&2
+              fi
+              rc=1; break ;;
+          esac
+        done < "$TAGCONF"
+      fi
+      ;;
+    *) continue ;;
   esac
 done
 exit $rc
@@ -97,4 +130,21 @@ export async function writeProtectionConfig(
     return flags ? `${e.branch} ${flags}` : e.branch;
   });
   await writeFile(file, lines.join("\n") + "\n", "utf8");
+}
+
+/**
+ * Write the protected-tags rules file the hook reads (one glob pattern per line).
+ * An empty set removes the file (mirrors {@link writeProtectionConfig}).
+ */
+export async function writeProtectedTagsConfig(
+  bareRepoPath: string,
+  patterns: string[],
+): Promise<void> {
+  const file = path.join(bareRepoPath, PROTECTED_TAGS_CONFIG_BASENAME);
+  const cleaned = patterns.map((p) => p.trim()).filter(Boolean);
+  if (cleaned.length === 0) {
+    await rm(file, { force: true });
+    return;
+  }
+  await writeFile(file, cleaned.join("\n") + "\n", "utf8");
 }
