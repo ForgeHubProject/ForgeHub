@@ -47,6 +47,8 @@ model User {
   personalAccessTokens PersonalAccessToken[]
   savedFilters     SavedFilter[]              @relation("SavedFilterOwner")
   addedProjectItems ProjectItem[]             @relation("ProjectItemAddedBy")
+  designs          Design[]                   @relation("DesignCreator")
+  designVersions   DesignVersion[]            @relation("DesignVersionUploader")
 }
 
 model PersonalAccessToken {
@@ -152,6 +154,7 @@ model Snapshot {
   repo          Repo         @relation(fields: [repoId], references: [id], onDelete: Cascade)
   entities      Entity[]
   constraints   Constraint[]
+  designVersions DesignVersion[]
 }
 
 model Entity {
@@ -360,6 +363,7 @@ model Issue {
   milestone Milestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   labels   IssueLabel[]
   comments IssueComment[]
+  designs  Design[]
 
   @@unique([repoId, number])
 }
@@ -809,4 +813,53 @@ model ProjectItem {
 
   @@unique([projectId, subjectType, subjectNumber])
   @@index([columnId])
+}
+
+// ─── Design management (issue #121) ──────────────────────────────────────────────
+//
+// GitLab-style design management, reimagined for engineering files: design/artifact
+// files attach directly to an ISSUE and version across uploads (uploading a file
+// under the same design name bumps `currentVersion`). An FHR-recognized format is
+// ingested into a Snapshot on upload (via the SAME handler.ingestFromUtf8Text
+// pipeline commits use), so a version carries an entity tree — which lets
+// version-vs-version compare reuse the SAME handler.diff() + DiffCache machinery as
+// PR diffs (semantic where ingested, visual for images, byte summary otherwise).
+// Handler eligibility is by extension via the global handler registry — designs are
+// NOT commit-scoped, so there is no `.forge/formats` opt-in to consult. Bytes live
+// on disk under `<GIT_STORAGE_ROOT>-designs/<repoId>/<designId>/<version>` (the
+// release-asset sibling pattern), never in the DB.
+model Design {
+  id             String   @id @default(cuid())
+  issueId        String
+  name           String
+  currentVersion Int      @default(0)
+  createdById    String
+  createdAt      DateTime @default(now())
+
+  issue     Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  createdBy User            @relation("DesignCreator", fields: [createdById], references: [id])
+  versions  DesignVersion[]
+
+  @@unique([issueId, name])
+}
+
+model DesignVersion {
+  id           String   @id @default(cuid())
+  designId     String
+  version      Int
+  storageKey   String
+  contentType  String
+  size         Int
+  // Set when the uploaded file was an FHR-recognized format and ingested into a
+  // Snapshot (entity tree); null for images/binaries stored as-is. SetNull so a
+  // snapshot deletion never removes the design version.
+  snapshotId   String?
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  design     Design    @relation(fields: [designId], references: [id], onDelete: Cascade)
+  snapshot   Snapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  uploadedBy User      @relation("DesignVersionUploader", fields: [uploadedById], references: [id])
+
+  @@unique([designId, version])
 }
