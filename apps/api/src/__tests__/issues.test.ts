@@ -55,6 +55,21 @@ vi.mock("../prisma.js", () => ({
       create: vi.fn(),
       delete: vi.fn(),
     },
+    milestone: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      count: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
+    pullRequest: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      count: vi.fn(),
+      update: vi.fn(),
+    },
     timelineEvent: {
       findFirst: vi.fn(),
     },
@@ -649,6 +664,103 @@ describe("PATCH /repos/:handle/:name/issues/:number", () => {
       payload: { state: "invalid" },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+// ─── Milestone assignment via PATCH (#83) ───────────────────────────────────────
+
+describe("PATCH issue milestone assignment", () => {
+  let app: FastifyInstance;
+  let authorToken: string;
+  let ownerToken: string;
+
+  const milestone = { id: "ms-1", number: 3, title: "v1.0", state: "OPEN" as const };
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    authorToken = await authHeader(app, AUTHOR_ID);
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue() as never);
+    vi.mocked(prisma.milestone.findFirst).mockResolvedValue(milestone as never);
+    vi.mocked(prisma.milestone.findUnique).mockResolvedValue(milestone as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ milestoneId: "ms-1", milestone }) as never);
+  });
+
+  it("200 assigning a milestone (writer/owner) records a milestoned event", async () => {
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/issues/1",
+      headers: { authorization: ownerToken }, payload: { milestoneId: "ms-1" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().milestone).toMatchObject({ number: 3, title: "v1.0", state: "open" });
+    expect(vi.mocked(prisma.issue.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ milestoneId: "ms-1" }) }),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "milestoned", data: { milestone: { title: "v1.0", number: 3 } } }),
+    );
+  });
+
+  it("403 when a non-writer author sets a milestone", async () => {
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/issues/1",
+      headers: { authorization: authorToken }, payload: { milestoneId: "ms-1" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(prisma.issue.update).not.toHaveBeenCalled();
+  });
+
+  it("404 when the milestone does not belong to the repo", async () => {
+    vi.mocked(prisma.milestone.findFirst).mockResolvedValue(null);
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/issues/1",
+      headers: { authorization: ownerToken }, payload: { milestoneId: "ghost" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("clearing a milestone records a demilestoned event", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue({ milestoneId: "ms-1" }) as never);
+    vi.mocked(prisma.issue.update).mockResolvedValue(makeIssue({ milestoneId: null, milestone: null }) as never);
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/issues/1",
+      headers: { authorization: ownerToken }, payload: { milestoneId: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().milestone).toBeNull();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "demilestoned" }),
+    );
+  });
+});
+
+describe("GET issues filtered by milestone", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => { app = await createTestServer(); });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([] as never);
+  });
+
+  it("passes a title milestone filter into the where clause", async () => {
+    await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues?milestone=v1.0&state=all" });
+    const arg = vi.mocked(prisma.issue.findMany).mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(arg.where.milestone).toEqual({ title: "v1.0" });
+  });
+
+  it("'none' filters to issues without a milestone", async () => {
+    await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues?milestone=none&state=all" });
+    const arg = vi.mocked(prisma.issue.findMany).mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(arg.where.milestoneId).toBeNull();
   });
 });
 

@@ -28,6 +28,10 @@ vi.mock("../prisma.js", () => ({
       update: vi.fn(),
       count: vi.fn(),
     },
+    milestone: {
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+    },
     // Review summary (merge gate + PR detail) reads these; default to "no reviews".
     pullRequestReview: {
       findMany: vi.fn().mockResolvedValue([]),
