@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 
 vi.mock("../prisma.js", () => ({
   prisma: {
-    workflowRun: { create: vi.fn(), findUnique: vi.fn().mockResolvedValue(null) },
+    workflowRun: {
+      create: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null),
+      // Retention prune runs after each enqueue; keep it a clean no-op here.
+      findMany: vi.fn().mockResolvedValue([]),
+      deleteMany: vi.fn().mockResolvedValue({}),
+    },
     checkRun: { update: vi.fn().mockResolvedValue({}) },
     pullRequest: { findMany: vi.fn().mockResolvedValue([]) },
   },
@@ -122,11 +128,73 @@ describe("with FORGEHUB_CI=1", () => {
 
   it("triggerWorkflowsForPrSync enqueues pull_request runs for open PRs on changed branches", async () => {
     const { storageKey, sha } = await scenario({ ".forgehub/workflows/pr.yml": PR_WF });
-    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([{ id: "pr-9", fromBranch: "feature" }] as never);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([{ id: "pr-9", fromBranch: "feature", toBranch: "main" }] as never);
     await triggerWorkflowsForPrSync("repo-1", storageKey, [{ branch: "feature", oldSha: "0".repeat(40), newSha: sha }]);
     expect(prisma.workflowRun.create).toHaveBeenCalledTimes(1);
     const data = vi.mocked(prisma.workflowRun.create).mock.calls[0][0].data as Record<string, unknown>;
     expect(data.trigger).toBe("pull_request");
     expect(data.prId).toBe("pr-9");
+  });
+
+  it("records a FAILED run whose log holds a non-string env parse error", async () => {
+    const { storageKey, sha } = await scenario({
+      ".forgehub/workflows/bad-env.yml": "on: [push]\nenv:\n  PORT: 8080\njobs:\n  a:\n    steps:\n      - run: echo a\n",
+    });
+    await triggerWorkflows({ repoId: "repo-1", storageKey, commitSha: sha, event: "push", ref: "main" });
+    expect(prisma.workflowRun.create).toHaveBeenCalledTimes(1);
+    const data = vi.mocked(prisma.workflowRun.create).mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.conclusion).toBe("failure");
+    const updateCall = vi.mocked(prisma.checkRun.update).mock.calls.at(-1)![0] as { data: { logPath?: string } };
+    const log = await readFile(updateCall.data.logPath!, "utf8");
+    expect(log).toMatch(/value for 'PORT' must be a string/i);
+  });
+});
+
+// ─── branch filters (v1) ─────────────────────────────────────────────────────────
+
+describe("branch filters", () => {
+  beforeEach(() => { process.env["FORGEHUB_CI"] = "1"; });
+
+  const PUSH_FILTERED = [
+    "on:",
+    "  push:",
+    "    branches: [main, \"releases/*\"]",
+    "jobs:",
+    "  b:",
+    "    steps:",
+    "      - run: echo hi",
+  ].join("\n");
+
+  it("skips a push to a non-matching branch", async () => {
+    const { storageKey, sha } = await scenario({ ".forgehub/workflows/ci.yml": PUSH_FILTERED });
+    await triggerWorkflows({ repoId: "repo-1", storageKey, commitSha: sha, event: "push", ref: "feature" });
+    expect(prisma.workflowRun.create).not.toHaveBeenCalled();
+  });
+
+  it("runs a push to an exactly-matching branch", async () => {
+    const { storageKey, sha } = await scenario({ ".forgehub/workflows/ci.yml": PUSH_FILTERED });
+    await triggerWorkflows({ repoId: "repo-1", storageKey, commitSha: sha, event: "push", ref: "main" });
+    expect(prisma.workflowRun.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a push to a glob-matching branch", async () => {
+    const { storageKey, sha } = await scenario({ ".forgehub/workflows/ci.yml": PUSH_FILTERED });
+    await triggerWorkflows({ repoId: "repo-1", storageKey, commitSha: sha, event: "push", ref: "releases/1.2" });
+    expect(prisma.workflowRun.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches pull_request against the target (base) branch, not the head", async () => {
+    const prWf = ["on:", "  pull_request:", "    branches: [main]", "jobs:", "  b:", "    steps:", "      - run: echo hi"].join("\n");
+    const { storageKey, sha } = await scenario({ ".forgehub/workflows/ci.yml": prWf });
+    await triggerWorkflows({
+      repoId: "repo-1", storageKey, commitSha: sha, event: "pull_request",
+      ref: "feature", baseBranch: "develop", prId: "pr-1",
+    });
+    expect(prisma.workflowRun.create).not.toHaveBeenCalled();
+    await triggerWorkflows({
+      repoId: "repo-1", storageKey, commitSha: sha, event: "pull_request",
+      ref: "feature", baseBranch: "main", prId: "pr-1",
+    });
+    expect(prisma.workflowRun.create).toHaveBeenCalledTimes(1);
   });
 });

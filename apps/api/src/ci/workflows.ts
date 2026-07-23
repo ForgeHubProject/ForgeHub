@@ -33,12 +33,18 @@ export type WorkflowJob = {
   id: string;
   name: string;
   steps: WorkflowStep[];
+  /** Merged env for this job (workflow-level ∪ job-level, job wins). */
+  env: Record<string, string>;
 };
 
 export type ParsedWorkflow = {
   name: string;
   /** The subset of {push, pull_request} this workflow triggers on. */
   events: CiEvent[];
+  /** Glob branch filters per event, or null when the event is unfiltered (all branches). */
+  branchFilters: { push: string[] | null; pull_request: string[] | null };
+  /** Workflow-level env (before job-level overrides). */
+  env: Record<string, string>;
   jobs: WorkflowJob[];
 };
 
@@ -60,6 +66,77 @@ function extractEvents(on: unknown): CiEvent[] {
   else if (Array.isArray(on)) for (const v of on) add(v);
   else if (on && typeof on === "object") for (const k of Object.keys(on as object)) add(k);
   return KNOWN_EVENTS.filter((e) => found.has(e));
+}
+
+/** Coerce a `branches:` value (string | list) into a trimmed non-empty string list. */
+function toStringList(v: unknown): string[] {
+  if (typeof v === "string") return v.trim() ? [v.trim()] : [];
+  if (Array.isArray(v)) {
+    return v
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .map((s) => s.trim());
+  }
+  return [];
+}
+
+/**
+ * Pull the glob branch filter for `event` out of an `on:` MAP form:
+ *   on: { push: { branches: [main, "releases/*"] } }
+ * Returns null when `on` is not a map, the event has no `branches:`, or the list
+ * is empty — meaning "unfiltered" (every branch triggers, the v0 behavior).
+ */
+function extractBranchFilter(on: unknown, event: CiEvent): string[] | null {
+  if (!on || typeof on !== "object" || Array.isArray(on)) return null;
+  const spec = (on as Record<string, unknown>)[event];
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return null;
+  const list = toStringList((spec as Record<string, unknown>)["branches"]);
+  return list.length > 0 ? list : null;
+}
+
+/**
+ * Parse an `env:` mapping into a string→string record. Rejects a non-mapping or
+ * any non-string value so a mistake surfaces as a failing CheckRun (the same
+ * invalid-workflow path the rest of the parser uses) rather than silently
+ * stringifying `NODE_ENV: 1` into `"1"`.
+ */
+function parseEnvMap(raw: unknown, context: string): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new StepError(`${context} 'env' must be a mapping of string keys to string values.`);
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v !== "string") {
+      throw new StepError(`${context} 'env' value for '${k}' must be a string.`);
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Tiny glob match for branch filters: `*` matches any run of characters within a
+ * path segment (i.e. not `/`), everything else is literal. So `releases/*` matches
+ * `releases/1.0` but not `releases/1.0/rc`, and `main` matches only `main`. No new
+ * dependency — a hand-rolled anchored regex.
+ */
+export function globMatch(pattern: string, value: string): boolean {
+  const re = pattern
+    .split("*")
+    .map((seg) => seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*");
+  return new RegExp(`^${re}$`).test(value);
+}
+
+/**
+ * Does `branch` pass a branch filter? A null filter (unfiltered) always passes.
+ * With a filter present, the branch must be known and glob-match at least one
+ * pattern. An unknown branch (undefined) against a real filter never matches.
+ */
+export function branchAllowed(filter: string[] | null, branch: string | undefined): boolean {
+  if (filter === null) return true;
+  if (branch === undefined) return false;
+  return filter.some((p) => globMatch(p, branch));
 }
 
 /**
@@ -94,6 +171,13 @@ export function parseWorkflowYaml(text: string, defaultName: string): ParseResul
     return { ok: false, error: "Workflow is missing the required 'on' field." };
   }
   const events = extractEvents(root["on"]);
+  const branchFilters = {
+    push: extractBranchFilter(root["on"], "push"),
+    pull_request: extractBranchFilter(root["on"], "pull_request"),
+  };
+
+  // Workflow-level env (merged into each job below). Throws StepError on a bad map.
+  const workflowEnv = parseEnvMap(root["env"], "Workflow");
 
   const rawJobs = root["jobs"];
   if (!rawJobs || typeof rawJobs !== "object" || Array.isArray(rawJobs)) {
@@ -113,6 +197,9 @@ export function parseWorkflowYaml(text: string, defaultName: string): ParseResul
     const jobName =
       typeof job["name"] === "string" && job["name"].trim() ? job["name"].trim() : jobId;
 
+    // Job-level env overrides workflow-level on key collisions. Throws on a bad map.
+    const jobEnv = { ...workflowEnv, ...parseEnvMap(job["env"], `Job '${jobId}'`) };
+
     const rawSteps = job["steps"];
     if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
       return { ok: false, error: `Job '${jobId}' must define a non-empty 'steps' list.` };
@@ -131,10 +218,10 @@ export function parseWorkflowYaml(text: string, defaultName: string): ParseResul
       throw new StepError(`Step ${i + 1} of job '${jobId}' must have a non-empty 'run' command.`);
     });
 
-    jobs.push({ id: jobId, name: jobName, steps });
+    jobs.push({ id: jobId, name: jobName, steps, env: jobEnv });
   }
 
-  return { ok: true, workflow: { name, events, jobs } };
+  return { ok: true, workflow: { name, events, branchFilters, env: workflowEnv, jobs } };
 }
 
 // Thrown inside the forEach above; caught by the wrapper below. Keeps the happy

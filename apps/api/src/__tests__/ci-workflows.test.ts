@@ -4,6 +4,8 @@ import {
   parseWorkflow,
   listWorkflowFilesAtCommit,
   defaultWorkflowName,
+  globMatch,
+  branchAllowed,
 } from "../ci/workflows.js";
 
 // ─── Parse matrix (pure) ────────────────────────────────────────────────────────
@@ -139,6 +141,121 @@ describe("defaultWorkflowName", () => {
   it("strips the directory and extension", () => {
     expect(defaultWorkflowName(".forgehub/workflows/ci.yml")).toBe("ci");
     expect(defaultWorkflowName(".forgehub/workflows/build.yaml")).toBe("build");
+  });
+});
+
+// ─── env maps (v1) ───────────────────────────────────────────────────────────────
+
+describe("parseWorkflow — env maps", () => {
+  it("captures workflow-level env and merges it into each job (job overrides)", () => {
+    const res = parseWorkflow(
+      [
+        "on: [push]",
+        "env:",
+        "  A: wf",
+        "  B: wf",
+        "jobs:",
+        "  build:",
+        "    env:",
+        "      B: job",
+        "      C: job",
+        "    steps:",
+        "      - run: echo hi",
+      ].join("\n"),
+      "ci",
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.env).toEqual({ A: "wf", B: "wf" });
+    expect(res.workflow.jobs[0].env).toEqual({ A: "wf", B: "job", C: "job" });
+  });
+
+  it("defaults env to an empty map when absent", () => {
+    const res = parseWorkflow("on: [push]\njobs:\n  a:\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.env).toEqual({});
+    expect(res.workflow.jobs[0].env).toEqual({});
+  });
+
+  it("rejects a non-string workflow-level env value", () => {
+    const res = parseWorkflow("on: [push]\nenv:\n  PORT: 8080\njobs:\n  a:\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/value for 'PORT' must be a string/i);
+  });
+
+  it("rejects a non-string job-level env value", () => {
+    const res = parseWorkflow("on: [push]\njobs:\n  a:\n    env:\n      DEBUG: true\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/value for 'DEBUG' must be a string/i);
+  });
+
+  it("rejects env that is not a mapping", () => {
+    const res = parseWorkflow("on: [push]\nenv:\n  - A\njobs:\n  a:\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/'env' must be a mapping/i);
+  });
+});
+
+// ─── branch filters (v1) ─────────────────────────────────────────────────────────
+
+describe("parseWorkflow — branch filters", () => {
+  it("captures push branch globs from the on: map form", () => {
+    const res = parseWorkflow(
+      ["on:", "  push:", "    branches: [main, \"releases/*\"]", "jobs:", "  a:", "    steps:", "      - run: echo a"].join("\n"),
+      "ci",
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.events).toContain("push");
+    expect(res.workflow.branchFilters.push).toEqual(["main", "releases/*"]);
+    expect(res.workflow.branchFilters.pull_request).toBeNull();
+  });
+
+  it("captures pull_request target-branch filters", () => {
+    const res = parseWorkflow(
+      ["on:", "  pull_request:", "    branches: [main]", "jobs:", "  a:", "    steps:", "      - run: echo a"].join("\n"),
+      "ci",
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.branchFilters.pull_request).toEqual(["main"]);
+  });
+
+  it("leaves an unfiltered push as null (all branches)", () => {
+    const res = parseWorkflow("on: [push]\njobs:\n  a:\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.branchFilters.push).toBeNull();
+  });
+
+  it("treats `push:` with no branches as unfiltered", () => {
+    const res = parseWorkflow("on:\n  push:\njobs:\n  a:\n    steps:\n      - run: echo a", "ci");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.workflow.events).toContain("push");
+    expect(res.workflow.branchFilters.push).toBeNull();
+  });
+});
+
+describe("globMatch / branchAllowed", () => {
+  it("matches literals and `*` within a path segment (not across /)", () => {
+    expect(globMatch("main", "main")).toBe(true);
+    expect(globMatch("main", "mainx")).toBe(false);
+    expect(globMatch("releases/*", "releases/1.0")).toBe(true);
+    expect(globMatch("releases/*", "releases/1.0/rc")).toBe(false); // * stops at /
+    expect(globMatch("feat-*", "feat-login")).toBe(true);
+  });
+
+  it("branchAllowed: null filter passes; a real filter needs a known matching branch", () => {
+    expect(branchAllowed(null, "anything")).toBe(true);
+    expect(branchAllowed(["main", "releases/*"], "main")).toBe(true);
+    expect(branchAllowed(["main", "releases/*"], "releases/2")).toBe(true);
+    expect(branchAllowed(["main"], "feature")).toBe(false);
+    expect(branchAllowed(["main"], undefined)).toBe(false);
   });
 });
 
