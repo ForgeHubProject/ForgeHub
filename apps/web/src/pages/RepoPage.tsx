@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { createBranch, getRepo, listBranches, listIssues, listProjects, listPulls } from "../api";
+import { createBranch, forkRepo, getRepo, listBranches, listIssues, listProjects, listPulls, syncFork } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
-import { Badge, Button, Spinner, TabNav, TabItem } from "../ui";
-import type { BranchInfo, Repo, User } from "../types";
+import { Badge, Button, Spinner, TabNav, TabItem, useToast } from "../ui";
+import type { BranchInfo, Repo, SyncForkResult, User } from "../types";
 
 function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   if (!splat.startsWith("tree/")) return null;
@@ -21,6 +21,7 @@ import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
 import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
+import { RepoForksTab } from "./repo/RepoForksTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
@@ -151,6 +152,22 @@ function ForkIcon() {
   );
 }
 
+function SyncIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M8 2.5a5.487 5.487 0 00-4.131 1.869l1.204 1.204A.25.25 0 014.896 6H1.25A.25.25 0 011 5.75V2.104a.25.25 0 01.427-.177l1.38 1.38A7.001 7.001 0 0114.95 7.16a.75.75 0 11-1.49.178A5.501 5.501 0 008 2.5zM1.705 8.005a.75.75 0 01.834.656 5.501 5.501 0 009.592 2.97l-1.204-1.204a.25.25 0 01.177-.427h3.646a.25.25 0 01.25.25v3.646a.25.25 0 01-.427.177l-1.38-1.38A7.001 7.001 0 011.05 8.84a.75.75 0 01.656-.834z" />
+    </svg>
+  );
+}
+
+function WarnIcon({ className }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className={className}>
+      <path fillRule="evenodd" d="M8.22 1.754a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368L8.22 1.754zm-1.763-.707c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575L6.457 1.047zM9 11a1 1 0 11-2 0 1 1 0 012 0zm-.25-5.25a.75.75 0 00-1.5 0v2.5a.75.75 0 001.5 0v-2.5z" />
+    </svg>
+  );
+}
+
 export function RepoPage({ token, user, onLogout }: Props) {
   const { handle, repoName, "*": splat = "" } = useParams<{ handle: string; repoName: string; "*": string }>();
   const location = useLocation();
@@ -168,6 +185,12 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [forking, setForking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncForkResult | null>(null);
+
+  const { toast } = useToast();
 
   const h = handle!;
   const r = repoName!;
@@ -217,6 +240,46 @@ export function RepoPage({ token, user, onLogout }: Props) {
     const { branches: newBranches } = await listBranches(token, h, r);
     setBranches(newBranches);
     handleRefChange(name);
+  }
+
+  async function handleFork() {
+    setForking(true);
+    try {
+      const fork = await forkRepo(token, h, r);
+      toast(`Forked to ${user.handle}/${fork.name}`, { tone: "success" });
+      navigate(`/${user.handle}/${fork.name}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not fork this repository", { tone: "danger" });
+    } finally {
+      setForking(false);
+    }
+  }
+
+  async function handleSync() {
+    if (!repo?.parent) return;
+    const upstream = `${repo.parent.handle}/${repo.parent.name}`;
+    setSyncing(true);
+    try {
+      const result = await syncFork(token, h, r);
+      setSyncResult(result);
+      if (result.status === "up-to-date") {
+        toast(`Already up to date with ${upstream}`, { tone: "info" });
+      } else if (result.status === "fast-forwarded") {
+        const n = result.behind;
+        toast(`Synced ${n} commit${n === 1 ? "" : "s"} from ${upstream}`, { tone: "success" });
+        // Refresh repo + branches so counts and the branch list reflect the pull.
+        const [repoData, branchData] = await Promise.all([getRepo(token, h, r), listBranches(token, h, r)]);
+        setRepo(repoData);
+        setBranches(branchData.branches);
+        setDefaultBranch(branchData.defaultBranch);
+      } else {
+        toast(`This fork has diverged from ${upstream}`, { tone: "warning" });
+      }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not sync this fork", { tone: "danger" });
+    } finally {
+      setSyncing(false);
+    }
   }
 
   const base = `/${h}/${r}`;
@@ -283,6 +346,29 @@ export function RepoPage({ token, user, onLogout }: Props) {
                   </Link>
                 )}
               </div>
+              {repo.parent && (
+                <p className="text-fh-xs text-fh-fg-muted mt-1.5 flex items-center gap-1 flex-wrap">
+                  forked from{" "}
+                  <Link
+                    to={`/${repo.parent.handle}/${repo.parent.name}`}
+                    className="text-fh-accent-fg hover:underline"
+                  >
+                    {repo.parent.handle}/{repo.parent.name}
+                  </Link>
+                  {repo.source
+                    && (repo.source.handle !== repo.parent.handle || repo.source.name !== repo.parent.name) && (
+                    <span className="text-fh-fg-subtle">
+                      · upstream{" "}
+                      <Link
+                        to={`/${repo.source.handle}/${repo.source.name}`}
+                        className="text-fh-accent-fg hover:underline"
+                      >
+                        {repo.source.handle}/{repo.source.name}
+                      </Link>
+                    </span>
+                  )}
+                </p>
+              )}
               {repo.description && (
                 <p className="text-fh-base text-fh-fg-muted mt-2 max-w-3xl">{repo.description}</p>
               )}
@@ -291,12 +377,43 @@ export function RepoPage({ token, user, onLogout }: Props) {
               )}
             </div>
 
-            {/* Star / fork placeholder — not yet wired to a backend */}
             <div className="flex items-center gap-2 shrink-0">
-              <Button variant="default" size="sm" leadingIcon={<ForkIcon />} title="Forking is not available yet" disabled>
-                Fork
-                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted">0</span>
-              </Button>
+              {/* Sync fork — owner of a fork can pull upstream changes (issue #113). */}
+              {repo.parent && user.handle === h && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  leadingIcon={<SyncIcon />}
+                  loading={syncing}
+                  onClick={handleSync}
+                  title={`Pull changes from ${repo.parent.handle}/${repo.parent.name}`}
+                >
+                  Sync fork
+                </Button>
+              )}
+              {/* Fork + a count that links to the forks list. */}
+              <div className="inline-flex items-stretch">
+                <Button
+                  variant="default"
+                  size="sm"
+                  leadingIcon={<ForkIcon />}
+                  loading={forking}
+                  disabled={user.handle === h}
+                  onClick={handleFork}
+                  className="rounded-r-none"
+                  title={user.handle === h ? "You can't fork your own repository" : "Fork this repository"}
+                >
+                  Fork
+                </Button>
+                <Link
+                  to={`${base}/forks`}
+                  className="inline-flex items-center h-6 px-2 -ml-px rounded-r-md border border-fh-border bg-fh-surface text-fh-sm font-semibold text-fh-fg-muted hover:bg-fh-surface-muted hover:border-fh-border-strong tabular-nums"
+                  title="View forks"
+                >
+                  {repo.forkCount ?? 0}
+                </Link>
+              </div>
+              {/* Starring is not yet wired to a backend. */}
               <Button variant="default" size="sm" leadingIcon={<StarIcon />} title="Starring is not available yet" disabled>
                 Star
                 <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted">0</span>
@@ -320,8 +437,45 @@ export function RepoPage({ token, user, onLogout }: Props) {
         </div>
       </div>
 
+      {/* Diverged-fork notice: a fast-forward would drop local commits, so the
+          sync was not applied — explain and point to opening a pull request. */}
+      {syncResult?.status === "diverged" && repo.parent && (
+        <div className="w-full max-w-[1280px] mx-auto px-4 mt-3">
+          <div className="rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-4 py-3">
+            <div className="flex items-start gap-2">
+              <WarnIcon className="text-fh-warning-fg mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-fh-sm font-semibold text-fh-fg">
+                  This fork has diverged from {repo.parent.handle}/{repo.parent.name}
+                </p>
+                <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+                  It is {syncResult.behind} commit{syncResult.behind === 1 ? "" : "s"} behind and{" "}
+                  {syncResult.ahead} ahead. A fast-forward would discard the fork's own commits, so it
+                  was not applied. Open a pull request to reconcile the two histories.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <Link to={`${base}/compare`}>
+                    <Button variant="default" size="sm">Open a pull request</Button>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setSyncResult(null)}
+                    className="text-fh-sm text-fh-fg-muted hover:text-fh-fg hover:underline"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tab content */}
       <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 py-6">
+        {activeTab === "code" && splat.startsWith("forks") && (
+          <RepoForksTab token={token} handle={h} repoName={r} />
+        )}
         {activeTab === "code" && splat.startsWith("branches") && (
           <RepoBranchesTab token={token} handle={h} repoName={r} user={user} base={base} />
         )}
@@ -337,7 +491,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             base={base}
           />
         )}
-        {activeTab === "code" && !splat.startsWith("branches") && !splat.startsWith("compare") && (
+        {activeTab === "code" && !splat.startsWith("branches") && !splat.startsWith("compare") && !splat.startsWith("forks") && (
           <RepoCodeTab
             token={token}
             handle={h}

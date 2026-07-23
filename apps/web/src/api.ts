@@ -1,6 +1,7 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules,
   CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
+  ForkSummary, SyncForkResult,
   Issue, IssueComment, Label, Milestone, Notification, PatScope, PersonalAccessToken, PRFileEntry,
   ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType, ProjectSummary,
   PublicProfile, PullRequest, RefCompareResult,
@@ -1832,4 +1833,28 @@ export async function getCheckLog(
     throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   return res.text();
+}
+
+// ─── fork lineage & sync (issue #113) ─────────────────────────────────────────
+
+/** Direct forks of a repo the caller is allowed to see. */
+export async function listForks(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ forks: ForkSummary[] }> {
+  return req(`/repos/${handle}/${repoName}/forks`, { token: token ?? undefined });
+}
+
+/**
+ * Pull upstream changes into a fork's default branch. Fast-forwards when the
+ * fork is behind-only; a diverged fork is reported (never force-synced), leaving
+ * the caller to open a pull request from the parent instead.
+ */
+export async function syncFork(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<SyncForkResult> {
+  return req(`/repos/${handle}/${repoName}/sync`, { method: "POST", token });
 }
