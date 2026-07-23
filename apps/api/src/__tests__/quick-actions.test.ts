@@ -10,6 +10,7 @@ vi.mock("../prisma.js", () => ({
     issue: { findFirst: vi.fn(), update: vi.fn() },
     issueComment: { create: vi.fn() },
     issueLabel: { findMany: vi.fn(), create: vi.fn(), delete: vi.fn() },
+    milestone: { findMany: vi.fn() },
     pullRequest: { findFirst: vi.fn(), update: vi.fn() },
   },
 }));
@@ -60,7 +61,7 @@ vi.mock("bcryptjs", () => ({
 import { prisma } from "../prisma.js";
 import { recordEvent } from "../timeline-service.js";
 import {
-  parseQuickActions, parseLabelTokens, applyQuickActions,
+  parseQuickActions, parseLabelTokens, parseMilestoneTitle, applyQuickActions,
   type QuickActionSubject,
 } from "../quick-actions.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
@@ -88,6 +89,7 @@ function issueSubject(overrides: Partial<IssueFields> = {}): QuickActionSubject 
     issue: {
       id: "issue-qa", number: 7, authorId: AUTHOR_ID, state: "OPEN",
       title: "Original title", assigneeId: null, estimateMinutes: 0, spentMinutes: 0,
+      milestoneId: null,
       ...overrides,
     },
   };
@@ -188,6 +190,24 @@ describe("parseLabelTokens", () => {
   });
   it("returns [] for empty args", () => {
     expect(parseLabelTokens("")).toEqual([]);
+  });
+});
+
+describe("parseMilestoneTitle", () => {
+  it("keeps a bare multi-word title", () => {
+    expect(parseMilestoneTitle("Sprint 4")).toBe("Sprint 4");
+  });
+  it("strips the % sigil", () => {
+    expect(parseMilestoneTitle("%Backlog")).toBe("Backlog");
+  });
+  it("strips %\"quoted\" titles", () => {
+    expect(parseMilestoneTitle('%"v1.0 beta"')).toBe("v1.0 beta");
+  });
+  it("strips 'single-quoted' titles", () => {
+    expect(parseMilestoneTitle("'Sprint 4'")).toBe("Sprint 4");
+  });
+  it("returns '' for an empty arg", () => {
+    expect(parseMilestoneTitle("")).toBe("");
   });
 });
 
@@ -328,6 +348,62 @@ describe("applyQuickActions — pull requests", () => {
     const { commands } = parseQuickActions("/reopen");
     const res = await applyQuickActions({ repo, actorId: AUTHOR_ID, commands, subject: prSubject({ state: "MERGED" }) });
     expect(res.rejected[0].reason).toMatch(/merged/i);
+  });
+});
+
+// ─── Applier: /milestone + /remove_milestone (#83) ──────────────────────────────
+
+describe("applyQuickActions — /milestone", () => {
+  const v1 = { id: "ms-v1", number: 3, title: "v1.0" };
+
+  beforeEach(() => {
+    vi.mocked(prisma.milestone.findMany).mockResolvedValue([v1] as never);
+  });
+
+  it("sets the milestone by title and records a milestoned event (writer)", async () => {
+    const { commands } = parseQuickActions('/milestone "v1.0"');
+    const res = await applyQuickActions({ repo, actorId: WRITER_ID, commands, subject: issueSubject() });
+    expect(res.applied[0]).toMatchObject({ command: "/milestone" });
+    expect(res.applied[0].summary).toMatch(/v1\.0/);
+    expect(issueUpdates()).toContainEqual({ milestoneId: "ms-v1" });
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "milestoned", data: { milestone: { title: "v1.0", number: 3 } } }),
+    );
+  });
+
+  it("rejects an unknown milestone title and does not mutate", async () => {
+    const { commands } = parseQuickActions("/milestone Ghost");
+    const res = await applyQuickActions({ repo, actorId: WRITER_ID, commands, subject: issueSubject() });
+    expect(res.applied).toHaveLength(0);
+    expect(res.rejected[0].command).toBe("/milestone");
+    expect(res.rejected[0].reason).toMatch(/does not exist/i);
+    expect(prisma.issue.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects /milestone from a non-writer author", async () => {
+    const { commands } = parseQuickActions("/milestone v1.0");
+    const res = await applyQuickActions({ repo, actorId: AUTHOR_ID, commands, subject: issueSubject() });
+    expect(res.rejected[0].reason).toMatch(/write access/i);
+    expect(prisma.issue.update).not.toHaveBeenCalled();
+  });
+
+  it("/remove_milestone clears it and records a demilestoned event", async () => {
+    const { commands } = parseQuickActions("/remove_milestone");
+    const res = await applyQuickActions({
+      repo, actorId: WRITER_ID, commands, subject: issueSubject({ milestoneId: "ms-v1" }),
+    });
+    expect(res.applied[0].command).toBe("/remove_milestone");
+    expect(issueUpdates()).toContainEqual({ milestoneId: null });
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "demilestoned", data: { milestone: { title: "v1.0", number: 3 } } }),
+    );
+  });
+
+  it("/remove_milestone on an issue with no milestone is a no-op success", async () => {
+    const { commands } = parseQuickActions("/remove_milestone");
+    const res = await applyQuickActions({ repo, actorId: WRITER_ID, commands, subject: issueSubject() });
+    expect(res.applied[0].summary).toMatch(/not on a milestone/i);
+    expect(prisma.issue.update).not.toHaveBeenCalled();
   });
 });
 

@@ -54,7 +54,7 @@ export async function pullRoutes(app: FastifyInstance) {
   app.get("/repos/:handle/:name/pulls", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
-    const { state = "open" } = request.query as { state?: string };
+    const { state = "open", milestone } = request.query as { state?: string; milestone?: string };
 
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
@@ -65,10 +65,21 @@ export async function pullRoutes(app: FastifyInstance) {
       : state === "all" ? undefined
       : "OPEN";
 
+    // `?milestone=` accepts a title, "none" (unassociated), or "*" (any) — matching
+    // the issue-list milestone filter (#83).
+    const milestoneWhere =
+      milestone === undefined ? {}
+      : milestone === "none" ? { milestoneId: null }
+      : milestone === "*" ? { milestoneId: { not: null } }
+      : { milestone: { title: milestone } };
+
     const pulls = await prisma.pullRequest.findMany({
-      where: { repoId: repo.id, ...(stateFilter ? { state: stateFilter } : {}) },
+      where: { repoId: repo.id, ...(stateFilter ? { state: stateFilter } : {}), ...milestoneWhere },
       orderBy: { number: "desc" },
-      include: { author: { select: { handle: true, displayName: true } } },
+      include: {
+        author: { select: { handle: true, displayName: true } },
+        milestone: { select: { id: true, number: true, title: true, state: true } },
+      },
     });
 
     return {
@@ -82,6 +93,9 @@ export async function pullRoutes(app: FastifyInstance) {
         state: p.state.toLowerCase(),
         mergedAt: p.mergedAt?.toISOString() ?? null,
         author: p.author.handle,
+        milestone: p.milestone
+          ? { id: p.milestone.id, number: p.milestone.number, title: p.milestone.title, state: p.milestone.state.toLowerCase() }
+          : null,
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
       })),
@@ -171,7 +185,10 @@ export async function pullRoutes(app: FastifyInstance) {
 
     const pr = await prisma.pullRequest.findFirst({
       where: { repoId: repo.id, number: Number(number) },
-      include: { author: { select: { handle: true, displayName: true } } },
+      include: {
+        author: { select: { handle: true, displayName: true } },
+        milestone: { select: { id: true, number: true, title: true, state: true } },
+      },
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
@@ -205,6 +222,9 @@ export async function pullRoutes(app: FastifyInstance) {
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
+      milestone: pr.milestone
+        ? { id: pr.milestone.id, number: pr.milestone.number, title: pr.milestone.title, state: pr.milestone.state.toLowerCase() }
+        : null,
       createdAt: pr.createdAt.toISOString(),
       updatedAt: pr.updatedAt.toISOString(),
     };
@@ -535,7 +555,7 @@ export async function pullRoutes(app: FastifyInstance) {
     return { commits };
   });
 
-  // PATCH /repos/:handle/:name/pulls/:number — close or reopen
+  // PATCH /repos/:handle/:name/pulls/:number — close/reopen and/or set milestone
   app.patch("/repos/:handle/:name/pulls/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
@@ -546,21 +566,47 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    // Only author or repo owner can close/reopen
-    if (pr.authorId !== userId && repo.ownerId !== userId)
-      return reply.status(403).send({ error: "Only the author or owner can modify this PR" });
+    const { state, milestoneId } = request.body as { state?: string; milestoneId?: string | null };
 
-    const { state } = request.body as { state?: string };
-    if (!state || !["open", "closed"].includes(state))
+    // At least one recognized field is required.
+    if (state === undefined && milestoneId === undefined) {
       return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
-    if (pr.state === "MERGED") return reply.status(409).send({ error: "Cannot change state of a merged PR" });
+    }
+
+    // ── State change: author or repo owner ────────────────────────────────────────
+    if (state !== undefined) {
+      if (pr.authorId !== userId && repo.ownerId !== userId)
+        return reply.status(403).send({ error: "Only the author or owner can modify this PR" });
+      if (!["open", "closed"].includes(state))
+        return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
+      if (pr.state === "MERGED") return reply.status(409).send({ error: "Cannot change state of a merged PR" });
+    }
+
+    // ── Milestone association (#83): writer-gated, milestone must belong to the repo ─
+    let nextMilestoneId: string | null | undefined;
+    if (milestoneId !== undefined) {
+      if (!canWrite(repo, userId)) {
+        return reply.status(403).send({ error: "Write access is required to set a milestone" });
+      }
+      if (milestoneId) {
+        const ms = await prisma.milestone.findFirst({ where: { id: milestoneId, repoId: repo.id }, select: { id: true } });
+        if (!ms) return reply.status(404).send({ error: "Milestone not found" });
+        nextMilestoneId = ms.id;
+      } else {
+        nextMilestoneId = null;
+      }
+    }
 
     const updated = await prisma.pullRequest.update({
       where: { id: pr.id },
-      data: { state: state === "open" ? "OPEN" : "CLOSED" },
+      data: {
+        ...(state !== undefined ? { state: state === "open" ? "OPEN" : "CLOSED" } : {}),
+        ...(nextMilestoneId !== undefined ? { milestoneId: nextMilestoneId } : {}),
+      },
+      include: { milestone: { select: { id: true, number: true, title: true, state: true } } },
     });
 
-    if (updated.state !== pr.state) {
+    if (state !== undefined && updated.state !== pr.state) {
       await recordEvent({
         repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
         kind: updated.state === "CLOSED" ? "closed" : "reopened", actorId: userId,
@@ -570,7 +616,30 @@ export async function pullRoutes(app: FastifyInstance) {
         subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: updated.state.toLowerCase() },
       });
     }
+    if (nextMilestoneId !== undefined && updated.milestoneId !== pr.milestoneId) {
+      if (updated.milestone) {
+        await recordEvent({
+          repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+          kind: "milestoned", actorId: userId,
+          data: { milestone: { title: updated.milestone.title, number: updated.milestone.number } },
+        }).catch((err) => request.log.error({ err }, "recordEvent pull milestoned"));
+      } else if (pr.milestoneId) {
+        const prev = await prisma.milestone.findUnique({ where: { id: pr.milestoneId }, select: { title: true, number: true } });
+        await recordEvent({
+          repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+          kind: "demilestoned", actorId: userId,
+          data: { milestone: prev ? { title: prev.title, number: prev.number } : undefined },
+        }).catch((err) => request.log.error({ err }, "recordEvent pull demilestoned"));
+      }
+    }
 
-    return { id: updated.id, number: updated.number, state: updated.state.toLowerCase() };
+    return {
+      id: updated.id,
+      number: updated.number,
+      state: updated.state.toLowerCase(),
+      milestone: updated.milestone
+        ? { id: updated.milestone.id, number: updated.milestone.number, title: updated.milestone.title, state: updated.milestone.state.toLowerCase() }
+        : null,
+    };
   });
 }

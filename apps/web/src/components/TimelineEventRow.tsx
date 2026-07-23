@@ -25,6 +25,7 @@ const PinMark = (p: IconProps) => <Svg {...p}><path d="M9.884.32a1.75 1.75 0 0 1
 const LockMark = (p: IconProps) => <Svg {...p}><path d="M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z" /></Svg>;
 const UnlockMark = (p: IconProps) => <Svg {...p}><path d="M5.5 4a2.5 2.5 0 0 1 4.607-1.346.75.75 0 1 0 1.264-.808A4 4 0 0 0 4 4v2h-.25C2.784 6 2 6.784 2 7.75v5.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25v-5.5C14 6.784 13.216 6 12.25 6H5.5Zm6.75 3.5a.25.25 0 0 1 .25.25v5.5a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25v-5.5a.25.25 0 0 1 .25-.25Z" /></Svg>;
 const TransferMark = (p: IconProps) => <Svg {...p}><path d="M2.75 1a.75.75 0 0 1 .75.75v10a.25.25 0 0 0 .25.25h9.5a.75.75 0 0 1 0 1.5h-9.5A1.75 1.75 0 0 1 2 11.75v-10A.75.75 0 0 1 2.75 1Zm10.5 2.44 2.03 2.03a.75.75 0 0 1 0 1.06l-2.03 2.03a.75.75 0 1 1-1.06-1.06l.72-.72H7.75a.75.75 0 0 1 0-1.5h5.16l-.72-.72a.75.75 0 0 1 1.06-1.06Z" /></Svg>;
+const MilestoneMark = (p: IconProps) => <Svg {...p}><path d="M7.75 0a.75.75 0 0 1 .75.75V3h3.634c.414 0 .814.147 1.13.414l1.542 1.303a1.75 1.75 0 0 1 0 2.666l-1.542 1.303a1.75 1.75 0 0 1-1.13.414H8.5v6.75a.75.75 0 0 1-1.5 0V8.75H3.75A1.75 1.75 0 0 1 2 7V4.75C2 3.784 2.784 3 3.75 3H7V.75A.75.75 0 0 1 7.75 0ZM3.75 4.5a.25.25 0 0 0-.25.25V7c0 .138.112.25.25.25h8.384a.25.25 0 0 0 .161-.06l1.542-1.302a.25.25 0 0 0 0-.376l-1.542-1.303a.25.25 0 0 0-.161-.059H3.75Z" /></Svg>;
 
 // ─── Data helpers ────────────────────────────────────────────────────────────────
 
@@ -120,6 +121,19 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
     }
     case "unlocked":
       return { icon: <UnlockMark />, tone: "text-fh-fg-subtle", body: <>unlocked this conversation</> };
+    case "milestoned":
+    case "demilestoned": {
+      const ms = (d.milestone as { title?: string; number?: number } | undefined) ?? {};
+      const label = ms.title
+        ? <span className="font-semibold text-fh-fg">{ms.title}</span>
+        : "a milestone";
+      return {
+        icon: <MilestoneMark />, tone: "text-fh-fg-subtle",
+        body: event.kind === "milestoned"
+          ? <>added this to the {label} milestone</>
+          : <>removed this from the {label} milestone</>,
+      };
+    }
     case "transferred": {
       const dir = str(d.direction);
       const other = str(d.repo);

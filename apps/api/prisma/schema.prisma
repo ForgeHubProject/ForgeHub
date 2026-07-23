@@ -46,6 +46,7 @@ model User {
   notifications    Notification[]
   personalAccessTokens PersonalAccessToken[]
   savedFilters     SavedFilter[]              @relation("SavedFilterOwner")
+  addedProjectItems ProjectItem[]             @relation("ProjectItemAddedBy")
 }
 
 model PersonalAccessToken {
@@ -86,6 +87,7 @@ model Repo {
   protectedBranches ProtectedBranch[]
   issues   Issue[]
   labels   Label[]
+  milestones Milestone[]
   releases Release[]
   notifications Notification[]
   topics          RepoTopic[]
@@ -93,6 +95,8 @@ model Repo {
   crossReferences CrossReference[]
   savedFilters    SavedFilter[]
   webhooks        Webhook[]
+
+  projects        Project[]
 
   @@unique([ownerId, name])
 }
@@ -190,11 +194,15 @@ model PullRequest {
   /** SHA of the resulting merge/squash/rebase commit on the base branch. Null until merged. Needed to revert. */
   mergeCommitSha String?
   authorId    String
+  // Milestone association (issue #83). Nullable; SetNull on milestone delete so
+  // removing a milestone never deletes the PR. Writer-gated via the PATCH route.
+  milestoneId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   repo           Repo                       @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author         User                       @relation(fields: [authorId], references: [id])
+  milestone      Milestone?                 @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   comments       PullRequestComment[]
   reviews        PullRequestReview[]
   reviewComments PullRequestReviewComment[]
@@ -238,6 +246,39 @@ enum ReviewState {
 enum IssueState {
   OPEN
   CLOSED
+}
+
+enum MilestoneState {
+  OPEN
+  CLOSED
+}
+
+// ─── Milestones (issue #83) ──────────────────────────────────────────────────────
+//
+// The lightest-weight planning primitive: a titled deliverable with an optional
+// due date, grouping issues + PRs and surfacing a progress bar (closed vs total
+// associated items, computed in the route — no denormalized counters at this
+// scale). CRUD mirrors Label / routes/labels.ts, but keyed by a per-repo `number`
+// (like Issue / PullRequest) so URLs read `…/milestones/3`. Deleting a milestone
+// nulls out associations via `onDelete: SetNull` — it never deletes the items.
+model Milestone {
+  id          String         @id @default(cuid())
+  repoId      String
+  number      Int
+  title       String
+  description String?
+  dueOn       DateTime?
+  state       MilestoneState @default(OPEN)
+  closedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  repo         Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  issues       Issue[]
+  pullRequests PullRequest[]
+
+  @@unique([repoId, number])
+  @@unique([repoId, title])
 }
 
 model Label {
@@ -290,9 +331,15 @@ model Issue {
   lockedById String?
   lockReason String?
 
+  // ─── Milestone association (issue #83) ────────────────────────────────────────
+  // Nullable; SetNull on milestone delete so removing a milestone never deletes
+  // the issue. Writer-gated via the PATCH route + the /milestone quick action.
+  milestoneId String?
+
   repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
   assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  milestone Milestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   labels   IssueLabel[]
   comments IssueComment[]
 
@@ -607,4 +654,69 @@ model WebhookDelivery {
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
+
+// ─── Projects: classic-style board + table over issues/PRs (issue #84) ───────────
+//
+// A repo-level project is a set of ordered status columns (seeded Todo /
+// In progress / Done) holding items that each point at an issue or PR by number.
+// The subject reference is polymorphic (subjectType + subjectNumber), mirroring
+// the spine's TimelineEvent pattern, so an item survives without a hard FK to the
+// mutable Issue/PullRequest row — the board hydrates by joining on
+// (repoId, number) at read time and renders a graceful placeholder if the subject
+// was deleted. Projects-v2-style custom fields are an explicit follow-up.
+
+model Project {
+  id          String   @id @default(cuid())
+  repoId      String
+  // Per-repo sequence number (like Issue/PullRequest), for clean URLs (/projects/1).
+  number      Int
+  name        String
+  description String?
+  // Closed = archived. Kept as a boolean (not a state enum) — a project is either
+  // active or closed; there is no third state in v0.
+  closed      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repo    Repo            @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  columns ProjectColumn[]
+  items   ProjectItem[]
+
+  @@unique([repoId, number])
+}
+
+model ProjectColumn {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  // Left-to-right order within the project. Renumbered densely (0,1,2,…) on write.
+  position  Int
+  createdAt DateTime @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   ProjectItem[]
+
+  @@index([projectId])
+}
+
+model ProjectItem {
+  id            String                  @id @default(cuid())
+  // Denormalized projectId (alongside columnId) so a subject can be uniquely
+  // constrained to at most one card per project across all its columns.
+  projectId     String
+  columnId      String
+  subjectType   ConversationSubjectType
+  subjectNumber Int
+  // Vertical sort key within the column. Renumbered densely (0,1,2,…) on every
+  // move — deterministic, so an optimistic client and the server always agree.
+  position      Float
+  addedById     String
+  createdAt     DateTime                @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  column  ProjectColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  addedBy User          @relation("ProjectItemAddedBy", fields: [addedById], references: [id])
+
+  @@unique([projectId, subjectType, subjectNumber])
+  @@index([columnId])
 }
