@@ -7,6 +7,7 @@ import { RepoListPage } from "./pages/RepoListPage";
 import { RepoPage } from "./pages/RepoPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsTokensPage } from "./pages/SettingsTokensPage";
+import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
 import { DEFAULT_TITLE } from "./pages/useDocumentTitle";
 import type { User } from "./types";
@@ -105,6 +106,16 @@ function AppRoutes() {
         element={
           authed ? (
             <SettingsTokensPage token={token!} user={user!} onLogout={handleLogout} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/settings/keys"
+        element={
+          authed ? (
+            <SettingsSSHKeysPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
             <Navigate to="/login" replace />
           )

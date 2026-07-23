@@ -50,6 +50,28 @@ export type WebhookDelivery = {
   createdAt: string;
 };
 
+// ─── SSH keys + deploy keys (issue #116) ──────────────────────────────────────
+
+/** A user's SSH public key. The public key is public, so it's returned in full. */
+export type SSHKey = {
+  id: string;
+  title: string;
+  publicKey: string;
+  fingerprint: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+};
+
+/** A repo-scoped deploy key; `readOnly` false means it may also push. */
+export type DeployKey = {
+  id: string;
+  title: string;
+  publicKey: string;
+  fingerprint: string;
+  readOnly: boolean;
+  createdAt: string;
+};
+
 export type PublicProfile = {
   id: string;
   handle: string;
@@ -80,6 +102,10 @@ export type Repo = {
   source?: ForkRef | null;
   /** Number of direct forks the viewer is allowed to see. */
   forkCount?: number;
+  /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
+  sshPort?: number | null;
+  /** Optional explicit SSH host override; when null the browser hostname is used. */
+  sshHost?: string | null;
   createdAt: string;
   updatedAt: string;
 };
