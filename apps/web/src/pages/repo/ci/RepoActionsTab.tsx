@@ -110,10 +110,10 @@ function RunsList({ token, handle, repoName, base }: Props & { base: string }) {
 
 // ─── Run detail (+ monospace logs) ────────────────────────────────────────────────
 
-function JobLog({ token, handle, repoName, runId, check }: {
-  token: string; handle: string; repoName: string; runId: string; check: CheckRun;
+function JobLog({ token, handle, repoName, runId, check, defaultOpen }: {
+  token: string; handle: string; repoName: string; runId: string; check: CheckRun; defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen ?? false);
   const [log, setLog] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -232,7 +232,17 @@ function RunDetail({ token, handle, repoName, id, base }: Props & { id: string; 
 
       <div className="space-y-2">
         {run.checkRuns.map((check) => (
-          <JobLog key={check.id} token={token} handle={handle} repoName={repoName} runId={run.id} check={check} />
+          <JobLog
+            key={check.id}
+            token={token}
+            handle={handle}
+            repoName={repoName}
+            runId={run.id}
+            check={check}
+            // Auto-open failing jobs (and any single-job run) so the error is
+            // visible without a click; passing jobs in a multi-job run stay tidy.
+            defaultOpen={check.conclusion === "failure" || run.checkRuns.length === 1}
+          />
         ))}
       </div>
     </div>
