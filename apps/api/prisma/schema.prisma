@@ -50,6 +50,13 @@ model User {
   designs          Design[]                   @relation("DesignCreator")
   designVersions   DesignVersion[]            @relation("DesignVersionUploader")
   sshKeys          SSHKey[]
+  // ─── Profile avatar (issue #115) ──────────────────────────────────────────────
+  // Opaque, regenerated-per-upload token. Non-null ⇒ the user has an uploaded
+  // avatar whose bytes live on the filesystem at `<GIT_STORAGE_ROOT>-avatars/<id>`
+  // (one file per user, overwritten on re-upload). The token is surfaced in public
+  // payloads purely as a cache-buster for the `GET /users/:handle/avatar` URL; it
+  // is not a storage path. Null ⇒ fall back to the deterministic letter avatar.
+  avatarKey      String?
 }
 
 model PersonalAccessToken {
