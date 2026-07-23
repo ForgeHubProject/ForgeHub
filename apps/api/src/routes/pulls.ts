@@ -12,6 +12,7 @@ import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { computeReviewSummary } from "../review-summary.js";
 import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
+import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } from "../branch-protection.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -49,6 +50,45 @@ async function reviewGate(
 function changesRequestedError(count: number): string {
   return `Changes were requested by ${count} reviewer${count === 1 ? "" : "s"}. `
     + "Resolve the requested changes, or merge with override to proceed anyway.";
+}
+
+/**
+ * HARD branch-protection gate for the merge endpoints (issue #85). Returns the
+ * protection status when the target branch is protected with merge-gate rules
+ * (`requiredApprovals` / `requireGreenChecks`), else null. `override` is
+ * intentionally NOT accepted — protection is not overridable in v0 (an admin
+ * bypass setting is a follow-up). `headSha` drives both review staleness and the
+ * check-summary lookup; `authorization` is forwarded so the in-process
+ * check-summary call sees the same actor (private repos).
+ */
+async function loadMergeProtection(
+  app: FastifyInstance,
+  repo: { id: string },
+  handle: string,
+  name: string,
+  pr: { id: string; toBranch: string },
+  headSha: string | null,
+  authorization?: string,
+): Promise<ProtectionMergeStatus | null> {
+  const rule = await prisma.protectedBranch.findFirst({ where: { repoId: repo.id, branch: pr.toBranch } });
+  if (!rule) return null;
+  const needsApprovals = rule.requiredApprovals > 0;
+  const needsChecks = rule.requireGreenChecks;
+  if (!needsApprovals && !needsChecks) return null; // protected, but no merge-gate rules
+
+  const review = needsApprovals
+    ? await computeReviewSummary(pr.id, headSha)
+    : { approvals: 0, changesRequested: 0 };
+  const checks = needsChecks
+    ? await getCheckSummary(app, handle, name, headSha ?? "", authorization)
+    : null;
+
+  return evaluateMergeProtection(
+    rule,
+    pr.toBranch,
+    { approvals: review.approvals, changesRequested: review.changesRequested },
+    checks,
+  );
 }
 
 export async function pullRoutes(app: FastifyInstance) {
@@ -217,6 +257,13 @@ export async function pullRoutes(app: FastifyInstance) {
 
     const reviewSummary = await computeReviewSummary(pr.id, headSha);
 
+    // Branch-protection status for the merge box (issue #85): the active
+    // merge-gate rules and whether each is satisfied. Null when the target
+    // branch isn't protected or carries no merge-gate rules.
+    const protection = pr.state === "OPEN"
+      ? await loadMergeProtection(app, repo, handle, name, pr, headSha, request.headers.authorization)
+      : null;
+
     return {
       id: pr.id,
       number: pr.number,
@@ -228,6 +275,7 @@ export async function pullRoutes(app: FastifyInstance) {
       mergeable,
       headSha,
       reviewSummary,
+      protection,
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
@@ -257,6 +305,17 @@ export async function pullRoutes(app: FastifyInstance) {
     const mergeMethod: MergeMethod = (rawMethod ?? "merge") as MergeMethod;
     if (!MERGE_METHODS.includes(mergeMethod)) {
       return reply.status(400).send({ error: `mergeMethod must be one of: ${MERGE_METHODS.join(", ")}` });
+    }
+
+    // Resolve the head SHA once — drives review staleness AND the check-summary lookup.
+    let headSha: string | null = null;
+    try { headSha = await resolveBranchSha(repo.storageKey, pr.fromBranch); } catch { headSha = null; }
+
+    // HARD branch-protection gate (issue #85): required approvals / green checks.
+    // Override is NOT honored here — protection applies to everyone, owner included.
+    const protection = await loadMergeProtection(app, repo, handle, name, pr, headSha, request.headers.authorization);
+    if (protection?.blocked) {
+      return reply.status(409).send({ error: protection.reason, protection: true });
     }
 
     // Soft review gate: block on active change requests unless overridden.
@@ -352,6 +411,16 @@ export async function pullRoutes(app: FastifyInstance) {
       return reply.status(400).send({
         error: "Provide strategy ('ours' | 'theirs') or a non-empty files resolution list",
       });
+    }
+
+    // Resolve the head SHA once (review staleness + check-summary lookup).
+    let headSha: string | null = null;
+    try { headSha = await resolveBranchSha(repo.storageKey, pr.fromBranch); } catch { headSha = null; }
+
+    // HARD branch-protection gate (issue #85). Override is NOT honored here.
+    const protection = await loadMergeProtection(app, repo, handle, name, pr, headSha, request.headers.authorization);
+    if (protection?.blocked) {
+      return reply.status(409).send({ error: protection.reason, protection: true });
     }
 
     // Soft review gate: block on active change requests unless overridden.
