@@ -654,6 +654,7 @@ model WebhookDelivery {
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
+}
 
 // ─── Projects: classic-style board + table over issues/PRs (issue #84) ───────────
 //
