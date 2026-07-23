@@ -216,6 +216,16 @@ model ProtectedBranch {
   repoId String
   branch String
 
+  // Enforced protection rules (issue #85). A bare row (all defaults) preserves
+  // the original behavior: the branch cannot be deleted. `requirePullRequest`
+  // and `blockForcePush` are enforced at the git transport (pre-receive hook);
+  // `requiredApprovals` and `requireGreenChecks` are enforced at the merge
+  // endpoints. Exact branch names only in v0 (glob patterns are a follow-up).
+  requirePullRequest Boolean @default(false)
+  requiredApprovals  Int     @default(0)
+  requireGreenChecks Boolean @default(false)
+  blockForcePush     Boolean @default(false)
+
   repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
 
   @@unique([repoId, branch])
