@@ -39,6 +39,7 @@ import { webhookRoutes } from "./routes/webhooks.js";
 import { ciRoutes } from "./routes/ci.js";
 import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
+import { profileRoutes } from "./routes/profile.js";
 import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
@@ -153,6 +154,10 @@ export async function buildServer() {
 
   await app.register(projectRoutes);
   await app.register(gitHttpRoutes);
+
+  // Profiles (issue #115) — registered last so its new /users/* routes sit after
+  // the auth surfaces they extend.
+  await app.register(profileRoutes);
 
   // SSH git transport (issue #116). Hard-off unless FORGEHUB_SSH_PORT is set; when
   // started, it is torn down with the Fastify app so tests (and clean shutdowns)

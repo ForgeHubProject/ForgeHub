@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -108,6 +108,45 @@ export async function readDesignBuffer(key: string): Promise<Buffer> {
 /** Delete a stored design version (idempotent — missing files are ignored). */
 export async function removeDesign(key: string): Promise<void> {
   await rm(designPathFromKey(key), { force: true });
+}
+
+// ─── avatar storage (issue #115) ─────────────────────────────────────────────
+//
+// Profile avatars live under a sibling of the git storage root (`<root>-avatars`),
+// never inside the bare repos — the same separation the release assets, designs,
+// and CI logs use. One file per user, keyed by the user id and overwritten on
+// re-upload (the User.avatarKey token is a cache-buster, not the path).
+
+function avatarsRoot(): string {
+  return `${path.resolve(storageRoot())}-avatars`;
+}
+
+/** Resolve a user's avatar file to an absolute path, guarding against traversal. */
+export function avatarPathForUser(userId: string): string {
+  const root = path.resolve(avatarsRoot());
+  const full = path.resolve(root, userId);
+  const rel = path.relative(root, full);
+  if (rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+    throw new Error("Invalid avatar user id");
+  }
+  return full;
+}
+
+/** Persist avatar bytes for a user, overwriting any previous upload. */
+export async function writeAvatarBuffer(userId: string, buf: Buffer): Promise<void> {
+  const full = avatarPathForUser(userId);
+  await mkdir(path.dirname(full), { recursive: true });
+  await writeFile(full, buf);
+}
+
+/** Read a user's stored avatar bytes (throws if absent — callers guard on avatarKey). */
+export async function readAvatarBuffer(userId: string): Promise<Buffer> {
+  return readFile(avatarPathForUser(userId));
+}
+
+/** Delete a user's stored avatar (idempotent — a missing file is ignored). */
+export async function removeAvatar(userId: string): Promise<void> {
+  await rm(avatarPathForUser(userId), { force: true });
 }
 
 // ─── CI (Actions) storage (issue #86) ────────────────────────────────────────
