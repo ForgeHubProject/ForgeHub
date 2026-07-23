@@ -6,6 +6,7 @@ import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { authRoutes } from "./routes/auth.js";
+import { sessionRoutes } from "./routes/sessions.js";
 import { branchRoutes } from "./routes/branches.js";
 import { codeNavRoutes } from "./routes/code-nav.js";
 import { commitRoutes } from "./routes/commits.js";
@@ -43,6 +44,7 @@ import { profileRoutes } from "./routes/profile.js";
 import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
+import { sessionActive } from "./session-service.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -70,11 +72,20 @@ export async function buildServer() {
   app.decorate(
     "authenticate",
     async function authenticate(request: FastifyRequest, reply: FastifyReply) {
+      let jwtOk = false;
       try {
         await request.jwtVerify();
-        return; // session/JWT — unscoped, full access
+        jwtOk = true;
       } catch {
         // Not a valid session JWT — fall through to Personal Access Token auth.
+      }
+      if (jwtOk) {
+        // Session-backed JWT (issue #117): reject a revoked login; stamp lastSeenAt.
+        const sid = request.user.sid;
+        if (sid && !(await sessionActive(sid))) {
+          return reply.status(401).send({ error: "Session revoked" });
+        }
+        return; // session/JWT — unscoped, full access
       }
       const pat = await resolvePatBearer(request);
       if (pat) {
@@ -89,11 +100,20 @@ export async function buildServer() {
   app.decorate(
     "optionalAuthenticate",
     async function optionalAuthenticate(request: FastifyRequest) {
+      let jwtOk = false;
       try {
         await request.jwtVerify();
-        return;
+        jwtOk = true;
       } catch {
         // Not a session JWT — try a PAT, else treat as guest.
+      }
+      if (jwtOk) {
+        // A revoked session must not confer identity — drop back to guest.
+        const sid = request.user.sid;
+        if (sid && !(await sessionActive(sid))) {
+          (request as { user?: unknown }).user = undefined;
+        }
+        return;
       }
       const pat = await resolvePatBearer(request);
       if (pat) {
@@ -121,6 +141,7 @@ export async function buildServer() {
 
   await app.register(devUiRoutes);
   await app.register(authRoutes);
+  await app.register(sessionRoutes);
   await app.register(tokenRoutes);
   await app.register(repoRoutes);
   await app.register(snapshotRoutes);

@@ -57,6 +57,7 @@ model User {
   // payloads purely as a cache-buster for the `GET /users/:handle/avatar` URL; it
   // is not a storage path. Null ⇒ fall back to the deterministic letter avatar.
   avatarKey      String?
+  sessions         Session[]
 }
 
 model PersonalAccessToken {
@@ -95,6 +96,7 @@ model Repo {
   snapshots         Snapshot[]
   pullRequests      PullRequest[]
   protectedBranches ProtectedBranch[]
+  protectedTags     ProtectedTag[]
   issues   Issue[]
   labels   Label[]
   milestones Milestone[]
@@ -913,5 +915,46 @@ model DeployKey {
 
   repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
 
+  @@index([repoId])
+}
+
+// ─── Interactive login sessions (issue #117) ──────────────────────────────────
+//
+// One row per interactive login (register / login). The JWT carries this row's
+// id as a `sid` claim; the auth preHandler checks `revokedAt` on every request
+// (revoked → 401) and stamps `lastSeenAt` (throttled). Lets a user list and
+// revoke their active devices ("this device" / "everywhere"). Tokens minted
+// before this feature carry no `sid` and remain valid but un-revocable
+// individually — a global password change is the escape hatch there.
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  userAgent  String?
+  ip         String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Protected tags (issue #117) ──────────────────────────────────────────────
+//
+// A glob pattern (`*` wildcard) matched against tag names. A matching tag cannot
+// be deleted or overwritten — enforced both at the API tag routes and at the git
+// transport, where the shared pre-receive hook reads a synced rules file (mirrors
+// branch protection, issue #85). Creating a brand-new matching tag stays allowed,
+// so releases keep working.
+model ProtectedTag {
+  id        String   @id @default(cuid())
+  repoId    String
+  pattern   String
+  createdAt DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, pattern])
   @@index([repoId])
 }
