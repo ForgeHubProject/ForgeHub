@@ -25,6 +25,8 @@ function formatIssue(issue: {
   pinnedAt?: Date | null;
   locked?: boolean | null;
   lockReason?: string | null;
+  // Milestone association (#83) — optional so mocked/legacy rows still format.
+  milestone?: { id: string; number: number; title: string; state: string } | null;
 }) {
   return {
     id: issue.id,
@@ -49,6 +51,9 @@ function formatIssue(issue: {
     pinnedAt: issue.pinnedAt ? issue.pinnedAt.toISOString() : null,
     locked: issue.locked ?? false,
     lockReason: issue.lockReason ?? null,
+    milestone: issue.milestone
+      ? { id: issue.milestone.id, number: issue.milestone.number, title: issue.milestone.title, state: issue.milestone.state.toLowerCase() }
+      : null,
   };
 }
 
@@ -75,6 +80,7 @@ const issueInclude = {
   author: { select: { handle: true } },
   assignee: { select: { handle: true } },
   labels: { include: { label: { select: { id: true, name: true, color: true } } } },
+  milestone: { select: { id: true, number: true, title: true, state: true } },
   _count: { select: { comments: true } },
 } as const;
 
@@ -83,11 +89,12 @@ export async function issueRoutes(app: FastifyInstance) {
   app.get("/repos/:handle/:name/issues", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
-    const { state = "open", label, assignee, author, sort } = request.query as {
+    const { state = "open", label, assignee, author, milestone, sort } = request.query as {
       state?: string;
       label?: string;
       assignee?: string;
       author?: string;
+      milestone?: string;
       sort?: string;
     };
 
@@ -99,6 +106,14 @@ export async function issueRoutes(app: FastifyInstance) {
       : state === "all" ? undefined
       : "OPEN";
 
+    // `?milestone=` accepts a title, the special value "none" (unassociated), or "*"
+    // (any milestone) — mirroring GitHub's issue-list milestone filter.
+    const milestoneWhere =
+      milestone === undefined ? {}
+      : milestone === "none" ? { milestoneId: null }
+      : milestone === "*" ? { milestoneId: { not: null } }
+      : { milestone: { title: milestone } };
+
     const issues = await prisma.issue.findMany({
       where: {
         repoId: repo.id,
@@ -106,6 +121,7 @@ export async function issueRoutes(app: FastifyInstance) {
         ...(label ? { labels: { some: { label: { name: label } } } } : {}),
         ...(assignee ? { assignee: { handle: assignee } } : {}),
         ...(author ? { author: { handle: author } } : {}),
+        ...milestoneWhere,
       },
       // Pinned first (SQLite sorts NULLs last under DESC, so pinned rows lead),
       // then the requested number order. The list UI lifts pinned rows into their
@@ -217,15 +233,32 @@ export async function issueRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Only the author or a writer can modify this issue" });
     }
 
-    const { title, body, state, assigneeId } = request.body as {
+    const { title, body, state, assigneeId, milestoneId } = request.body as {
       title?: string;
       body?: string;
       state?: string;
       assigneeId?: string;
+      milestoneId?: string | null;
     };
 
     if (state !== undefined && !["open", "closed"].includes(state)) {
       return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
+    }
+
+    // Milestone association (#83) is writer-gated (the author alone can't set it),
+    // and the target milestone must belong to this repo.
+    let nextMilestoneId: string | null | undefined;
+    if (milestoneId !== undefined) {
+      if (!canWrite(repo, userId)) {
+        return reply.status(403).send({ error: "Write access is required to set a milestone" });
+      }
+      if (milestoneId) {
+        const ms = await prisma.milestone.findFirst({ where: { id: milestoneId, repoId: repo.id }, select: { id: true } });
+        if (!ms) return reply.status(404).send({ error: "Milestone not found" });
+        nextMilestoneId = ms.id;
+      } else {
+        nextMilestoneId = null;
+      }
     }
 
     const now = new Date();
@@ -235,6 +268,7 @@ export async function issueRoutes(app: FastifyInstance) {
         ...(title !== undefined ? { title: title.trim() } : {}),
         ...(body !== undefined ? { body: body.trim() || null } : {}),
         ...(assigneeId !== undefined ? { assigneeId: assigneeId || null } : {}),
+        ...(nextMilestoneId !== undefined ? { milestoneId: nextMilestoneId } : {}),
         ...(state === "closed" ? { state: "CLOSED", closedAt: now } : {}),
         ...(state === "open" ? { state: "OPEN", closedAt: null } : {}),
       },
@@ -257,6 +291,14 @@ export async function issueRoutes(app: FastifyInstance) {
       } else {
         const prev = await prisma.user.findUnique({ where: { id: issue.assigneeId! }, select: { handle: true } });
         await emit("unassigned", { assignee: prev?.handle });
+      }
+    }
+    if (nextMilestoneId !== undefined && updated.milestoneId !== issue.milestoneId) {
+      if (updated.milestone) {
+        await emit("milestoned", { milestone: { title: updated.milestone.title, number: updated.milestone.number } });
+      } else if (issue.milestoneId) {
+        const prev = await prisma.milestone.findUnique({ where: { id: issue.milestoneId }, select: { title: true, number: true } });
+        await emit("demilestoned", { milestone: prev ? { title: prev.title, number: prev.number } : undefined });
       }
     }
     if (body !== undefined && updated.body !== issue.body) {
@@ -369,6 +411,7 @@ export async function issueRoutes(app: FastifyInstance) {
           id: issue.id, number: issue.number, authorId: issue.authorId, state: issue.state,
           title: issue.title, assigneeId: issue.assigneeId,
           estimateMinutes: issue.estimateMinutes, spentMinutes: issue.spentMinutes,
+          milestoneId: issue.milestoneId,
         },
       },
       log: request.log,
