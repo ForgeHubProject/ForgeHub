@@ -6,14 +6,14 @@ import {
 } from "../../../ui";
 import {
   addIssueLabel, createIssueCommentWithActions, getIssue, listIssueComments, listIssueTimeline,
-  listLabels, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember, setIssueEstimate,
-  setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
+  listLabels, listMilestones, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember,
+  setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
-import type { Issue, IssueComment, Label, TimelineEvent, User } from "../../../types";
+import type { Issue, IssueComment, Label, Milestone, TimelineEvent, User } from "../../../types";
 import { StatePill, UserLink } from "./parts";
-import { SidebarLabels, SidebarAssignee, SidebarTimeTracking } from "./Sidebar";
+import { SidebarLabels, SidebarAssignee, SidebarMilestone, SidebarTimeTracking } from "./Sidebar";
 import {
   ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, KebabIcon, LockIcon,
   PencilIcon, PinIcon, TransferIcon, UnlockIcon,
@@ -56,6 +56,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [allLabels, setAllLabels] = useState<Label[]>([]);
   const [members, setMembers] = useState<RepoMember[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,13 +84,15 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       listLabels(token, handle, repoName).catch(() => ({ labels: [] })),
       listRepoMembers(token, handle, repoName).catch(() => ({ members: [] })),
       listIssueTimeline(token, handle, repoName, number).catch(() => ({ events: [] })),
+      listMilestones(token, handle, repoName, "open").catch(() => ({ milestones: [], counts: { open: 0, closed: 0 } })),
     ])
-      .then(([iss, cmts, lbl, mem, tl]) => {
+      .then(([iss, cmts, lbl, mem, tl, ms]) => {
         setIssue(iss);
         setComments(cmts.comments);
         setAllLabels(lbl.labels);
         setMembers(mem.members);
         setEvents(tl.events);
+        setMilestones(ms.milestones);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Issue not found"))
       .finally(() => setLoading(false));
@@ -193,6 +196,17 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       setIssue(updated);
       refreshTimeline();
     } catch { /* ignore */ }
+  }
+
+  async function setMilestone(milestoneId: string | null) {
+    if (!issue) return;
+    try {
+      const updated = await setIssueMilestone(token, handle, repoName, number, milestoneId);
+      setIssue(updated);
+      refreshTimeline();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to set milestone");
+    }
   }
 
   async function togglePin() {
@@ -467,6 +481,13 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             selectedHandle={issue.assignee}
             onSelect={setAssignee}
             canEdit={canEdit}
+          />
+          <SidebarMilestone
+            milestones={milestones}
+            selected={issue.milestone ?? null}
+            onSelect={setMilestone}
+            canEdit={canManage}
+            base={base}
           />
           <SidebarTimeTracking
             estimateMinutes={issue.estimateMinutes}

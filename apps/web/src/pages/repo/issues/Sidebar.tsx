@@ -1,9 +1,26 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Avatar, Button, cx, LabelChip, TextInput } from "../../../ui";
-import { XIcon } from "../../../ui/icons";
-import type { Label } from "../../../types";
+import { CheckIcon, XIcon } from "../../../ui/icons";
+import type { Label, Milestone, MilestoneRef } from "../../../types";
 import type { RepoMember } from "../../../api";
 import { LabelOptionRow, MemberOptionRow, Popover, SidebarHeader } from "./pickers";
+import { MilestoneIcon } from "./icons";
+
+/** Format a milestone due date as GitHub does: "Due by Sep 1, 2026". */
+function formatDue(dueOn: string | null): string | null {
+  if (!dueOn) return null;
+  const d = new Date(dueOn);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** True when an open milestone's due date is in the past. */
+function isOverdue(m: Milestone): boolean {
+  if (!m.dueOn || m.state !== "open") return false;
+  const d = new Date(m.dueOn);
+  return !Number.isNaN(d.getTime()) && d.getTime() < Date.now();
+}
 
 /**
  * Labels sidebar section. Presentational: the parent owns `selected` and decides
@@ -117,6 +134,112 @@ export function SidebarAssignee({
         </Popover>
       ) : (
         <SidebarHeader title="Assignee" />
+      )}
+      <div className="mt-2">{applied}</div>
+    </section>
+  );
+}
+
+/**
+ * A thin progress bar (closed vs total) in fh tokens — shared by the milestone
+ * sidebar block and the milestones pages.
+ */
+export function MilestoneProgress({ percent, className }: { percent: number; className?: string }) {
+  return (
+    <div
+      className={cx("h-1.5 w-full rounded-full bg-fh-border overflow-hidden", className)}
+      role="progressbar"
+      aria-valuenow={percent}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className="h-full rounded-full bg-fh-success-emphasis transition-all" style={{ width: `${percent}%` }} />
+    </div>
+  );
+}
+
+/**
+ * Milestone sidebar section (issue #83). Presentational: the parent owns
+ * persistence (`onSelect`, null clears) and the writer gate. Picks from open
+ * milestones; the currently-selected milestone stays shown even if it's closed.
+ */
+export function SidebarMilestone({
+  milestones,
+  selected,
+  onSelect,
+  canEdit,
+  base,
+}: {
+  milestones: Milestone[];
+  selected: MilestoneRef | null;
+  onSelect: (milestoneId: string | null) => void;
+  canEdit: boolean;
+  /** Repo base path (`/handle/repo`) for the milestone detail link. */
+  base: string;
+}) {
+  // The full record for the selected milestone (carries progress + due date),
+  // falling back to the embedded ref when it isn't in the open-milestones list.
+  const selectedFull = selected ? milestones.find((m) => m.id === selected.id) ?? null : null;
+
+  const applied = selected ? (
+    <div className="space-y-1.5">
+      <Link
+        to={`${base}/issues/milestones/${selected.number}`}
+        className="inline-flex items-center gap-1.5 text-fh-sm text-fh-fg hover:text-fh-accent-fg"
+      >
+        <MilestoneIcon size={14} className="shrink-0 text-fh-fg-subtle" />
+        <span className="truncate">{selected.title}</span>
+      </Link>
+      {selectedFull && (
+        <>
+          <MilestoneProgress percent={selectedFull.percent} />
+          <div className="flex items-center justify-between text-fh-xs text-fh-fg-subtle">
+            <span>{selectedFull.percent}%</span>
+            <span>{selectedFull.closedItems} of {selectedFull.totalItems} closed</span>
+          </div>
+        </>
+      )}
+    </div>
+  ) : (
+    <p className="text-fh-sm text-fh-fg-muted">No milestone</p>
+  );
+
+  return (
+    <section className="pb-4 mb-4 border-b border-fh-border-muted">
+      {canEdit ? (
+        <Popover align="start" trigger={(_open, toggle) => <SidebarHeader title="Milestone" onEdit={toggle} />}>
+          {milestones.length === 0 ? (
+            <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No open milestones. Create one in Milestones.</p>
+          ) : (
+            milestones.map((m) => {
+              const checked = selected?.id === m.id;
+              const due = formatDue(m.dueOn);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={checked}
+                  onClick={() => onSelect(checked ? null : m.id)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-fh-surface-muted transition-colors"
+                >
+                  <span className="w-4 shrink-0 text-fh-accent-fg">{checked && <CheckIcon size={14} />}</span>
+                  <MilestoneIcon size={14} className="shrink-0 text-fh-fg-subtle" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-fh-sm text-fh-fg">{m.title}</span>
+                    {due && (
+                      <span className={cx("block text-fh-xs", isOverdue(m) ? "text-fh-danger-fg" : "text-fh-fg-subtle")}>
+                        {isOverdue(m) ? "Past due" : "Due"} {due}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </Popover>
+      ) : (
+        <SidebarHeader title="Milestone" />
       )}
       <div className="mt-2">{applied}</div>
     </section>

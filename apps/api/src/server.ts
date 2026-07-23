@@ -20,6 +20,7 @@ import { forkRoutes } from "./routes/forks.js";
 import { gitHttpRoutes } from "./routes/git-http.js";
 import { issueRoutes } from "./routes/issues.js";
 import { labelRoutes } from "./routes/labels.js";
+import { milestoneRoutes } from "./routes/milestones.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { prCommentRoutes } from "./routes/pr-comments.js";
 import { pullRoutes } from "./routes/pulls.js";
@@ -97,6 +98,7 @@ export async function buildServer() {
   await app.register(prCommentRoutes);
   await app.register(issueRoutes);
   await app.register(labelRoutes);
+  await app.register(milestoneRoutes);
   await app.register(notificationRoutes);
   await app.register(timelineRoutes);
   await app.register(searchRoutes);
