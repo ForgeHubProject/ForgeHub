@@ -79,7 +79,7 @@ export const updateTopicsBodySchema = z.object({
 // ─── Webhooks (issue #87) ──────────────────────────────────────────────────────
 
 /** Subscribable outbound-webhook event names. `ping` is server-internal only. */
-export const WEBHOOK_EVENTS = ["push", "issues", "pull_request", "release"] as const;
+export const WEBHOOK_EVENTS = ["push", "issues", "issue_comment", "pull_request", "release"] as const;
 export const webhookEventSchema = z.enum(WEBHOOK_EVENTS);
 
 export const createWebhookBodySchema = z.object({

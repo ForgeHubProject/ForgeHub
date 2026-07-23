@@ -4,6 +4,11 @@ import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, countAheadBehind, createBranch, defaultBranch, deleteBranch, listBranches } from "../git-utils.js";
 
 export async function branchRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to mutate branches / protection; session/JWT
+  // auth is unscoped and no-ops this guard (issue #87). Route bodies keep their
+  // own writer/owner checks.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/branches
   app.get("/repos/:handle/:name/branches", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
@@ -35,7 +40,7 @@ export async function branchRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/branches
-  app.post("/repos/:handle/:name/branches", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/branches", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
@@ -56,7 +61,7 @@ export async function branchRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/branches/:branch
-  app.delete("/repos/:handle/:name/branches/:branch", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/branches/:branch", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, branch } = request.params as { handle: string; name: string; branch: string };
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
@@ -90,7 +95,7 @@ export async function branchRoutes(app: FastifyInstance) {
   });
 
   // PUT /repos/:handle/:name/branches/:branch/protection
-  app.put("/repos/:handle/:name/branches/:branch/protection", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.put("/repos/:handle/:name/branches/:branch/protection", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, branch } = request.params as { handle: string; name: string; branch: string };
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
@@ -106,7 +111,7 @@ export async function branchRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/branches/:branch/protection
-  app.delete("/repos/:handle/:name/branches/:branch/protection", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/branches/:branch/protection", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, branch } = request.params as { handle: string; name: string; branch: string };
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);

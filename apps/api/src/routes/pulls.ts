@@ -5,6 +5,7 @@ import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, li
 import { notifySubscribers } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
+import { resolveMilestoneFilter } from "../milestone-filter.js";
 import { syncBodyReferences, closeIssuesForMergedPull } from "../references-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
@@ -65,13 +66,11 @@ export async function pullRoutes(app: FastifyInstance) {
       : state === "all" ? undefined
       : "OPEN";
 
-    // `?milestone=` accepts a title, "none" (unassociated), or "*" (any) — matching
-    // the issue-list milestone filter (#83).
-    const milestoneWhere =
-      milestone === undefined ? {}
-      : milestone === "none" ? { milestoneId: null }
-      : milestone === "*" ? { milestoneId: { not: null } }
-      : { milestone: { title: milestone } };
+    // `?milestone=` accepts a milestone NUMBER or TITLE, plus "none" (unassociated)
+    // and "*" (any milestone) — matching the issue-list filter. The web serializes
+    // by number while the original API took a title, so the shared resolver accepts
+    // either (wave-A D2).
+    const milestoneWhere = await resolveMilestoneFilter(repo.id, milestone);
 
     const pulls = await prisma.pullRequest.findMany({
       where: { repoId: repo.id, ...(stateFilter ? { state: stateFilter } : {}), ...milestoneWhere },

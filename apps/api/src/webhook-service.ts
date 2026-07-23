@@ -16,7 +16,7 @@ import { prisma } from "./prisma.js";
  * Wire format (X-ForgeHub-Hook-Version: 1):
  *   POST <hook.url>
  *   Content-Type: application/json
- *   X-ForgeHub-Event: push | issues | pull_request | release | ping
+ *   X-ForgeHub-Event: push | issues | issue_comment | pull_request | release | ping
  *   X-ForgeHub-Delivery: <uuid>                       (the WebhookDelivery row id)
  *   X-ForgeHub-Hook-Version: 1
  *   X-ForgeHub-Signature-256: sha256=<hex>            (HMAC-SHA256 of the raw body)
@@ -33,11 +33,12 @@ export const HOOK_VERSION = 1;
 const DELIVERY_TIMEOUT_MS = 10_000;
 const MAX_ATTEMPTS = 3; // 1 initial + 2 retries
 
-export type WebhookEventName = "push" | "issues" | "pull_request" | "release" | "ping";
+export type WebhookEventName = "push" | "issues" | "issue_comment" | "pull_request" | "release" | "ping";
 
 const SUBJECT_KEY: Record<WebhookEventName, string> = {
   push: "push",
   issues: "issue",
+  issue_comment: "issue_comment",
   pull_request: "pull_request",
   release: "release",
   ping: "hook",
