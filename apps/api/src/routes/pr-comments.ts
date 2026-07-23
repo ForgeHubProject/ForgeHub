@@ -123,6 +123,11 @@ function validatePosition(position: unknown): { valid: true; serialized: string 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function prCommentRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to submit a review (issue #87). Session/JWT
+  // auth is unscoped and no-ops this guard; the route body keeps its own
+  // author/access checks.
+  const write = app.requireScope("repo:write");
+
   // ── Helper: resolve repo + PR by number ──────────────────────────────────────
 
   async function resolveRepoAndPR(
@@ -340,7 +345,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
   // POST /repos/:handle/:name/pulls/:number/reviews
   app.post(
     "/repos/:handle/:name/pulls/:number/reviews",
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate, write] },
     async (request, reply) => {
       const { handle, name, number } = request.params as { handle: string; name: string; number: string };
       const userId = request.user.sub;

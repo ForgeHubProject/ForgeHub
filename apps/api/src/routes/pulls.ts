@@ -12,6 +12,7 @@ import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { computeReviewSummary } from "../review-summary.js";
 import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
+import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } from "../branch-protection.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
@@ -92,6 +93,12 @@ async function loadMergeProtection(
 }
 
 export async function pullRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to open / merge / revert / change the state of
+  // a pull request (issue #87). Session/JWT auth is unscoped and no-ops this
+  // guard. Route bodies keep their own writer/author/owner checks; this only
+  // closes the hole where a `repo:read` PAT could mutate PRs.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/pulls
   app.get("/repos/:handle/:name/pulls", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
@@ -143,7 +150,7 @@ export async function pullRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/pulls
-  app.post("/repos/:handle/:name/pulls", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/pulls", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -288,7 +295,7 @@ export async function pullRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/pulls/:number/merge
-  app.post("/repos/:handle/:name/pulls/:number/merge", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/pulls/:number/merge", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -368,6 +375,13 @@ export async function pullRoutes(app: FastifyInstance) {
       repoId: repo.id, event: "pull_request", action: "merged", senderId: userId,
       subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "merged", mergeCommitSha: result.sha },
     });
+    // The target branch tip moved via a direct-to-bare merge push (which sets
+    // FORGEHUB_INTERNAL_PUSH=1 and so bypasses the git-http post-receive path):
+    // fire the same `push` webhook + push CI a client push to `toBranch` would,
+    // so a merge commit isn't invisible to hooks/CI (issues #86/#87).
+    emitPushEvents(repo.id, repo.storageKey, userId, [
+      { branch: pr.toBranch, oldSha: beforeSha ?? ZERO_SHA, newSha: result.sha },
+    ]);
     await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
       .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
 
@@ -385,7 +399,7 @@ export async function pullRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/pulls/:number/merge-resolve — resolve a conflict with ours/theirs
-  app.post("/repos/:handle/:name/pulls/:number/merge-resolve", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/pulls/:number/merge-resolve", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -478,6 +492,11 @@ export async function pullRoutes(app: FastifyInstance) {
       repoId: repo.id, event: "pull_request", action: "merged", senderId: userId,
       subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "merged", mergeCommitSha: result.sha },
     });
+    // Target branch tip moved via an internal merge push — mirror a client push
+    // to `toBranch` with a `push` webhook + push CI (issues #86/#87).
+    emitPushEvents(repo.id, repo.storageKey, userId, [
+      { branch: pr.toBranch, oldSha: beforeSha ?? ZERO_SHA, newSha: result.sha },
+    ]);
     await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
       .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
 
@@ -494,7 +513,7 @@ export async function pullRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/pulls/:number/revert — open a PR reverting a merged PR
-  app.post("/repos/:handle/:name/pulls/:number/revert", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/pulls/:number/revert", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -550,6 +569,13 @@ export async function pullRoutes(app: FastifyInstance) {
     });
 
     void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: revertPr.id, subjectTitle: revertPr.title, reason: "SUBSCRIBED" });
+
+    // The revert branch was created via an internal direct-to-bare push (bypasses
+    // post-receive), so fire the same `push` webhook + push CI a client creating
+    // `revert-pr-N` would — a new branch, hence a zero before-sha (issues #86/#87).
+    emitPushEvents(repo.id, repo.storageKey, userId, [
+      { branch: revertBranch, oldSha: ZERO_SHA, newSha: result.sha },
+    ]);
 
     // Ingest any snapshots reintroduced by the revert commit on the new branch.
     if (beforeSha && result.sha) {
@@ -634,7 +660,7 @@ export async function pullRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/pulls/:number — close/reopen and/or set milestone
-  app.patch("/repos/:handle/:name/pulls/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/pulls/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 

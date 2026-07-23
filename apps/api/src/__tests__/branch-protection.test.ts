@@ -131,6 +131,18 @@ describe("evaluateMergeProtection (pure)", () => {
     expect(s.rules.find((r) => r.key === "checks")?.detail).toMatch(/no checks configured/i);
   });
 
+  it("flags the green-checks rule as passing vacuously when no runs exist (wave-B MINOR-2)", () => {
+    const s = evaluateMergeProtection(rule({ requireGreenChecks: true }), "main", { approvals: 0, changesRequested: 0 }, null);
+    const checksRule = s.rules.find((r) => r.key === "checks");
+    expect(checksRule?.satisfied).toBe(true);
+    expect(checksRule?.note).toMatch(/no checks have run|vacuously/i);
+  });
+
+  it("carries no vacuous-checks note once a check has reported", () => {
+    const s = evaluateMergeProtection(rule({ requireGreenChecks: true }), "main", { approvals: 0, changesRequested: 0 }, { total: 3, passing: 3, failing: 0, pending: 0 });
+    expect(s.rules.find((r) => r.key === "checks")?.note).toBeUndefined();
+  });
+
   it("blocks when checks are pending", () => {
     const s = evaluateMergeProtection(rule({ requireGreenChecks: true }), "main", { approvals: 0, changesRequested: 0 }, { total: 3, passing: 2, failing: 0, pending: 1 });
     expect(s.blocked).toBe(true);

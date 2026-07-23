@@ -46,6 +46,14 @@ export type ProtectionRuleState = {
   label: string;
   satisfied: boolean;
   detail: string;
+  /**
+   * Informational caveat shown alongside a *satisfied* rule. Set for the
+   * green-checks rule when it passes only vacuously — no workflow has reported a
+   * check for the commit yet (checks === null). The UI renders it as a muted
+   * info line so "passes because nothing ran" reads differently from "all
+   * checks passed"; it is NOT a blocker.
+   */
+  note?: string;
 };
 
 export type ProtectionMergeStatus = {
@@ -131,11 +139,15 @@ export function evaluateMergeProtection(
 
   if (rule.requireGreenChecks) {
     if (checks === null) {
+      // Hard-gate design: a repo with no CI must not become unmergeable, so an
+      // absent check-summary passes. But surface *why* it's green so the merge
+      // box doesn't read identically to "all checks passed".
       rules.push({
         key: "checks",
         label: "Requires status checks to pass",
         satisfied: true,
         detail: "No checks configured",
+        note: "No checks have run for this commit — the rule passes vacuously until a workflow reports.",
       });
     } else {
       const satisfied = checks.failing === 0 && checks.pending === 0;

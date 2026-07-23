@@ -49,6 +49,10 @@ vi.mock("../prisma.js", () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    personalAccessToken: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 
@@ -113,6 +117,7 @@ vi.mock("bcryptjs", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
+import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -447,6 +452,36 @@ describe("POST /repos/:handle/:name/pulls/:number/reviews", () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json().error).toMatch(/own pull request/i);
+  });
+
+  it("403s a repo:read PAT submitting a review; a session token passes (wave-B MAJOR-2)", async () => {
+    const READ_PAT = "fhp_read_review";
+    // A repo:read PAT owned by alice (a non-author with repo access): a 403 here
+    // proves the scope gate fired, not the author or access checks.
+    vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) =>
+      Promise.resolve(args.where.tokenHash === hashToken(READ_PAT)
+        ? { id: "pat-read", userId: ALICE_ID, scopes: "repo:read", expiresAt: null }
+        : null)) as never);
+    vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: `Bearer ${READ_PAT}` },
+      payload: { state: "approved", body: "LGTM" },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error).toContain("repo:write");
+    expect(vi.mocked(prisma.pullRequestReview.create)).not.toHaveBeenCalled();
+
+    // The unscoped session token still submits the review.
+    const ok = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { state: "approved", body: "LGTM" },
+    });
+    expect(ok.statusCode).toBe(201);
   });
 });
 
