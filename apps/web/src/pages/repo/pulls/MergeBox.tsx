@@ -412,14 +412,19 @@ function ProtectionPanel({ protection }: { protection: PullRequest["protection"]
       </div>
       <ul className="space-y-1">
         {protection.rules.map((r) => (
-          <li key={r.key} className="flex items-center gap-2 text-fh-sm">
-            {r.satisfied ? (
-              <CheckCircleIcon size={14} className="shrink-0 text-fh-success-fg" />
-            ) : (
-              <AlertIcon size={14} className="shrink-0 text-fh-danger-fg" />
+          <li key={r.key} className="flex flex-col gap-0.5 text-fh-sm">
+            <div className="flex items-center gap-2">
+              {r.satisfied ? (
+                <CheckCircleIcon size={14} className="shrink-0 text-fh-success-fg" />
+              ) : (
+                <AlertIcon size={14} className="shrink-0 text-fh-danger-fg" />
+              )}
+              <span className={cx(r.satisfied ? "text-fh-fg-muted" : "text-fh-fg font-medium")}>{r.label}</span>
+              <span className="text-fh-xs text-fh-fg-subtle">· {r.detail}</span>
+            </div>
+            {r.note && (
+              <p className="ml-[22px] text-fh-xs text-fh-warning-fg">{r.note}</p>
             )}
-            <span className={cx(r.satisfied ? "text-fh-fg-muted" : "text-fh-fg font-medium")}>{r.label}</span>
-            <span className="text-fh-xs text-fh-fg-subtle">· {r.detail}</span>
           </li>
         ))}
       </ul>

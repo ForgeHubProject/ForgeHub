@@ -325,6 +325,12 @@ export type ProtectionRuleState = {
   label: string;
   satisfied: boolean;
   detail: string;
+  /**
+   * Informational caveat on a satisfied rule (e.g. green-checks passing
+   * vacuously because no workflow has reported yet). Rendered as a muted info
+   * line, never a blocker.
+   */
+  note?: string;
 };
 
 /** Server-computed branch-protection status surfaced on the merge box. */
