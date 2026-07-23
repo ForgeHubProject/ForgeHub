@@ -5,6 +5,7 @@ import type {
   PublicProfile, PullRequest, RefCompareResult,
   Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
   Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent,
+  CheckSummary, WorkflowRun,
 } from "./types";
 
 /**
@@ -1721,4 +1722,74 @@ export async function codeSearchRepo(
   if (opts.caseSensitive) qs.set("case", "sensitive");
   if (opts.limit) qs.set("limit", String(opts.limit));
   return req(`/repos/${handle}/${repoName}/code-search?${qs}`, { token: token ?? undefined });
+}
+
+// ─── Actions-style CI (issue #86) ────────────────────────────────────────────────
+
+/**
+ * Aggregate check counts for a commit. Throws ApiError(404) when the commit has
+ * no runs — callers treat that as "no checks" (see isFormatNotSupported pattern).
+ */
+export async function getCheckSummary(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  sha: string,
+): Promise<CheckSummary> {
+  return req(`/repos/${handle}/${repoName}/commits/${sha}/check-summary`, { token: token ?? undefined });
+}
+
+/** Batch per-sha check summaries for the commit list (only shas with runs appear). */
+export async function getCommitStatuses(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  shas: string[],
+): Promise<{ statuses: Record<string, CheckSummary> }> {
+  if (shas.length === 0) return { statuses: {} };
+  const qs = new URLSearchParams({ shas: shas.join(",") });
+  return req(`/repos/${handle}/${repoName}/commit-statuses?${qs}`, { token: token ?? undefined });
+}
+
+/** List workflow runs for a repo, optionally scoped to one sha or PR. */
+export async function listWorkflowRuns(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  opts: { sha?: string; prId?: string } = {},
+): Promise<{ runs: WorkflowRun[] }> {
+  const qs = new URLSearchParams();
+  if (opts.sha) qs.set("sha", opts.sha);
+  if (opts.prId) qs.set("prId", opts.prId);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return req(`/repos/${handle}/${repoName}/actions/runs${suffix}`, { token: token ?? undefined });
+}
+
+/** One workflow run with its check runs. */
+export async function getWorkflowRun(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  id: string,
+): Promise<WorkflowRun> {
+  return req(`/repos/${handle}/${repoName}/actions/runs/${id}`, { token: token ?? undefined });
+}
+
+/** Fetch a job's plain-text log. */
+export async function getCheckLog(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  runId: string,
+  checkId: string,
+): Promise<string> {
+  const res = await fetch(
+    `${BASE}/repos/${handle}/${repoName}/actions/runs/${runId}/checks/${checkId}/log`,
+    { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.text();
 }

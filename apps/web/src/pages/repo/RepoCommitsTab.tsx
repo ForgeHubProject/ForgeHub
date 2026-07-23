@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getCommit, getCommitDiff, listCommits } from "../../api";
-import type { CommitDetail, CommitInfo, FileDiff } from "../../types";
+import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
+import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
+import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
 import { useSemanticExtensions } from "../../lib/fhrFormats";
 import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../ui";
@@ -313,7 +314,7 @@ function CommitDetailView({
 
 // ─── Commit row ─────────────────────────────────────────────────────────────────
 
-function CommitRow({ commit, base }: { commit: CommitInfo; base: string }) {
+function CommitRow({ commit, base, status }: { commit: CommitInfo; base: string; status?: CheckSummary }) {
   const { subject, body } = splitMessage(commit);
   const [open, setOpen] = useState(false);
 
@@ -356,7 +357,17 @@ function CommitRow({ commit, base }: { commit: CommitInfo; base: string }) {
           <RelativeTime date={commit.date} />
         </div>
       </div>
-      <div className="flex-shrink-0 pt-0.5">
+      <div className="flex flex-shrink-0 items-center gap-2 pt-0.5">
+        {status && (
+          <Link
+            to={`${base}/actions`}
+            className="inline-flex items-center no-underline"
+            title="View workflow runs"
+            aria-label="Commit checks"
+          >
+            <CheckStatusIcon state={checkState(status)} size={15} />
+          </Link>
+        )}
         <ShaChip sha={commit.sha} />
       </div>
     </div>
@@ -367,14 +378,22 @@ function CommitRow({ commit, base }: { commit: CommitInfo; base: string }) {
 
 function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & { base: string }) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const [statuses, setStatuses] = useState<Record<string, CheckSummary>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setStatuses({});
     listCommits(token, handle, repoName, defaultBranch, undefined, 50)
-      .then((d) => setCommits(d.commits))
+      .then((d) => {
+        setCommits(d.commits);
+        // Batch-fetch CI status for the visible shas (best-effort; empty when no CI).
+        getCommitStatuses(token, handle, repoName, d.commits.map((c) => c.sha))
+          .then((s) => setStatuses(s.statuses))
+          .catch(() => setStatuses({}));
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
   }, [token, handle, repoName, defaultBranch]);
@@ -450,7 +469,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
             </h3>
             <div className="ml-8 divide-y divide-fh-border rounded-md border border-fh-border bg-fh-surface">
               {dayCommits.map((commit) => (
-                <CommitRow key={commit.sha} commit={commit} base={base} />
+                <CommitRow key={commit.sha} commit={commit} base={base} status={statuses[commit.sha]} />
               ))}
             </div>
           </li>

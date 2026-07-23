@@ -112,6 +112,52 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 | `POST` | `/repos/:handle/:name/forks` | Fork a repo into the caller's namespace |
 | `GET` | `/repos/:handle/:name/forks` | List forks |
 
+### Actions-style CI (issue #86, v0)
+
+Repos can define workflows in `.forgehub/workflows/*.yml` that run on `push`
+and/or `pull_request`:
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    name: Type-check tests
+    steps:
+      - run: npm ci
+      - run: npm test
+```
+
+A `push` (branch tip moves) or a PR (open / head-sync) enqueues a **WorkflowRun**
+holding one **CheckRun** per job. A built-in in-process runner (one job at a time
+in v0) makes a fresh clone of the triggering commit, runs each step with `sh -c`
+in that checkout, streams interleaved stdout+stderr to a per-job log, stops on the
+first failing step, and times each job out after `CI_JOB_TIMEOUT` seconds. An
+invalid workflow file never crashes the push — it surfaces as a failed CheckRun
+whose log holds the parse error. Results appear as status dots on commits and in a
+PR's Checks section, and in the repo's **Actions** tab (run list + monospace log
+view). Logs live on disk under `<GIT_STORAGE_ROOT>-ci/`, never in the database.
+
+> ⚠️ **Security model — single-tenant, self-hosted only.** The runner executes
+> **repo-author-controlled shell** directly on the host as the API process user,
+> with no container/VM/user sandbox in v0. It is therefore **hard-off unless you
+> set `FORGEHUB_CI=1`**, and only meant for an instance where every pusher is
+> already trusted with shell access. When `FORGEHUB_CI` is unset, pushes record
+> nothing at all — no runs, no parsing. Multi-tenant isolation (containers,
+> ephemeral runners, egress control) is a later stage of the epic and must land
+> before untrusted authors can be allowed to run CI.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/commits/:sha/check-summary` | `{total, passing, failing, pending}` for a commit; 404 when it has no runs |
+| `GET` | `/repos/:handle/:name/commit-statuses?shas=a,b,c` | Batch per-sha summaries (only shas with runs) |
+| `GET` | `/repos/:handle/:name/actions/runs?sha=&prId=` | List workflow runs |
+| `GET` | `/repos/:handle/:name/actions/runs/:id` | Run detail with its check runs |
+| `GET` | `/repos/:handle/:name/actions/runs/:id/checks/:checkId/log` | Plain-text job log |
+
+**Env:** `FORGEHUB_CI=1` enables the runner (default: off). `CI_JOB_TIMEOUT`
+bounds each job in seconds (default: 600).
+
 ### Git over HTTPS
 
 Bare repositories are served over standard Git HTTPS transport so any Git client works out of the box.
