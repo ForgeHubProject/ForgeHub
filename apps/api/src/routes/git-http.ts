@@ -6,6 +6,7 @@ import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
+import { canRead, canWrite, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
 
 /**
  * The authenticated actor plus the scopes their credential carries. Session/JWT
@@ -87,27 +88,6 @@ async function resolveActorFromAuthHeader(
   return undefined;
 }
 
-type AccessRepo = {
-  id: string;
-  ownerId: string;
-  visibility: "PUBLIC" | "PRIVATE";
-  storageKey: string | null;
-  collaborators: Array<{ userId: string; role: "READER" | "WRITER" }>;
-};
-
-function canRead(repo: AccessRepo, actorId: string | undefined): boolean {
-  if (repo.visibility === "PUBLIC") return true;
-  if (!actorId) return false;
-  if (actorId === repo.ownerId) return true;
-  return repo.collaborators.some((c) => c.userId === actorId);
-}
-
-function canWrite(repo: AccessRepo, actorId: string | undefined): boolean {
-  if (!actorId) return false;
-  if (actorId === repo.ownerId) return true;
-  return repo.collaborators.some((c) => c.userId === actorId && c.role === "WRITER");
-}
-
 function pipeGitService(
   reply: FastifyReply,
   request: FastifyRequest,
@@ -183,15 +163,8 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const repo = await prisma.repo.findFirst({
-      where: {
-        name: repoName,
-        owner: { handle: handleRaw.toLowerCase() },
-      },
-      include: {
-        collaborators: {
-          select: { userId: true, role: true },
-        },
-      },
+      where: repoByOwningHandleWhere(handleRaw, repoName),
+      include: repoAccessInclude,
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
@@ -237,15 +210,8 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const repo = await prisma.repo.findFirst({
-      where: {
-        name: repoName,
-        owner: { handle: handleRaw.toLowerCase() },
-      },
-      include: {
-        collaborators: {
-          select: { userId: true, role: true },
-        },
-      },
+      where: repoByOwningHandleWhere(handleRaw, repoName),
+      include: repoAccessInclude,
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
@@ -269,15 +235,8 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const repo = await prisma.repo.findFirst({
-      where: {
-        name: repoName,
-        owner: { handle: handleRaw.toLowerCase() },
-      },
-      include: {
-        collaborators: {
-          select: { userId: true, role: true },
-        },
-      },
+      where: repoByOwningHandleWhere(handleRaw, repoName),
+      include: repoAccessInclude,
     });
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
