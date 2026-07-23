@@ -95,6 +95,7 @@ model Repo {
   crossReferences CrossReference[]
   savedFilters    SavedFilter[]
   webhooks        Webhook[]
+  workflowRuns    WorkflowRun[]
 
   projects        Project[]
 
@@ -654,6 +655,73 @@ model WebhookDelivery {
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
+}
+
+// ─── Actions-style CI: workflow runs + check runs (issue #86) ─────────────────────
+//
+// A repo-defined workflow (`.forgehub/workflows/*.yml`) triggered on a push or a
+// pull_request event runs as a WorkflowRun holding one CheckRun per job. Status /
+// conclusion are stored as lowercase strings (not enums) so they serialize
+// straight into the `/check-summary` and run-detail responses that the merge box,
+// commit status dots, and branch protection (#85) consume — matching the
+// lowercase convention already used by Webhook.event. Logs never live in the DB:
+// each CheckRun points at a file under `<GIT_STORAGE_ROOT>-ci/…` (see
+// git-storage.ts, mirroring the release-asset `<root>-assets` sibling).
+//
+//   status:     "queued" | "running" | "completed"
+//   conclusion: "success" | "failure" | null   (null until completed)
+//   trigger/event of a run: "push" | "pull_request"
+
+model WorkflowRun {
+  id           String    @id @default(cuid())
+  repoId       String
+  // The commit the run was triggered for (branch tip for push, PR head for
+  // pull_request). This is the SHA the /check-summary + status dots key on.
+  commitSha    String
+  // "push" | "pull_request".
+  trigger      String
+  // Ref that triggered the run: branch name (push) or PR head branch (pull_request).
+  ref          String?
+  // Set for pull_request runs so the PR Checks section can find its runs.
+  prId         String?
+  // Denormalized from the workflow file at trigger time.
+  workflowName String
+  workflowPath String
+  // "queued" | "running" | "completed".
+  status       String    @default("queued")
+  // "success" | "failure" | null (null until completed).
+  conclusion   String?
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  repo      Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  checkRuns CheckRun[]
+
+  @@index([repoId, commitSha])
+  @@index([repoId, createdAt])
+  @@index([prId])
+}
+
+model CheckRun {
+  id            String    @id @default(cuid())
+  workflowRunId String
+  // Stable job id from the workflow file (`jobs.<jobId>`), and its display name.
+  jobId         String
+  jobName       String
+  // "queued" | "running" | "completed".
+  status        String    @default("queued")
+  // "success" | "failure" | null (null until completed).
+  conclusion    String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  // Absolute path to the interleaved stdout+stderr log on disk (null until the
+  // job starts). Resolved via git-storage.ciLogPath.
+  logPath       String?
+
+  workflowRun WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@index([workflowRunId])
 }
 
 // ─── Projects: classic-style board + table over issues/PRs (issue #84) ───────────

@@ -11,6 +11,7 @@ import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/reso
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { computeReviewSummary } from "../review-summary.js";
+import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -150,6 +151,15 @@ export async function pullRoutes(app: FastifyInstance) {
       repoId: repo.id, event: "pull_request", action: "opened", senderId: userId,
       subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open" },
     });
+
+    // Actions-style CI (issue #86): enqueue a `pull_request` run at the new PR's
+    // head. No-op unless FORGEHUB_CI=1. Best-effort — never fails PR creation.
+    if (repo.storageKey) {
+      const storageKey = repo.storageKey;
+      void resolveBranchSha(storageKey, fromBranch).then((headSha) => {
+        if (headSha) return triggerWorkflowsForPrOpen(repo.id, storageKey, pr.id, fromBranch, headSha);
+      }).catch((err) => request.log.error({ err }, "PR-open CI trigger failed"));
+    }
 
     // Parse the description: cross-refs, closing keywords (closed on merge), mentions.
     await syncBodyReferences({
