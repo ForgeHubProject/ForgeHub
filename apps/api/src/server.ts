@@ -22,6 +22,7 @@ import { issueRoutes } from "./routes/issues.js";
 import { labelRoutes } from "./routes/labels.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { prCommentRoutes } from "./routes/pr-comments.js";
+import { projectRoutes } from "./routes/projects.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { releaseRoutes } from "./routes/releases.js";
 import { repoRoutes } from "./routes/repos.js";
@@ -102,6 +103,7 @@ export async function buildServer() {
   await app.register(searchRoutes);
   await app.register(topicRoutes);
   await app.register(compositionRoutes);
+  await app.register(projectRoutes);
   await app.register(gitHttpRoutes);
 
   return app;

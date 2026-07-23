@@ -46,6 +46,7 @@ model User {
   notifications    Notification[]
   personalAccessTokens PersonalAccessToken[]
   savedFilters     SavedFilter[]              @relation("SavedFilterOwner")
+  addedProjectItems ProjectItem[]             @relation("ProjectItemAddedBy")
 }
 
 model PersonalAccessToken {
@@ -85,6 +86,7 @@ model Repo {
   timelineEvents  TimelineEvent[]
   crossReferences CrossReference[]
   savedFilters    SavedFilter[]
+  projects        Project[]
 
   @@unique([ownerId, name])
 }
@@ -547,4 +549,70 @@ model PullRequestReviewComment {
   replies       PullRequestReviewComment[] @relation("ReviewCommentThread")
 
   @@index([pullRequestId, inReplyToId])
+}
+
+// ─── Projects: classic-style board + table over issues/PRs (issue #84) ───────────
+//
+// A repo-level project is a set of ordered status columns (seeded Todo /
+// In progress / Done) holding items that each point at an issue or PR by number.
+// The subject reference is polymorphic (subjectType + subjectNumber), mirroring
+// the spine's TimelineEvent pattern, so an item survives without a hard FK to the
+// mutable Issue/PullRequest row — the board hydrates by joining on
+// (repoId, number) at read time and renders a graceful placeholder if the subject
+// was deleted. Projects-v2-style custom fields are an explicit follow-up.
+
+model Project {
+  id          String   @id @default(cuid())
+  repoId      String
+  // Per-repo sequence number (like Issue/PullRequest), for clean URLs (/projects/1).
+  number      Int
+  name        String
+  description String?
+  // Closed = archived. Kept as a boolean (not a state enum) — a project is either
+  // active or closed; there is no third state in v0.
+  closed      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repo    Repo            @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  columns ProjectColumn[]
+  items   ProjectItem[]
+
+  @@unique([repoId, number])
+}
+
+model ProjectColumn {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  // Left-to-right order within the project. Renumbered densely (0,1,2,…) on write.
+  position  Int
+  createdAt DateTime @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   ProjectItem[]
+
+  @@index([projectId])
+}
+
+model ProjectItem {
+  id            String                  @id @default(cuid())
+  // Denormalized projectId (alongside columnId) so a subject can be uniquely
+  // constrained to at most one card per project across all its columns.
+  projectId     String
+  columnId      String
+  subjectType   ConversationSubjectType
+  subjectNumber Int
+  // Vertical sort key within the column. Renumbered densely (0,1,2,…) on every
+  // move — deterministic, so an optimistic client and the server always agree.
+  position      Float
+  addedById     String
+  createdAt     DateTime                @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  column  ProjectColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  addedBy User          @relation("ProjectItemAddedBy", fields: [addedById], references: [id])
+
+  @@unique([projectId, subjectType, subjectNumber])
+  @@index([columnId])
 }
