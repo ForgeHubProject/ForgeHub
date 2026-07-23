@@ -35,6 +35,7 @@ import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
 import { timelineRoutes } from "./routes/timeline.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { ciRoutes } from "./routes/ci.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 
@@ -141,6 +142,7 @@ export async function buildServer() {
   await app.register(topicRoutes);
   await app.register(compositionRoutes);
   await app.register(webhookRoutes);
+  await app.register(ciRoutes);
 
   await app.register(projectRoutes);
   await app.register(gitHttpRoutes);

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, listCommits, listTree } from "../../api";
+import { API_BASE, downloadArchive, getCheckSummary, listCommits, listTree } from "../../api";
+import { CheckStatusIcon, checkState } from "./ci/ciShared";
+import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import {
@@ -340,6 +342,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
+  const [headStatus, setHeadStatus] = useState<CheckSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -372,7 +375,15 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         });
         setEntries(sorted);
         setReadme(treeData.readme);
-        setLatestCommit(commitData.commits[0] ?? null);
+        const head = commitData.commits[0] ?? null;
+        setLatestCommit(head);
+        // CI status for the branch-HEAD commit (best-effort; 404 → no checks).
+        setHeadStatus(null);
+        if (head) {
+          getCheckSummary(token, handle, repoName, head.sha)
+            .then((s) => { if (!cancelled) setHeadStatus(s); })
+            .catch(() => { if (!cancelled) setHeadStatus(null); });
+        }
       })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load"); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -469,6 +480,11 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
               </span>
               <span className="font-semibold text-fh-fg truncate max-w-[160px]">{latestCommit.authorName}</span>
               <span className="text-fh-fg-muted truncate flex-1 min-w-0" title={latestCommit.subject}>{latestCommit.subject}</span>
+              {headStatus && (
+                <Link to={`${base}/actions`} className="inline-flex items-center shrink-0 no-underline" title="View workflow runs" aria-label="Commit checks">
+                  <CheckStatusIcon state={checkState(headStatus)} size={15} />
+                </Link>
+              )}
               <code className="font-mono text-fh-xs text-fh-fg-muted bg-fh-surface border border-fh-border px-1.5 py-0.5 rounded shrink-0 hidden sm:block">
                 {latestCommit.shortSha}
               </code>
