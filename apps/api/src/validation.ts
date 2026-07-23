@@ -44,6 +44,12 @@ export const createRepoBodySchema = z.object({
   description: z.string().max(2000).optional(),
   /** Defaults to `private` if omitted. */
   visibility: repoVisibilitySchema.optional().default("private"),
+  /**
+   * Target owning namespace (issue #114). Omitted / the caller's own handle ⇒ a
+   * personal repo; an org handle the caller is a member of ⇒ a repo owned by that
+   * org. Validated against the shared handle space in the route.
+   */
+  owner: handleSchema.optional(),
 });
 
 export const updateRepoBodySchema = z.object({
@@ -112,4 +118,61 @@ export const createDeployKeyBodySchema = z.object({
   publicKey: z.string().min(1).max(16384),
   /** Defaults to read-only (clone/pull only) when omitted. */
   readOnly: z.boolean().optional(),
+});
+
+// ─── Organizations & teams (issue #114) ──────────────────────────────────────
+
+/** Org role in the membership API. */
+export const orgRoleSchema = z.enum(["OWNER", "MEMBER"]);
+/** Team → repo grant role. */
+export const teamAccessRoleSchema = z.enum(["READER", "WRITER"]);
+
+/** POST /orgs — create an org. `handle` shares the user handle space. */
+export const createOrgBodySchema = z.object({
+  handle: handleSchema,
+  displayName: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).optional(),
+});
+
+/** PATCH /orgs/:handle — org profile settings (OWNER only). */
+export const updateOrgBodySchema = z.object({
+  displayName: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).nullable().optional(),
+});
+
+/** POST /orgs/:handle/members — add a member by handle at a role. */
+export const addOrgMemberBodySchema = z.object({
+  handle: handleSchema,
+  role: orgRoleSchema.optional().default("MEMBER"),
+});
+
+/** PATCH /orgs/:handle/members/:memberHandle — change a member's role. */
+export const updateOrgMemberBodySchema = z.object({
+  role: orgRoleSchema,
+});
+
+/** Team slug: same rules as a handle (URL-safe within its org). */
+export const teamSlugSchema = handleSchema;
+
+/** POST /orgs/:handle/teams — create a team. `slug` defaults from `name`. */
+export const createTeamBodySchema = z.object({
+  name: z.string().min(1).max(120),
+  slug: teamSlugSchema.optional(),
+});
+
+/** PATCH /orgs/:handle/teams/:slug — rename a team. */
+export const updateTeamBodySchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  slug: teamSlugSchema.optional(),
+});
+
+/** POST /orgs/:handle/teams/:slug/members — add a user to a team. */
+export const addTeamMemberBodySchema = z.object({
+  handle: handleSchema,
+});
+
+/** POST /orgs/:handle/teams/:slug/repos — grant a team access to an org repo. */
+export const grantTeamRepoBodySchema = z.object({
+  repo: repoNameSchema,
+  role: teamAccessRoleSchema.optional().default("READER"),
 });

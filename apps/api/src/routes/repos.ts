@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
+import { canRead, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
 import {
   addCollaboratorBodySchema,
   createRepoBodySchema,
@@ -71,7 +72,7 @@ type ForkRef = { handle: string; name: string };
  */
 type ForkLineage = { parent: ForkRef | null; source: ForkRef | null; forkCount: number };
 
-function repoResponse(
+export function repoResponse(
   r: {
     id: string;
     name: string;
@@ -82,10 +83,17 @@ function repoResponse(
     createdAt: Date;
     updatedAt: Date;
     owner?: { handle: string };
+    // The OWNING namespace when the repo belongs to an org (issue #114). When set,
+    // its handle — not the creator's — is the one shown in URLs / fullName. `orgId`
+    // is surfaced so the web can badge a repo as org-owned.
+    orgId?: string | null;
+    org?: { handle: string } | null;
     topics?: Array<{ topic: string }>;
   },
   lineage?: ForkLineage,
 ) {
+  // Owning handle: the org's when org-owned, otherwise the creating user's.
+  const ownerHandle = r.org?.handle ?? r.owner?.handle;
   return {
     id: r.id,
     name: r.name,
@@ -93,8 +101,9 @@ function repoResponse(
     visibility: toApiVisibility(r.visibility),
     storageKey: r.storageKey,
     ownerId: r.ownerId,
-    ownerHandle: r.owner?.handle,
-    fullName: r.owner ? `${r.owner.handle}/${r.name}` : undefined,
+    orgId: r.orgId ?? null,
+    ownerHandle,
+    fullName: ownerHandle ? `${ownerHandle}/${r.name}` : undefined,
     // Sorted topic slugs; empty when the relation wasn't included or none set.
     topics: (r.topics ?? []).map((t) => t.topic),
     // Fork lineage — populated only on the repo detail payload (issue #113).
@@ -111,6 +120,14 @@ function repoResponse(
 // Prisma include fragment for the sorted topic set — shared by every route that
 // returns a repoResponse so topic chips render consistently everywhere.
 const topicsInclude = { topics: { orderBy: { topic: "asc" }, select: { topic: true } } } as const;
+
+// Owner + owning-org handle + topics: the standard include for a repoResponse so
+// both personal and org-owned repos render their correct owning handle (issue #114).
+export const repoCardInclude = {
+  owner: { select: { handle: true } },
+  org: { select: { handle: true } },
+  ...topicsInclude,
+} as const;
 
 /**
  * Resolve a repo's fork lineage for the header (issue #113), scoped to what
@@ -174,7 +191,35 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!owner) {
         return reply.status(404).send({ error: "Owner account not found" });
       }
-      const storageKey = buildStorageKey(owner.handle, name);
+
+      // Resolve the target owning namespace (issue #114). No `owner`, or the
+      // caller's own handle, ⇒ a personal repo. Otherwise the handle must name an
+      // org the caller belongs to; v0 lets ANY org member (OWNER or MEMBER) create
+      // repos in the org. The storageKey — and thus the URL namespace — is keyed on
+      // the OWNING handle (org handle for org repos), which is also what guarantees
+      // per-namespace name uniqueness (storageKey is globally unique).
+      let orgId: string | null = null;
+      let namespaceHandle = owner.handle;
+      const targetHandle = parsed.data.owner?.toLowerCase();
+      if (targetHandle && targetHandle !== owner.handle) {
+        const org = await prisma.organization.findUnique({
+          where: { handle: targetHandle },
+          select: { id: true, handle: true },
+        });
+        if (!org) {
+          return reply.status(404).send({ error: "Organization not found" });
+        }
+        const membership = await prisma.orgMembership.findUnique({
+          where: { orgId_userId: { orgId: org.id, userId: ownerId } },
+        });
+        if (!membership) {
+          return reply.status(403).send({ error: "You are not a member of this organization" });
+        }
+        orgId = org.id;
+        namespaceHandle = org.handle;
+      }
+
+      const storageKey = buildStorageKey(namespaceHandle, name);
       let bareRepoCreated = false;
 
       try {
@@ -187,8 +232,9 @@ export async function repoRoutes(app: FastifyInstance) {
             visibility: fromApiVisibility(parsed.data.visibility),
             storageKey,
             ownerId,
+            orgId,
           },
-          include: { owner: { select: { handle: true } } },
+          include: { owner: { select: { handle: true } }, org: { select: { handle: true } } },
         });
         return reply.status(201).send(repoResponse(repo));
       } catch (e: unknown) {
@@ -207,10 +253,12 @@ export async function repoRoutes(app: FastifyInstance) {
     "/repos/mine",
     { preHandler: [app.authenticate] },
     async (request) => {
+      // "Your repositories" = personal repos (orgId: null). Org repos the caller
+      // created are reachable from the org's profile (issue #114).
       const repos = await prisma.repo.findMany({
-        where: { ownerId: request.user.sub },
+        where: { ownerId: request.user.sub, orgId: null },
         orderBy: { updatedAt: "desc" },
-        include: { owner: { select: { handle: true } }, ...topicsInclude },
+        include: repoCardInclude,
       });
       return { repos: repos.map((r) => repoResponse(r)) };
     },
@@ -223,7 +271,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const collabs = await prisma.repoCollaborator.findMany({
         where: { userId: request.user.sub },
         include: {
-          repo: { include: { owner: { select: { handle: true } }, ...topicsInclude } },
+          repo: { include: repoCardInclude },
         },
         orderBy: { repo: { updatedAt: "desc" } },
       });
@@ -236,19 +284,16 @@ export async function repoRoutes(app: FastifyInstance) {
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
       const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
-      const handle = handleParam;
       const name = nameParam.toLowerCase();
 
+      // Resolve under the owning handle (user OR org) and fetch with the full access
+      // include so org owners + team members can see private org repos (issue #114).
       const repo = await prisma.repo.findFirst({
-        where: { name, owner: { handle: handle.toLowerCase() } },
-        include: {
-          owner: { select: { handle: true } },
-          collaborators: { select: { userId: true } },
-          ...topicsInclude,
-        },
+        where: repoByOwningHandleWhere(handleParam, name),
+        include: { ...repoAccessInclude, owner: { select: { handle: true } }, ...topicsInclude },
       });
       const viewer = viewerId(request);
-      if (!repo || !canViewRepo(viewer, repo)) {
+      if (!repo || !canRead(repo, viewer)) {
         return reply.status(404).send({ error: "Repository not found" });
       }
       // Best-effort SPDX detection at the default branch (cached per head sha),
@@ -275,15 +320,18 @@ export async function repoRoutes(app: FastifyInstance) {
       const v = viewerId(request);
       const isOwner = v === owner.id;
 
+      // A user profile lists that user's PERSONAL repos only (orgId: null); repos
+      // they created inside an org live on the org's profile (issue #114).
       const repos = await prisma.repo.findMany({
         where: isOwner
-          ? { ownerId: owner.id }
+          ? { ownerId: owner.id, orgId: null }
           : {
               ownerId: owner.id,
+              orgId: null,
               OR: [{ visibility: "PUBLIC" }, { collaborators: { some: { userId: v } } }],
             },
         orderBy: { updatedAt: "desc" },
-        include: { owner: { select: { handle: true } }, ...topicsInclude },
+        include: repoCardInclude,
       });
       return { repos: repos.map((r) => repoResponse(r)) };
     },
@@ -303,7 +351,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const ownerId = request.user.sub;
 
       const existing = await prisma.repo.findFirst({
-        where: { ownerId, name },
+        where: { ownerId, name, orgId: null },
       });
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -324,7 +372,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (Object.keys(data).length === 0) {
         const repo = await prisma.repo.findFirstOrThrow({
           where: { id: existing.id },
-          include: { owner: { select: { handle: true } }, ...topicsInclude },
+          include: repoCardInclude,
         });
         return repoResponse(repo);
       }
@@ -332,7 +380,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const repo = await prisma.repo.update({
         where: { id: existing.id },
         data,
-        include: { owner: { select: { handle: true } }, ...topicsInclude },
+        include: repoCardInclude,
       });
       return repoResponse(repo);
     },
@@ -353,8 +401,8 @@ export async function repoRoutes(app: FastifyInstance) {
       const ownerId = request.user.sub;
 
       const existing = await prisma.repo.findFirst({
-        where: { ownerId, name: currentName },
-        include: { owner: { select: { handle: true } }, ...topicsInclude },
+        where: { ownerId, name: currentName, orgId: null },
+        include: repoCardInclude,
       });
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -384,7 +432,7 @@ export async function repoRoutes(app: FastifyInstance) {
             name: newName,
             storageKey: newStorageKey,
           },
-          include: { owner: { select: { handle: true } }, ...topicsInclude },
+          include: repoCardInclude,
         });
         return repoResponse(updated);
       } catch (e: unknown) {
@@ -407,7 +455,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const name = nameParam.toLowerCase();
 
       const repo = await prisma.repo.findFirst({
-        where: { ownerId: request.user.sub, name },
+        where: { ownerId: request.user.sub, name, orgId: null },
         include: {
           collaborators: {
             include: {
@@ -445,7 +493,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const name = nameParam.toLowerCase();
 
       const repo = await prisma.repo.findFirst({
-        where: { ownerId: request.user.sub, name },
+        where: { ownerId: request.user.sub, name, orgId: null },
       });
       if (!repo) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -498,7 +546,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const handle = handleParam.toLowerCase();
 
       const repo = await prisma.repo.findFirst({
-        where: { ownerId: request.user.sub, name },
+        where: { ownerId: request.user.sub, name, orgId: null },
       });
       if (!repo) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -532,7 +580,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const ownerId = request.user.sub;
 
       const existing = await prisma.repo.findFirst({
-        where: { ownerId, name },
+        where: { ownerId, name, orgId: null },
       });
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -548,43 +596,64 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
-  // Returns owner + collaborators — anyone who can be assigned to issues.
-  // Visible to all repo readers (no auth requirement beyond read access).
+  // Returns everyone assignable to issues — the repo creator plus direct
+  // collaborators, and (for org repos, issue #114) org OWNERs and members of teams
+  // granted the repo. Visible to any repo reader.
   app.get(
     "/repos/:handle/:name/members",
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
       const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
-      const handle = handleParam.toLowerCase();
       const name = nameParam.toLowerCase();
       const viewerId = (request as { user?: { sub: string } }).user?.sub;
 
+      const userSel = { select: { id: true, handle: true, displayName: true } } as const;
       const repo = await prisma.repo.findFirst({
-        where: { name, owner: { handle } },
+        where: repoByOwningHandleWhere(handleParam, name),
         include: {
-          owner: { select: { id: true, handle: true, displayName: true } },
-          collaborators: {
-            include: { user: { select: { id: true, handle: true, displayName: true } } },
+          owner: userSel,
+          collaborators: { include: { user: userSel } },
+          org: {
+            select: {
+              id: true,
+              handle: true,
+              memberships: { select: { userId: true, role: true, user: userSel } },
+            },
+          },
+          teamAccess: {
+            select: { role: true, team: { select: { memberships: { select: { userId: true, user: userSel } } } } },
           },
         },
       });
       if (!repo) return reply.status(404).send({ error: "Not found" });
-      if (repo.visibility === "PRIVATE") {
-        const isReader =
-          viewerId === repo.ownerId || repo.collaborators.some((c) => c.userId === viewerId);
-        if (!isReader) return reply.status(404).send({ error: "Not found" });
+      if (repo.visibility === "PRIVATE" && !canRead(repo, viewerId)) {
+        return reply.status(404).send({ error: "Not found" });
       }
 
-      const members = [
-        { id: repo.owner.id, handle: repo.owner.handle, displayName: repo.owner.displayName, role: "owner" as const },
-        ...repo.collaborators.map((c) => ({
-          id: c.user.id,
-          handle: c.user.handle,
-          displayName: c.user.displayName,
-          role: c.role === "WRITER" ? "writer" as const : "reader" as const,
-        })),
-      ];
-      return { members };
+      type Member = { id: string; handle: string; displayName: string | null; role: "owner" | "writer" | "reader" };
+      const byId = new Map<string, Member>();
+      const add = (m: Member) => {
+        // Highest role wins if a user appears via multiple grants (owner > writer > reader).
+        const rank = { owner: 2, writer: 1, reader: 0 } as const;
+        const prev = byId.get(m.id);
+        if (!prev || rank[m.role] > rank[prev.role]) byId.set(m.id, m);
+      };
+
+      add({ id: repo.owner.id, handle: repo.owner.handle, displayName: repo.owner.displayName, role: "owner" });
+      for (const c of repo.collaborators) {
+        add({ id: c.user.id, handle: c.user.handle, displayName: c.user.displayName, role: c.role === "WRITER" ? "writer" : "reader" });
+      }
+      if (repo.org) {
+        for (const m of repo.org.memberships) {
+          if (m.role === "OWNER") add({ id: m.user.id, handle: m.user.handle, displayName: m.user.displayName, role: "owner" });
+        }
+        for (const access of repo.teamAccess) {
+          for (const tm of access.team.memberships) {
+            add({ id: tm.user.id, handle: tm.user.handle, displayName: tm.user.displayName, role: access.role === "WRITER" ? "writer" : "reader" });
+          }
+        }
+      }
+      return { members: [...byId.values()] };
     },
   );
 
@@ -593,14 +662,16 @@ export async function repoRoutes(app: FastifyInstance) {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
-      const handle = handleParam.toLowerCase();
       const name = nameParam.toLowerCase();
 
       const repo = await prisma.repo.findFirst({
-        where: { name, owner: { handle } },
+        where: repoByOwningHandleWhere(handleParam, name),
+        include: { org: { select: { memberships: { select: { userId: true, role: true } } } } },
       });
 
-      if (!repo || repo.ownerId !== request.user.sub) {
+      // Repo creator or an OWNER of the owning org may inspect storage.
+      const isOrgOwner = repo?.org?.memberships.some((m) => m.userId === request.user.sub && m.role === "OWNER") ?? false;
+      if (!repo || (repo.ownerId !== request.user.sub && !isOrgOwner)) {
         return reply.status(404).send({ error: "Repository not found" });
       }
 
