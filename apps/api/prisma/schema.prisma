@@ -79,6 +79,7 @@ model Repo {
   protectedBranches ProtectedBranch[]
   issues   Issue[]
   labels   Label[]
+  milestones Milestone[]
   releases Release[]
   notifications Notification[]
   topics          RepoTopic[]
@@ -182,11 +183,15 @@ model PullRequest {
   /** SHA of the resulting merge/squash/rebase commit on the base branch. Null until merged. Needed to revert. */
   mergeCommitSha String?
   authorId    String
+  // Milestone association (issue #83). Nullable; SetNull on milestone delete so
+  // removing a milestone never deletes the PR. Writer-gated via the PATCH route.
+  milestoneId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   repo           Repo                       @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author         User                       @relation(fields: [authorId], references: [id])
+  milestone      Milestone?                 @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   comments       PullRequestComment[]
   reviews        PullRequestReview[]
   reviewComments PullRequestReviewComment[]
@@ -230,6 +235,39 @@ enum ReviewState {
 enum IssueState {
   OPEN
   CLOSED
+}
+
+enum MilestoneState {
+  OPEN
+  CLOSED
+}
+
+// ─── Milestones (issue #83) ──────────────────────────────────────────────────────
+//
+// The lightest-weight planning primitive: a titled deliverable with an optional
+// due date, grouping issues + PRs and surfacing a progress bar (closed vs total
+// associated items, computed in the route — no denormalized counters at this
+// scale). CRUD mirrors Label / routes/labels.ts, but keyed by a per-repo `number`
+// (like Issue / PullRequest) so URLs read `…/milestones/3`. Deleting a milestone
+// nulls out associations via `onDelete: SetNull` — it never deletes the items.
+model Milestone {
+  id          String         @id @default(cuid())
+  repoId      String
+  number      Int
+  title       String
+  description String?
+  dueOn       DateTime?
+  state       MilestoneState @default(OPEN)
+  closedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  repo         Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  issues       Issue[]
+  pullRequests PullRequest[]
+
+  @@unique([repoId, number])
+  @@unique([repoId, title])
 }
 
 model Label {
@@ -282,9 +320,15 @@ model Issue {
   lockedById String?
   lockReason String?
 
+  // ─── Milestone association (issue #83) ────────────────────────────────────────
+  // Nullable; SetNull on milestone delete so removing a milestone never deletes
+  // the issue. Writer-gated via the PATCH route + the /milestone quick action.
+  milestoneId String?
+
   repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
   assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  milestone Milestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   labels   IssueLabel[]
   comments IssueComment[]
 

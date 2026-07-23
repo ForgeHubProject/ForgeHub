@@ -25,7 +25,10 @@ export type TimelineEventKind =
   | "unpinned"
   | "locked"
   | "unlocked"
-  | "transferred";
+  | "transferred"
+  // Milestones (#83)
+  | "milestoned"
+  | "demilestoned";
 
 export type RecordEventParams = {
   repoId: string;
