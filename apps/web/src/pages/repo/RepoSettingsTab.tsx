@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteLabel, deleteWebhook,
-  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listLabels, listWebhooks, listWebhookDeliveries,
+  addCollaborator, addDeployKey, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteWebhook,
+  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listWebhooks, listWebhookDeliveries,
   putBranchProtection, redeliverWebhookDelivery, removeCollaborator, updateLabel, updateTopics, updateWebhook,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type {
-  BranchInfo, BranchProtectionRules, Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
+  BranchInfo, BranchProtectionRules, DeployKey, Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
 } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
-  RelativeTime, Select, Skeleton, Spinner, TextInput, cx, useToast,
+  RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
 } from "../../ui";
 
 type Props = {
@@ -36,6 +36,7 @@ const BOOKMARK = "M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v1
 const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
 const WEBHOOK = "M8.5 4.5a1.5 1.5 0 00-1.415 2A.75.75 0 015.67 7.003 3 3 0 118.5 9c-.257 0-.505-.032-.742-.093l-1.86 3.196A2.5 2.5 0 114.5 11.5c.086 0 .17.004.253.013l.867-1.49A.75.75 0 016.914 10.8l-.867 1.49c.257.27.453.6.567.966H10.5a.75.75 0 010 1.5H6.61a2.5 2.5 0 11-1.06-4.386l1.767-3.037A.75.75 0 017.9 6.976 1.5 1.5 0 108.5 4.5zm-4 7.5a1 1 0 100 2 1 1 0 000-2zm7.5-1.5a2.5 2.5 0 10-2.45 2.5.75.75 0 000-1.5A1 1 0 1112 10.5a.75.75 0 001.5 0z";
 const BRANCH = "M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z";
+const KEY = "M10.5 0a5.499 5.499 0 00-5.243 7.148L.436 11.97a1.489 1.489 0 00-.436 1.053v1.487C0 15.328.672 16 1.5 16h1.487c.395 0 .774-.157 1.054-.436l.31-.311a.75.75 0 00.22-.53v-.807h.807a.75.75 0 00.53-.22l.716-.716a.75.75 0 00.22-.53v-.807h.462l4.822-4.821A5.499 5.499 0 0010.5 0zm1.5 4.75a1 1 0 11-2 0 1 1 0 012 0z";
 
 /** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
 function normalizeTopic(raw: string): string {
@@ -1151,6 +1152,175 @@ function BranchesSection({ token, handle, repoName, isOwner }: {
   );
 }
 
+// ── Deploy keys (issue #116) ────────────────────────────────────────────────────
+
+function DeployKeyForm({ onSave, onCancel }: {
+  onSave: (input: { title: string; publicKey: string; readOnly: boolean }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [publicKey, setPublicKey] = useState("");
+  const [readOnly, setReadOnly] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !publicKey.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ title: title.trim(), publicKey: publicKey.trim(), readOnly });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add deploy key");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-4 mb-4">
+      <p className="text-fh-sm font-semibold text-fh-fg">Add a deploy key</p>
+      <Field label="Title" required hint="A memorable name for this key, e.g. the CI system that uses it.">
+        {(id) => <TextInput id={id} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. production deploy" autoComplete="off" />}
+      </Field>
+      <Field label="Key" required hint="Paste a public key line ('ssh-ed25519 …', 'ssh-rsa …').">
+        {(id) => (
+          <Textarea id={id} value={publicKey} onChange={(e) => setPublicKey(e.target.value)} rows={4}
+            className="font-mono text-fh-xs" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... deploy@ci" />
+        )}
+      </Field>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" className="mt-0.5 accent-fh-accent-emphasis" checked={!readOnly} onChange={(e) => setReadOnly(!e.target.checked)} />
+        <span className="min-w-0">
+          <span className="block text-fh-sm font-medium text-fh-fg">Allow write access</span>
+          <span className="block text-fh-xs text-fh-fg-muted">By default a deploy key can only clone/pull. Enable this to let it push.</span>
+        </span>
+      </label>
+      {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+      <div className="flex justify-end gap-2 pt-1 border-t border-fh-border">
+        <Button variant="default" onClick={onCancel} disabled={saving}>Cancel</Button>
+        <Button variant="primary" type="submit" loading={saving} disabled={!title.trim() || !publicKey.trim()}>
+          Add deploy key
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function DeployKeysSection({ token, handle, repoName, isOwner }: {
+  token: string; handle: string; repoName: string; isOwner: boolean;
+}) {
+  const [keys, setKeys] = useState<DeployKey[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNew, setShowNew] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<DeployKey | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (!isOwner) { setLoading(false); return; }
+    listDeployKeys(token, handle, repoName)
+      .then((d) => setKeys(d.keys))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, handle, repoName, isOwner]);
+
+  async function handleCreate(input: { title: string; publicKey: string; readOnly: boolean }) {
+    const key = await addDeployKey(token, handle, repoName, input);
+    setKeys((prev) => [key, ...prev]);
+    setShowNew(false);
+    toast("Deploy key added", { tone: "success" });
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await deleteDeployKey(token, handle, repoName, pendingDelete.id);
+      setKeys((prev) => prev.filter((k) => k.id !== pendingDelete.id));
+      toast("Deploy key deleted", { tone: "success" });
+      setPendingDelete(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete deploy key", { tone: "danger" });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-4 pb-3 mb-4 border-b border-fh-border">
+        <div>
+          <h2 className="text-fh-lg font-semibold text-fh-fg">Deploy keys</h2>
+          <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+            SSH keys that grant access to this single repository — ideal for CI and automation. Read-only unless you allow write.
+          </p>
+        </div>
+        {isOwner && !showNew && <Button variant="primary" onClick={() => setShowNew(true)}>Add deploy key</Button>}
+      </div>
+
+      {!isOwner ? (
+        <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          Only the repository owner can manage deploy keys.
+        </p>
+      ) : (
+        <>
+          {showNew && <DeployKeyForm onSave={handleCreate} onCancel={() => setShowNew(false)} />}
+
+          {loading ? (
+            <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+              {[0, 1].map((i) => (
+                <div key={i} className="flex items-center gap-3 px-4 py-3">
+                  <Skeleton variant="block" width={18} height={18} className="rounded" />
+                  <Skeleton className="h-4 flex-1" />
+                </div>
+              ))}
+            </div>
+          ) : keys.length === 0 && !showNew ? (
+            <div className="bg-fh-surface border border-fh-border rounded-md">
+              <EmptyState
+                icon={<Icon path={KEY} size={28} />}
+                title="No deploy keys yet"
+                description="Add a deploy key to give a CI system or automation SSH access to this repository."
+              />
+            </div>
+          ) : (
+            keys.length > 0 && (
+              <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+                {keys.map((k) => (
+                  <div key={k.id} className="flex items-start gap-3 px-4 py-3">
+                    <span className="shrink-0 mt-0.5 text-fh-fg-muted"><Icon path={KEY} size={18} /></span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-fh-sm font-semibold text-fh-fg flex items-center gap-2 flex-wrap">
+                        <span className="truncate">{k.title}</span>
+                        {k.readOnly ? <Badge tone="neutral">Read-only</Badge> : <Badge tone="accent">Read/write</Badge>}
+                      </p>
+                      <p className="text-fh-xs font-mono text-fh-fg-muted mt-1 break-all">{k.fingerprint}</p>
+                      <p className="text-fh-xs text-fh-fg-subtle mt-1">Added <RelativeTime date={k.createdAt} /></p>
+                    </div>
+                    <Button variant="danger" size="sm" onClick={() => setPendingDelete(k)}>Delete</Button>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete deploy key"
+          message={<>Delete the deploy key <span className="font-semibold">"{pendingDelete.title}"</span>? Anything using it will immediately lose access.</>}
+          confirmLabel="Delete deploy key"
+          loading={deleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
 function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
@@ -1218,7 +1388,7 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "topics" | "collaborators" | "branches" | "labels" | "webhooks" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "branches" | "labels" | "webhooks" | "deploy-keys" | "danger";
 
 export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
@@ -1234,6 +1404,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
     { key: "branches", label: "Branches", icon: BRANCH },
     { key: "labels", label: "Labels", icon: LABEL },
     { key: "webhooks", label: "Webhooks", icon: WEBHOOK },
+    { key: "deploy-keys", label: "Deploy keys", icon: KEY },
     { key: "danger", label: "Danger zone", icon: ALERT, danger: true },
   ];
 
@@ -1279,6 +1450,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
         {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
+        {section === "deploy-keys" && <DeployKeysSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}
       </div>
     </div>

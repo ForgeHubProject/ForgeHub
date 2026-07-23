@@ -96,3 +96,20 @@ export const updateWebhookBodySchema = z.object({
   events: z.array(webhookEventSchema).min(1).optional(),
   active: z.boolean().optional(),
 });
+
+// ─── SSH keys + deploy keys (issue #116) ──────────────────────────────────────
+
+/** POST /user/keys — a user's named SSH public key. */
+export const createSSHKeyBodySchema = z.object({
+  title: z.string().min(1).max(120),
+  /** Raw OpenSSH public-key line ("type base64 [comment]"). Parsed + fingerprinted server-side. */
+  publicKey: z.string().min(1).max(16384),
+});
+
+/** POST /repos/:handle/:name/keys — a repo deploy key (read-only unless granted write). */
+export const createDeployKeyBodySchema = z.object({
+  title: z.string().min(1).max(120),
+  publicKey: z.string().min(1).max(16384),
+  /** Defaults to read-only (clone/pull only) when omitted. */
+  readOnly: z.boolean().optional(),
+});
