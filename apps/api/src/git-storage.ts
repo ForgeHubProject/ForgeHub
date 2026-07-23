@@ -5,6 +5,7 @@ import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import path from "node:path";
+import { installPreReceiveHook } from "./git-hooks.js";
 
 const execFile = promisify(execFileCb);
 
@@ -124,6 +125,9 @@ export async function createBareRepo(storageKey: string): Promise<string> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await mkdir(path.dirname(fullPath), { recursive: true });
   await execFile("git", ["init", "--bare", "--initial-branch=main", fullPath]);
+  // Install the branch-protection pre-receive hook (issue #85). No rules file is
+  // written yet, so the hook is inert until a branch is protected.
+  await installPreReceiveHook(fullPath);
   return fullPath;
 }
 

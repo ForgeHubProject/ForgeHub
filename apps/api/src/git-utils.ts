@@ -10,6 +10,14 @@ import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
 
+/**
+ * Environment for server-side pushes to a bare repo (merge/squash/rebase/revert).
+ * These are the sanctioned merge path, so they carry `FORGEHUB_INTERNAL_PUSH=1`
+ * to bypass the branch-protection pre-receive hook (issue #85) — protection
+ * gates the merge at the endpoint, not the internal ref write.
+ */
+const INTERNAL_PUSH_ENV = { ...process.env, FORGEHUB_INTERNAL_PUSH: "1" };
+
 export async function git(storageKey: string, args: string[]): Promise<string> {
   const cwd = bareRepoPathFromKey(storageKey);
   const { stdout } = await execFile("git", args, { cwd, maxBuffer: MAX });
@@ -263,7 +271,7 @@ export async function performMerge(
 
     // Push result back to bare repo
     try {
-      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
     } catch {
       return { ok: false, conflicts: true };
     }
@@ -323,7 +331,7 @@ export async function performSquashMerge(
     }
 
     try {
-      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
     } catch {
       return { ok: false, conflicts: true };
     }
@@ -376,7 +384,7 @@ export async function performRebaseMerge(
     }
 
     try {
-      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
     } catch {
       return { ok: false, conflicts: true };
     }
@@ -425,7 +433,7 @@ export async function performRevert(
     }
 
     try {
-      await execFile("git", ["push", "origin", newBranch], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", ["push", "origin", newBranch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
     } catch {
       return { ok: false, conflicts: true };
     }
@@ -947,7 +955,7 @@ export async function performMergeWithResolvedFiles(
     }
 
     try {
-      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX });
+      await execFile("git", ["push", "origin", toBranch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
     } catch {
       return { ok: false, conflicts: true };
     }
