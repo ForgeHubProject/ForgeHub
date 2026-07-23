@@ -2,6 +2,22 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, countAheadBehind, createBranch, defaultBranch, deleteBranch, listBranches } from "../git-utils.js";
+import { syncProtectionConfig } from "../branch-protection.js";
+
+/** The enforced-rule shape returned by the protection GET/PUT endpoints. */
+type ProtectionRules = {
+  requirePullRequest: boolean;
+  requiredApprovals: number;
+  requireGreenChecks: boolean;
+  blockForcePush: boolean;
+};
+
+const DEFAULT_RULES: ProtectionRules = {
+  requirePullRequest: false,
+  requiredApprovals: 0,
+  requireGreenChecks: false,
+  blockForcePush: false,
+};
 
 export async function branchRoutes(app: FastifyInstance) {
   // A PAT must carry `repo:write` to mutate branches / protection; session/JWT
@@ -91,10 +107,21 @@ export async function branchRoutes(app: FastifyInstance) {
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
     const row = await prisma.protectedBranch.findFirst({ where: { repoId: repo.id, branch } });
-    return { branch, protected: !!row };
+    return {
+      branch,
+      protected: !!row,
+      rules: row
+        ? {
+            requirePullRequest: row.requirePullRequest,
+            requiredApprovals: row.requiredApprovals,
+            requireGreenChecks: row.requireGreenChecks,
+            blockForcePush: row.blockForcePush,
+          }
+        : DEFAULT_RULES,
+    };
   });
 
-  // PUT /repos/:handle/:name/branches/:branch/protection
+  // PUT /repos/:handle/:name/branches/:branch/protection — upsert the rule set
   app.put("/repos/:handle/:name/branches/:branch/protection", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, branch } = request.params as { handle: string; name: string; branch: string };
     const userId = request.user.sub;
@@ -102,12 +129,31 @@ export async function branchRoutes(app: FastifyInstance) {
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
     if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can protect branches" });
 
+    const body = (request.body ?? {}) as Partial<Record<keyof ProtectionRules, unknown>>;
+    const approvalsRaw = body.requiredApprovals;
+    if (approvalsRaw !== undefined && (typeof approvalsRaw !== "number" || !Number.isInteger(approvalsRaw) || approvalsRaw < 0)) {
+      return reply.status(400).send({ error: "requiredApprovals must be a non-negative integer" });
+    }
+    const rules: ProtectionRules = {
+      requirePullRequest: !!body.requirePullRequest,
+      requiredApprovals: typeof approvalsRaw === "number" ? approvalsRaw : 0,
+      requireGreenChecks: !!body.requireGreenChecks,
+      blockForcePush: !!body.blockForcePush,
+    };
+
     await prisma.protectedBranch.upsert({
       where: { repoId_branch: { repoId: repo.id, branch } },
-      create: { repoId: repo.id, branch },
-      update: {},
+      create: { repoId: repo.id, branch, ...rules },
+      update: rules,
     });
-    return { branch, protected: true };
+
+    // Refresh the pre-receive rules file so the git transport enforces immediately.
+    if (repo.storageKey) {
+      await syncProtectionConfig(repo.id, repo.storageKey).catch((err) =>
+        request.log.error({ err }, "syncProtectionConfig (protect)"),
+      );
+    }
+    return { branch, protected: true, rules };
   });
 
   // DELETE /repos/:handle/:name/branches/:branch/protection
@@ -119,6 +165,11 @@ export async function branchRoutes(app: FastifyInstance) {
     if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can unprotect branches" });
 
     await prisma.protectedBranch.deleteMany({ where: { repoId: repo.id, branch } });
+    if (repo.storageKey) {
+      await syncProtectionConfig(repo.id, repo.storageKey).catch((err) =>
+        request.log.error({ err }, "syncProtectionConfig (unprotect)"),
+      );
+    }
     return reply.status(204).send();
   });
 }

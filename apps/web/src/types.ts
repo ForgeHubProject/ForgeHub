@@ -304,6 +304,42 @@ export type Review = {
   updatedAt: string;
 };
 
+/** Enforced branch-protection rules (issue #85), as stored per branch. */
+export type BranchProtectionRules = {
+  requirePullRequest: boolean;
+  requiredApprovals: number;
+  requireGreenChecks: boolean;
+  blockForcePush: boolean;
+};
+
+/** Protection status for a branch (settings page). */
+export type BranchProtection = {
+  branch: string;
+  protected: boolean;
+  rules: BranchProtectionRules;
+};
+
+/** One active merge-gate protection rule + whether it's satisfied. */
+export type ProtectionRuleState = {
+  key: "approvals" | "checks";
+  label: string;
+  satisfied: boolean;
+  detail: string;
+};
+
+/** Server-computed branch-protection status surfaced on the merge box. */
+export type ProtectionStatus = {
+  branch: string;
+  requiredApprovals: number;
+  requireGreenChecks: boolean;
+  approvals: number;
+  changesRequested: number;
+  checks: { total: number; passing: number; failing: number; pending: number } | null;
+  rules: ProtectionRuleState[];
+  blocked: boolean;
+  reason: string | null;
+};
+
 export type PullRequest = {
   id: string;
   number: number;
@@ -315,6 +351,7 @@ export type PullRequest = {
   mergeable?: boolean | null;
   headSha?: string | null;
   reviewSummary?: ReviewSummary;
+  protection?: ProtectionStatus | null;
   mergedAt: string | null;
   mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;

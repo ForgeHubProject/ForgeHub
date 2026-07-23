@@ -39,6 +39,11 @@ vi.mock("../prisma.js", () => ({
     pullRequestReviewComment: {
       findMany: vi.fn().mockResolvedValue([]),
     },
+    // Branch protection (#85) — default to "not protected" so the merge/detail
+    // paths behave as before unless a test opts in.
+    protectedBranch: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 
