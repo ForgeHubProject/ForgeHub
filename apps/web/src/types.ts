@@ -344,6 +344,27 @@ export type Label = {
   description: string | null;
 };
 
+/** The compact milestone reference embedded in issue / PR payloads (#83). */
+export type MilestoneRef = {
+  id: string;
+  number: number;
+  title: string;
+  state: "open" | "closed";
+};
+
+/** A milestone with its computed progress (closed vs total attached items). */
+export type Milestone = MilestoneRef & {
+  description: string | null;
+  dueOn: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  openItems: number;
+  closedItems: number;
+  totalItems: number;
+  percent: number;
+};
+
 export type Issue = {
   id: string;
   number: number;
@@ -364,6 +385,8 @@ export type Issue = {
   pinnedAt?: string | null;
   locked?: boolean;
   lockReason?: string | null;
+  // Milestone association (#83) — optional so older list payloads still parse.
+  milestone?: MilestoneRef | null;
 };
 
 // ─── Projects: board + table over issues/PRs (issue #84) ─────────────────────

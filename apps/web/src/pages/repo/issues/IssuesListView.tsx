@@ -6,13 +6,13 @@ import {
 } from "../../../ui";
 import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "../../../ui/icons";
 import {
-  createSavedFilter, deleteSavedFilter, listIssues, listLabels, listRepoMembers,
+  createSavedFilter, deleteSavedFilter, listIssues, listLabels, listMilestones, listRepoMembers,
   listSavedFilters, RepoMember,
 } from "../../../api";
-import type { Issue, Label, SavedFilter } from "../../../types";
+import type { Issue, Label, Milestone, SavedFilter } from "../../../types";
 import { StateIcon } from "./parts";
 import { FilterTrigger, Popover } from "./pickers";
-import { BookmarkIcon, CommentIcon, IssueOpenedIcon, PersonIcon, PinIcon, SortIcon, TagIcon } from "./icons";
+import { BookmarkIcon, CommentIcon, IssueOpenedIcon, MilestoneIcon, PersonIcon, PinIcon, SortIcon, TagIcon } from "./icons";
 
 type Sort = "newest" | "oldest";
 
@@ -26,6 +26,7 @@ export function IssuesListView({ token, handle, repoName }: {
   const [all, setAll] = useState<Issue[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [members, setMembers] = useState<RepoMember[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,9 @@ export function IssuesListView({ token, handle, repoName }: {
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
+  // Milestone filter: a milestone number as a string, the sentinel "none"
+  // (issues with no milestone), or null (any).
+  const [milestoneFilter, setMilestoneFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("newest");
 
   // Saved views (#120): save dialog + one-time apply of a `?view=` deep link.
@@ -52,12 +56,14 @@ export function IssuesListView({ token, handle, repoName }: {
       listLabels(token, handle, repoName).catch(() => ({ labels: [] })),
       listRepoMembers(token, handle, repoName).catch(() => ({ members: [] })),
       listSavedFilters(token, handle, repoName).catch(() => ({ savedFilters: [] })),
+      listMilestones(token, handle, repoName, "all").catch(() => ({ milestones: [], counts: { open: 0, closed: 0 } })),
     ])
-      .then(([iss, lbl, mem, sf]) => {
+      .then(([iss, lbl, mem, sf, ms]) => {
         setAll(iss.issues);
         setLabels(lbl.labels);
         setMembers(mem.members);
         setSavedFilters(sf.savedFilters);
+        setMilestones(ms.milestones);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load issues"))
       .finally(() => setLoading(false));
@@ -71,6 +77,7 @@ export function IssuesListView({ token, handle, repoName }: {
     if (labelFilter) p.set("label", labelFilter);
     if (authorFilter) p.set("author", authorFilter);
     if (assigneeFilter) p.set("assignee", assigneeFilter);
+    if (milestoneFilter) p.set("milestone", milestoneFilter);
     if (sort !== "newest") p.set("sort", sort);
     return p.toString();
   }
@@ -83,6 +90,7 @@ export function IssuesListView({ token, handle, repoName }: {
     setLabelFilter(p.get("label"));
     setAuthorFilter(p.get("author"));
     setAssigneeFilter(p.get("assignee"));
+    setMilestoneFilter(p.get("milestone"));
     setSort(p.get("sort") === "oldest" ? "oldest" : "newest");
   }
 
@@ -129,7 +137,7 @@ export function IssuesListView({ token, handle, repoName }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedFilters, searchParams]);
 
-  const hasActiveFilter = !!(search.trim() || labelFilter || authorFilter || assigneeFilter);
+  const hasActiveFilter = !!(search.trim() || labelFilter || authorFilter || assigneeFilter || milestoneFilter);
   const activeView = searchParams.get("view");
 
   // Everything but the open/closed toggle is applied first, so the counts reflect
@@ -141,9 +149,13 @@ export function IssuesListView({ token, handle, repoName }: {
       if (labelFilter && !i.labels.some((l) => l.name === labelFilter)) return false;
       if (authorFilter && i.author !== authorFilter) return false;
       if (assigneeFilter && i.assignee !== assigneeFilter) return false;
+      if (milestoneFilter) {
+        if (milestoneFilter === "none") { if (i.milestone) return false; }
+        else if (String(i.milestone?.number ?? "") !== milestoneFilter) return false;
+      }
       return true;
     });
-  }, [all, search, labelFilter, authorFilter, assigneeFilter]);
+  }, [all, search, labelFilter, authorFilter, assigneeFilter, milestoneFilter]);
 
   const openCount = matched.filter((i) => i.state === "open").length;
   const closedCount = matched.filter((i) => i.state === "closed").length;
@@ -169,8 +181,12 @@ export function IssuesListView({ token, handle, repoName }: {
   );
 
   function clearFilters() {
-    setSearch(""); setLabelFilter(null); setAuthorFilter(null); setAssigneeFilter(null);
+    setSearch(""); setLabelFilter(null); setAuthorFilter(null); setAssigneeFilter(null); setMilestoneFilter(null);
   }
+
+  const activeMilestone = milestoneFilter
+    ? (milestoneFilter === "none" ? "No milestone" : milestones.find((m) => String(m.number) === milestoneFilter)?.title)
+    : undefined;
 
   const toggle = (
     <div className="flex items-center gap-4">
@@ -263,6 +279,32 @@ export function IssuesListView({ token, handle, repoName }: {
 
       <DropdownMenu
         align="end"
+        trigger={<FilterTrigger label={activeMilestone ?? "Milestone"} active={!!milestoneFilter} icon={<MilestoneIcon size={14} />} />}
+      >
+        <DropdownLabel>Filter by milestone</DropdownLabel>
+        <DropdownItem onSelect={() => setMilestoneFilter(null)} trailing={!milestoneFilter ? <CheckIcon size={14} /> : undefined}>
+          All milestones
+        </DropdownItem>
+        <DropdownItem onSelect={() => setMilestoneFilter("none")} trailing={milestoneFilter === "none" ? <CheckIcon size={14} /> : undefined}>
+          No milestone
+        </DropdownItem>
+        {milestones.length === 0 && (
+          <div className="px-3 py-1.5 text-fh-sm text-fh-fg-muted">No milestones yet</div>
+        )}
+        {milestones.map((m) => (
+          <DropdownItem
+            key={m.id}
+            onSelect={() => setMilestoneFilter(String(m.number))}
+            leadingIcon={<MilestoneIcon size={14} />}
+            trailing={milestoneFilter === String(m.number) ? <CheckIcon size={14} /> : undefined}
+          >
+            {m.title}
+          </DropdownItem>
+        ))}
+      </DropdownMenu>
+
+      <DropdownMenu
+        align="end"
         trigger={<FilterTrigger label="Sort" active={sort !== "newest"} icon={<SortIcon size={14} />} />}
       >
         <DropdownLabel>Sort by</DropdownLabel>
@@ -347,6 +389,13 @@ export function IssuesListView({ token, handle, repoName }: {
             aria-label="Search issues"
           />
         </div>
+        <Button
+          variant="default"
+          leadingIcon={<MilestoneIcon size={16} />}
+          onClick={() => navigate(`${base}/issues/milestones`)}
+        >
+          Milestones
+        </Button>
         <Button variant="primary" onClick={() => navigate(`${base}/issues/new`)}>New issue</Button>
       </div>
 
