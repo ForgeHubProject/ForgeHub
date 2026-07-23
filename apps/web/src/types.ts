@@ -92,6 +92,8 @@ export type Repo = {
   visibility: "public" | "private";
   ownerHandle: string;
   fullName: string;
+  /** Set when the repo is owned by an org namespace (issue #114); null for personal. */
+  orgId?: string | null;
   /** Lowercase-kebab discovery topics (may be absent on older list payloads). */
   topics?: string[];
   /** Detected license — present only on the repo detail payload; null when none. */
@@ -808,4 +810,57 @@ export type WorkflowRun = {
   rerunOfId: string | null;
   summary: CheckSummary;
   checkRuns: CheckRun[];
+};
+
+// ─── Organizations & teams (issue #114) ──────────────────────────────────────
+
+/** Caller's role in an org, or null when they aren't a member. */
+export type OrgRole = "OWNER" | "MEMBER";
+
+/** An organization summary as returned by the org endpoints. */
+export type Organization = {
+  id: string;
+  handle: string;
+  displayName: string;
+  description: string | null;
+  createdAt: string;
+  /** The requesting user's role, or null for non-members. */
+  viewerRole: OrgRole | null;
+  memberCount: number;
+  teamCount: number;
+};
+
+/** A member row in an org's roster. */
+export type OrgMember = {
+  id: string;
+  handle: string;
+  displayName: string | null;
+  role: OrgRole;
+  joinedAt: string;
+};
+
+/** A team's repo grant (READER = read, WRITER = read + write). */
+export type TeamRepoGrant = {
+  repoId: string;
+  name: string;
+  role: "READER" | "WRITER";
+};
+
+/** A team with its members and repo grants. */
+export type Team = {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  members: Array<{ id: string; handle: string; displayName: string | null }>;
+  repos: TeamRepoGrant[];
+};
+
+/** GET /orgs/:handle — the org profile payload. */
+export type OrgProfile = {
+  org: Organization;
+  /** Member roster; empty for non-members. */
+  members: OrgMember[];
+  /** Repos in the org the caller can see. */
+  repos: Repo[];
 };
