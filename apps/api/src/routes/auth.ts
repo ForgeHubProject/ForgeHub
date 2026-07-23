@@ -46,6 +46,14 @@ export async function authRoutes(app: FastifyInstance) {
     const handle = parsed.data.handle.toLowerCase();
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
 
+    // Users and orgs share one handle space (issue #114): reject a handle already
+    // claimed by an org. The reverse (org-create vs existing user) is enforced in
+    // the orgs route; user↔user collisions are caught by the unique index below.
+    const orgClash = await prisma.organization.findUnique({ where: { handle } });
+    if (orgClash) {
+      return reply.status(409).send({ error: "Email or handle already taken" });
+    }
+
     try {
       const user = await prisma.user.create({
         data: { email, handle, passwordHash, displayName: parsed.data.displayName?.trim() || null },

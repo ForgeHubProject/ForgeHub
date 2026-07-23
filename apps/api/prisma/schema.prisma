@@ -50,6 +50,8 @@ model User {
   designs          Design[]                   @relation("DesignCreator")
   designVersions   DesignVersion[]            @relation("DesignVersionUploader")
   sshKeys          SSHKey[]
+  orgMemberships   OrgMembership[]
+  teamMemberships  TeamMembership[]
 }
 
 model PersonalAccessToken {
@@ -110,7 +112,24 @@ model Repo {
   forkedFrom      Repo?              @relation("RepoForks", fields: [forkedFromId], references: [id], onDelete: SetNull)
   forks           Repo[]             @relation("RepoForks")
 
-  @@unique([ownerId, name])
+  // ─── Owning namespace (issue #114) ────────────────────────────────────────────
+  // `ownerId` stays the CREATING user (non-null) so every existing `owner: { … }`
+  // join keeps working untouched. `orgId` — when set — is the ORG namespace that
+  // owns the repo: its handle appears in URLs / fullName and gates access via org
+  // owners + team grants. Invariant: a repo is EITHER personal (orgId null) OR
+  // org-owned (orgId set); the two are mutually exclusive semantically.
+  orgId      String?
+  org        Organization?      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  teamAccess TeamRepoAccess[]
+
+  // Personal-repo name uniqueness is guaranteed by the globally-unique `storageKey`
+  // (`<namespaceHandle>/<name>.git`, built from the OWNING handle). We drop the old
+  // `@@unique([ownerId, name])` because org repos keep `ownerId` = creator, so one
+  // user legitimately owns same-named repos across different orgs. Org repos are
+  // unique within their org via `@@unique([orgId, name])` (NULL orgId rows — every
+  // personal repo — are treated as distinct by SQLite, so this never constrains
+  // personal repos).
+  @@unique([orgId, name])
 }
 
 // Repo discovery tags (GitHub-style topics). Lowercase-kebab, deduped per repo.
@@ -906,5 +925,100 @@ model DeployKey {
 
   repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
 
+  @@index([repoId])
+}
+
+// ─── Organizations & teams (issue #114) ──────────────────────────────────────────
+//
+// Organizations are SHARED OWNING NAMESPACES that live in the SAME handle space as
+// User: an org handle and a user handle can never collide (enforced at both
+// org-create and user-register, and resolved by src/owner-resolve.ts). A repo's
+// owning namespace is either a user (personal) or an org (Repo.orgId), and the
+// `:handle/:name` routes resolve a handle to whichever kind owns that repo.
+//
+// Access resolution (src/repo-access.ts) extends to: repo owner (creator) OR org
+// OWNER OR a team with access to the repo (READER→read, WRITER→read+write), on top
+// of the existing per-repo RepoCollaborator grants. PRIVATE org repos are readable
+// only by org members who actually have access (org owners + team members whose
+// team is granted the repo + direct collaborators) — a bare org MEMBER gets no
+// implicit read.
+//
+// v0 non-goals (see issue #114): nested teams, org billing/SSO, org-level webhooks.
+
+model Organization {
+  id          String   @id @default(cuid())
+  handle      String   @unique
+  displayName String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships OrgMembership[]
+  teams       Team[]
+  repos       Repo[]
+}
+
+// A user's role within an org. `role` is a plain string ("OWNER" | "MEMBER")
+// mirroring the repo's existing string-encoded-enum convention (Webhook.event,
+// WorkflowRun.status). OWNERs manage the org (settings, members, teams, grants)
+// and get owner-equivalent access to every org repo; MEMBERs can create repos in
+// the org but otherwise see only repos a team grants them (or public ones).
+model OrgMembership {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  role      String   @default("MEMBER")
+  createdAt DateTime @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+}
+
+// A named group inside an org. `slug` is the URL-safe identifier (unique per org);
+// `name` is the display label. Teams hold members and grant repo access as a unit.
+model Team {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  slug      String
+  createdAt DateTime @default(now())
+
+  org         Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberships TeamMembership[]
+  repoAccess  TeamRepoAccess[]
+
+  @@unique([orgId, slug])
+}
+
+model TeamMembership {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+// A grant of a team → a repo at a role ("READER" | "WRITER", string-encoded).
+// READER grants read; WRITER grants read+write. Only org OWNERs manage grants, and
+// a team may only be granted repos owned by its own org (enforced in the route).
+model TeamRepoAccess {
+  id        String   @id @default(cuid())
+  teamId    String
+  repoId    String
+  role      String   @default("READER")
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, repoId])
   @@index([repoId])
 }
