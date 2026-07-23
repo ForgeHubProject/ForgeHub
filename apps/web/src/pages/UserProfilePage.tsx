@@ -1,9 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getPublicProfile, getUserRepos, updateMyProfile } from "../api";
+import {
+  avatarSrc,
+  deleteAvatar,
+  getContributions,
+  getPublicProfile,
+  getReadme,
+  getUserRepos,
+  updateMyProfile,
+  uploadAvatar,
+} from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
-import type { PublicProfile, Repo, User } from "../types";
+import { ContributionHeatmap } from "../components/ContributionHeatmap";
+import { MarkdownRenderer } from "../components/MarkdownRenderer";
+import type { Contributions, PublicProfile, Repo, User } from "../types";
 import {
   Avatar,
   Button,
@@ -22,7 +33,12 @@ type Props = {
   token: string;
   user: User;
   onLogout: () => void;
+  /** Lets an avatar change on one's own profile update the header immediately. */
+  onUserChange?: (u: User) => void;
 };
+
+/** Accepted avatar image types (mirrors the API's magic-byte validation). */
+const AVATAR_ACCEPT = "image/png,image/jpeg,image/webp";
 
 const EDIT_FORM_ID = "edit-profile-form";
 
@@ -155,7 +171,7 @@ function ProfileSkeleton() {
   );
 }
 
-export function UserProfilePage({ token, user, onLogout }: Props) {
+export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) {
   const { handle } = useParams<{ handle: string }>();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -163,6 +179,11 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
+  const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
+  const [contrib, setContrib] = useState<Contributions | null>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   const isOwnProfile = user.handle === handle;
 
@@ -171,6 +192,8 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
     setLoading(true);
     setError(null);
     setFilter("");
+    setReadme(null);
+    setContrib(null);
     Promise.all([getPublicProfile(token, handle), getUserRepos(token, handle)])
       .then(([prof, repoData]) => {
         setProfile(prof);
@@ -179,6 +202,64 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
       .catch((e) => setError(e instanceof Error ? e.message : "User not found"))
       .finally(() => setLoading(false));
   }, [token, handle]);
+
+  // Profile README = the README of the repo named exactly the handle (e.g.
+  // alice/alice), reusing the repo README endpoint (which already enforces
+  // visibility). Absent/unreadable ⇒ simply nothing rendered.
+  useEffect(() => {
+    if (!handle) return;
+    let live = true;
+    getReadme(token, handle, handle)
+      .then((r) => live && setReadme({ path: r.path, content: r.content }))
+      .catch(() => live && setReadme(null));
+    return () => {
+      live = false;
+    };
+  }, [token, handle]);
+
+  // Contribution calendar (last ~12 months by default). Best-effort.
+  useEffect(() => {
+    if (!handle) return;
+    let live = true;
+    getContributions(token, handle)
+      .then((c) => live && setContrib(c))
+      .catch(() => live && setContrib(null));
+    return () => {
+      live = false;
+    };
+  }, [token, handle]);
+
+  async function handleAvatarFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file || !profile) return;
+    setAvatarBusy(true);
+    try {
+      const { avatarKey } = await uploadAvatar(token, file);
+      setProfile({ ...profile, avatarKey });
+      if (isOwnProfile) onUserChange?.({ ...user, avatarKey });
+      toast("Avatar updated", { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Upload failed", { tone: "danger" });
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function handleAvatarRemove() {
+    if (!profile) return;
+    setAvatarBusy(true);
+    try {
+      await deleteAvatar(token);
+      setProfile({ ...profile, avatarKey: null });
+      if (isOwnProfile) onUserChange?.({ ...user, avatarKey: null });
+      toast("Avatar removed", { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Remove failed", { tone: "danger" });
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
 
   const displayName = profile?.displayName || handle || "";
 
@@ -211,7 +292,37 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
           <div className="flex flex-col gap-8 sm:flex-row">
             {/* Left sidebar — identity */}
             <aside className="w-full flex-shrink-0 sm:w-[296px]">
-              <Avatar name={displayName} src={null} size={240} className="max-w-full" />
+              <Avatar
+                name={displayName}
+                src={avatarSrc(profile.handle, profile.avatarKey)}
+                size={240}
+                className="max-w-full"
+              />
+
+              {isOwnProfile && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept={AVATAR_ACCEPT}
+                    className="hidden"
+                    onChange={handleAvatarFile}
+                  />
+                  <Button
+                    size="sm"
+                    variant="default"
+                    loading={avatarBusy}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {profile.avatarKey ? "Change photo" : "Upload photo"}
+                  </Button>
+                  {profile.avatarKey && (
+                    <Button size="sm" variant="invisible" disabled={avatarBusy} onClick={handleAvatarRemove}>
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              )}
 
               <div className="mt-4">
                 {profile.displayName && (
@@ -259,8 +370,35 @@ export function UserProfilePage({ token, user, onLogout }: Props) {
               </div>
             </aside>
 
-            {/* Main — repositories */}
+            {/* Main — profile README, contributions, repositories */}
             <main className="min-w-0 flex-1">
+              {/* Profile README (from the handle/handle repo, when present + readable) */}
+              {readme && (
+                <div className="mb-6 overflow-hidden rounded-md border border-fh-border bg-fh-surface">
+                  <div className="flex items-center gap-2 border-b border-fh-border bg-fh-canvas px-4 py-2.5">
+                    <RepoIcon size={14} className="text-fh-fg-muted" />
+                    <span className="text-fh-sm font-semibold text-fh-fg">
+                      {profile.handle}/{profile.handle}
+                    </span>
+                  </div>
+                  <div className="px-6 py-6 md:px-8">
+                    <MarkdownRenderer content={readme.content} />
+                  </div>
+                </div>
+              )}
+
+              {/* Contribution calendar heatmap */}
+              {contrib && (
+                <section className="mb-6" aria-label="Contribution activity">
+                  <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">
+                    {contrib.total} {contrib.total === 1 ? "contribution" : "contributions"} in the last year
+                  </h2>
+                  <div className="rounded-md border border-fh-border bg-fh-surface p-4">
+                    <ContributionHeatmap data={contrib} />
+                  </div>
+                </section>
+              )}
+
               <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-fh-border pb-4">
                 <h2 className="flex items-center gap-2 text-fh-lg font-semibold text-fh-fg">
                   <RepoIcon className="text-fh-fg-muted" />

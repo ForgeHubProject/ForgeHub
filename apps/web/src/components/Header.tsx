@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { listNotifications } from "../api";
+import { avatarSrc, listNotifications } from "../api";
 import { ForgeLogo } from "./ForgeLogo";
 import type { User } from "../types";
 import { Avatar } from "../ui/Avatar";
@@ -113,7 +113,7 @@ export function Header({ user, onLogout, token }: Props) {
               aria-label="Open account menu"
               className="flex items-center gap-1 pl-1 pr-0.5 h-8 rounded-md hover:bg-white/10 transition-colors cursor-pointer bg-transparent border-none"
             >
-              <Avatar name={displayName} size={24} />
+              <Avatar name={displayName} src={avatarSrc(user.handle, user.avatarKey)} size={24} />
               <ChevronDownIcon size={12} className="text-fh-header-muted" />
             </button>
           }

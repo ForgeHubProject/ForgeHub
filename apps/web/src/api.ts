@@ -1,6 +1,6 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
-  CommitInfo, Composition, Constraint, DeployKey, Design, DesignCompareResult, DesignVersion,
+  CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult, DesignVersion,
   DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment, Label, Milestone,
   Notification, PRFileEntry, PatScope, PersonalAccessToken, ProjectColumn, ProjectDetail,
   ProjectItem, ProjectSubjectType, ProjectSummary, PublicProfile, PullRequest, RefCompareResult,
@@ -2028,4 +2028,55 @@ export function sshCloneUrl(opts: {
 }): string {
   const host = opts.sshHost || opts.hostname;
   return `ssh://git@${host}:${opts.sshPort}/${opts.handle}/${opts.repoName}.git`;
+}
+
+// ─── Profiles: avatar + contribution graph (issue #115) ────────────────────────
+
+/**
+ * Build the avatar image URL for a handle. When `avatarKey` is known it is
+ * appended as `?v=` so a re-upload busts the (immutable) browser cache. Returns
+ * null when the user has no uploaded avatar, so callers can fall back to the
+ * deterministic letter avatar.
+ */
+export function avatarSrc(handle: string, avatarKey?: string | null): string | null {
+  if (!avatarKey) return null;
+  return `${BASE}/users/${handle}/avatar?v=${encodeURIComponent(avatarKey)}`;
+}
+
+/** Upload (or replace) the current user's avatar. Returns the rotated token. */
+export async function uploadAvatar(
+  token: string,
+  file: File,
+): Promise<{ avatarKey: string; contentType: string; size: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/users/me/avatar`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ avatarKey: string; contentType: string; size: number }>;
+}
+
+/** Clear the current user's avatar. */
+export async function deleteAvatar(token: string): Promise<void> {
+  return req("/users/me/avatar", { method: "DELETE", token });
+}
+
+/** A user's contribution activity for the calendar heatmap (defaults to ~12 months). */
+export async function getContributions(
+  token: string | null,
+  handle: string,
+  from?: string,
+  to?: string,
+): Promise<Contributions> {
+  const qs = new URLSearchParams();
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  const q = qs.toString() ? `?${qs}` : "";
+  return req(`/users/${handle}/contributions${q}`, { token: token ?? undefined });
 }
