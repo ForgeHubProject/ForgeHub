@@ -13,6 +13,7 @@ import type {
 } from "../../../types";
 import { Avatar, Button, RelativeTime, Skeleton, TabItem, TabNav, Textarea } from "../../../ui";
 import { MergeBox } from "./MergeBox";
+import { PRChecks } from "./PRChecks";
 import { PRFileRow } from "./PRFileRow";
 import {
   ReviewCard,
@@ -502,6 +503,9 @@ export function PullDetail({
               onDiscard={onDiscardReview}
             />
           )}
+
+          {/* CI checks for the PR head (issue #86) — above the merge box */}
+          <PRChecks token={token} handle={handle} repoName={repoName} pr={pr} base={base} />
 
           {/* Merge box */}
           <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />

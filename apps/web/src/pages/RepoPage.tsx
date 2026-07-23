@@ -19,6 +19,7 @@ import { TopicChips } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
+import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { RepoPullsTab } from "./repo/RepoPullsTab";
@@ -32,12 +33,13 @@ type Props = {
   onLogout: () => void;
 };
 
-type Tab = "code" | "issues" | "pulls" | "projects" | "commits" | "releases" | "settings";
+type Tab = "code" | "issues" | "pulls" | "projects" | "actions" | "commits" | "releases" | "settings";
 
 function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("issues")) return "issues";
   if (subpath.startsWith("pulls")) return "pulls";
   if (subpath.startsWith("projects")) return "projects";
+  if (subpath.startsWith("actions")) return "actions";
   if (subpath.startsWith("commits")) return "commits";
   if (subpath.startsWith("releases")) return "releases";
   if (subpath.startsWith("settings")) return "settings";
@@ -65,6 +67,14 @@ function PRIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path fillRule="evenodd" d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
+    </svg>
+  );
+}
+
+function ActionsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <path fillRule="evenodd" d="M0 8a8 8 0 1116 0A8 8 0 010 8zm4.879-2.773 4.264 2.559a.25.25 0 010 .428l-4.264 2.559A.25.25 0 014.5 10.559V5.442a.25.25 0 01.379-.215z" />
     </svg>
   );
 }
@@ -300,6 +310,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             <TabItem to={`${base}/issues`} active={activeTab === "issues"} icon={<IssueIcon />} count={openIssueCount ?? undefined}>Issues</TabItem>
             <TabItem to={`${base}/pulls`} active={activeTab === "pulls"} icon={<PRIcon />} count={openPrCount ?? undefined}>Pull requests</TabItem>
             <TabItem to={`${base}/projects`} active={activeTab === "projects"} icon={<ProjectIcon />} count={openProjectCount ?? undefined}>Projects</TabItem>
+            <TabItem to={`${base}/actions`} active={activeTab === "actions"} icon={<ActionsIcon />}>Actions</TabItem>
             <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
             <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
             {user.handle === h && (
@@ -339,6 +350,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
             onCreateBranch={handleCreateBranch}
             splat={splat}
           />
+        )}
+        {activeTab === "actions" && (
+          <RepoActionsTab token={token} handle={h} repoName={r} splat={splat} />
         )}
         {activeTab === "commits" && (
           <RepoCommitsTab

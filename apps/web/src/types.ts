@@ -635,3 +635,43 @@ export type SearchEntityResult = {
     gitCommitSha: string | null;
   };
 };
+
+// ─── Actions-style CI: workflow runs + check runs (issue #86) ────────────────────
+
+export type CiStatus = "queued" | "running" | "completed";
+export type CiConclusion = "success" | "failure" | null;
+
+/** Aggregate check counts for a commit — the /check-summary contract shape. */
+export type CheckSummary = { total: number; passing: number; failing: number; pending: number };
+
+/** Single-glyph rollup used by the status dots. */
+export type CheckState = "success" | "failure" | "pending" | "none";
+
+export type CheckRun = {
+  id: string;
+  jobId: string;
+  jobName: string;
+  status: CiStatus;
+  conclusion: CiConclusion;
+  startedAt: string | null;
+  completedAt: string | null;
+  hasLog: boolean;
+};
+
+export type WorkflowRun = {
+  id: string;
+  commitSha: string;
+  shortSha: string;
+  trigger: "push" | "pull_request";
+  ref: string | null;
+  prId: string | null;
+  workflowName: string;
+  workflowPath: string;
+  status: CiStatus;
+  conclusion: CiConclusion;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  summary: CheckSummary;
+  checkRuns: CheckRun[];
+};

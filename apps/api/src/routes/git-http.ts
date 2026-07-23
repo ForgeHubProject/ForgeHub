@@ -8,6 +8,7 @@ import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { emitHeadPushedForPush } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
+import { triggerWorkflowsForPush, triggerWorkflowsForPrSync } from "../ci/trigger.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
 
 const execFile = promisify(execFileCb);
@@ -346,6 +347,17 @@ export async function gitHttpRoutes(app: FastifyInstance) {
           repoId, event: "push", senderId: actorId,
           subject: { ref: `refs/heads/${c.branch}`, branch: c.branch, before: c.oldSha, after: c.newSha },
         });
+      }
+
+      // Actions-style CI (issue #86). Enqueue `push` runs for changed branches and
+      // `pull_request` runs for any open PR whose head branch just moved. No-op
+      // unless FORGEHUB_CI=1. Best-effort — a CI failure never fails the push.
+      if (repo.storageKey) {
+        const storageKey = repo.storageKey;
+        void triggerWorkflowsForPush(repoId, storageKey, changed)
+          .catch((err: unknown) => app.log.error({ err }, "post-push CI (push) failed"));
+        void triggerWorkflowsForPrSync(repoId, storageKey, changed)
+          .catch((err: unknown) => app.log.error({ err }, "post-push CI (pull_request) failed"));
       }
     } catch { /* nothing to ingest */ }
 
