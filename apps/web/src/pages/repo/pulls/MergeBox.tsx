@@ -75,6 +75,12 @@ export function MergeBox({
   const changesRequested = summary?.changesRequested ?? 0;
   const needsOverride = changesRequested > 0;
 
+  // HARD branch-protection gate (issue #85): when the base branch is protected
+  // and a rule is unsatisfied, merging is blocked with no override affordance.
+  const protection = pr.protection ?? null;
+  const protectionBlocked = protection?.blocked ?? false;
+  const mergeBlocked = busy || protectionBlocked;
+
   function selectMethod(next: MergeMethod) {
     setMethod(next);
     writeMergeMethod(handle, repoName, next, browserStorage());
@@ -245,6 +251,9 @@ export function MergeBox({
       {/* Review status */}
       <ReviewStatusStrip summary={summary} />
 
+      {/* Branch protection rules (issue #85) */}
+      <ProtectionPanel protection={protection} />
+
       <div className="px-4 py-3">
         {error && (
           <p className="mb-3 text-fh-sm text-fh-danger-fg flex items-start gap-1.5">
@@ -265,7 +274,7 @@ export function MergeBox({
                   variant="default"
                   block
                   loading={resolving === "theirs"}
-                  disabled={busy}
+                  disabled={mergeBlocked}
                   onClick={() => doResolve("theirs")}
                 >
                   <span className="inline-flex items-center gap-1.5 min-w-0">
@@ -276,7 +285,7 @@ export function MergeBox({
                   variant="default"
                   block
                   loading={resolving === "ours"}
-                  disabled={busy}
+                  disabled={mergeBlocked}
                   onClick={() => doResolve("ours")}
                 >
                   <span className="inline-flex items-center gap-1.5 min-w-0">
@@ -303,7 +312,7 @@ export function MergeBox({
                 variant={needsOverride ? "danger" : "primary"}
                 leadingIcon={<GitMergeIcon size={15} />}
                 loading={merging}
-                disabled={busy}
+                disabled={mergeBlocked}
                 className="rounded-r-none"
                 onClick={() => requestMerge(method)}
               >
@@ -315,7 +324,7 @@ export function MergeBox({
                 trigger={
                   <Button
                     variant={needsOverride ? "danger" : "primary"}
-                    disabled={busy}
+                    disabled={mergeBlocked}
                     aria-label="Choose a merge method"
                     className="rounded-l-none border-l border-fh-on-emphasis/25 px-2"
                   >
@@ -362,7 +371,7 @@ export function MergeBox({
             pull request. Merging now overrides those requests.
           </>
         }
-        warning="A hard required-review policy (branch protection) isn't enforced yet — this override is intentional and soft (#85)."
+        warning="This override is soft — it only bypasses change requests. Branch protection rules (required approvals / checks), when set, are enforced separately and can't be overridden here."
         confirmLabel="Merge anyway"
         tone="danger"
         loading={merging}
@@ -370,6 +379,61 @@ export function MergeBox({
         onCancel={() => setConfirmMergeMethod(null)}
       />
     </div>
+  );
+}
+
+/**
+ * Branch-protection panel (issue #85). Lists each active merge-gate rule with a
+ * satisfied / unsatisfied mark; when a rule is unsatisfied the merge button is
+ * disabled (handled by the caller) and this panel spells out why. There is no
+ * override affordance — protection is a hard gate.
+ */
+function ProtectionPanel({ protection }: { protection: PullRequest["protection"] }) {
+  if (!protection || protection.rules.length === 0) return null;
+  const blocked = protection.blocked;
+
+  return (
+    <div
+      className={cx(
+        "px-4 py-2.5 border-b border-fh-border",
+        blocked ? "bg-fh-danger-muted/25" : "bg-fh-success-muted/20",
+      )}
+    >
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <ShieldIcon size={14} className={blocked ? "text-fh-danger-fg" : "text-fh-success-fg"} />
+        <span className={cx("text-fh-sm font-semibold", blocked ? "text-fh-danger-fg" : "text-fh-success-fg")}>
+          {blocked
+            ? `Protected branch — merge blocked`
+            : `Protected branch — all rules satisfied`}
+        </span>
+        <span className="text-fh-xs text-fh-fg-muted font-mono">{protection.branch}</span>
+      </div>
+      <ul className="space-y-1">
+        {protection.rules.map((r) => (
+          <li key={r.key} className="flex items-center gap-2 text-fh-sm">
+            {r.satisfied ? (
+              <CheckCircleIcon size={14} className="shrink-0 text-fh-success-fg" />
+            ) : (
+              <AlertIcon size={14} className="shrink-0 text-fh-danger-fg" />
+            )}
+            <span className={cx(r.satisfied ? "text-fh-fg-muted" : "text-fh-fg font-medium")}>{r.label}</span>
+            <span className="text-fh-xs text-fh-fg-subtle">· {r.detail}</span>
+          </li>
+        ))}
+      </ul>
+      {blocked && protection.reason && (
+        <p className="mt-1.5 text-fh-xs text-fh-danger-fg">{protection.reason}</p>
+      )}
+    </div>
+  );
+}
+
+/** Shield glyph for the protection panel (token-tinted, currentColor). */
+function ShieldIcon({ size = 14, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Zm.61 1.429a.25.25 0 0 0-.153 0l-5.25 1.68a.25.25 0 0 0-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.2.2 0 0 0 .154 0c2.245-.957 3.582-2.103 4.366-3.297C13.225 9.666 13.5 8.358 13.5 7V3.48a.25.25 0 0 0-.174-.237Z" />
+    </svg>
   );
 }
 
