@@ -44,18 +44,33 @@ function fromDbCollaboratorRole(role: CollaboratorRole): "reader" | "writer" {
   return role === "WRITER" ? "writer" : "reader";
 }
 
-function repoResponse(r: {
-  id: string;
-  name: string;
-  description: string | null;
-  visibility: RepoVisibility;
-  storageKey: string | null;
-  ownerId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  owner?: { handle: string };
-  topics?: Array<{ topic: string }>;
-}) {
+/** A repo reference in a fork chain: the owner handle + repo name to link to. */
+type ForkRef = { handle: string; name: string };
+
+/**
+ * Fork-lineage fields for the repo header (issue #113). `parent` is the direct
+ * upstream, `source` the root of the chain, and `forkCount` the number of direct
+ * forks — all already visibility-filtered by the caller (a private parent the
+ * viewer can't read is passed as null, never leaked). Defaults keep every
+ * non-detail payload stable: not a fork, no forks.
+ */
+type ForkLineage = { parent: ForkRef | null; source: ForkRef | null; forkCount: number };
+
+function repoResponse(
+  r: {
+    id: string;
+    name: string;
+    description: string | null;
+    visibility: RepoVisibility;
+    storageKey: string | null;
+    ownerId: string;
+    createdAt: Date;
+    updatedAt: Date;
+    owner?: { handle: string };
+    topics?: Array<{ topic: string }>;
+  },
+  lineage?: ForkLineage,
+) {
   return {
     id: r.id,
     name: r.name,
@@ -67,6 +82,10 @@ function repoResponse(r: {
     fullName: r.owner ? `${r.owner.handle}/${r.name}` : undefined,
     // Sorted topic slugs; empty when the relation wasn't included or none set.
     topics: (r.topics ?? []).map((t) => t.topic),
+    // Fork lineage — populated only on the repo detail payload (issue #113).
+    parent: lineage?.parent ?? null,
+    source: lineage?.source ?? null,
+    forkCount: lineage?.forkCount ?? 0,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
@@ -75,6 +94,49 @@ function repoResponse(r: {
 // Prisma include fragment for the sorted topic set — shared by every route that
 // returns a repoResponse so topic chips render consistently everywhere.
 const topicsInclude = { topics: { orderBy: { topic: "asc" }, select: { topic: true } } } as const;
+
+/**
+ * Resolve a repo's fork lineage for the header (issue #113), scoped to what
+ * `viewerId` may see. Walks up the `forkedFrom` chain, stopping at the first
+ * ancestor the viewer can't read so a private upstream's existence never leaks;
+ * `parent` is the immediate readable upstream and `source` the highest readable
+ * ancestor (the root of the chain). `forkCount` counts only direct forks the
+ * viewer is allowed to see.
+ */
+async function resolveForkLineage(
+  repo: { id: string; forkedFromId: string | null },
+  viewerId: string | undefined,
+): Promise<{ parent: { handle: string; name: string } | null; source: { handle: string; name: string } | null; forkCount: number }> {
+  const forkWhere = viewerId
+    ? {
+        forkedFromId: repo.id,
+        OR: [
+          { visibility: "PUBLIC" as const },
+          { ownerId: viewerId },
+          { collaborators: { some: { userId: viewerId } } },
+        ],
+      }
+    : { forkedFromId: repo.id, visibility: "PUBLIC" as const };
+  const forkCount = await prisma.repo.count({ where: forkWhere });
+
+  let parent: { handle: string; name: string } | null = null;
+  let source: { handle: string; name: string } | null = null;
+  const seen = new Set<string>([repo.id]);
+  let currentParentId = repo.forkedFromId;
+  while (currentParentId && !seen.has(currentParentId)) {
+    seen.add(currentParentId);
+    const anc = await prisma.repo.findUnique({
+      where: { id: currentParentId },
+      include: { owner: { select: { handle: true } }, collaborators: { select: { userId: true } } },
+    });
+    if (!anc || !canViewRepo(viewerId, anc)) break;
+    const ref = { handle: anc.owner.handle, name: anc.name };
+    if (!parent) parent = ref;
+    source = ref;
+    currentParentId = anc.forkedFromId;
+  }
+  return { parent, source, forkCount };
+}
 
 export async function repoRoutes(app: FastifyInstance) {
   app.post(
@@ -133,7 +195,7 @@ export async function repoRoutes(app: FastifyInstance) {
         orderBy: { updatedAt: "desc" },
         include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
-      return { repos: repos.map(repoResponse) };
+      return { repos: repos.map((r) => repoResponse(r)) };
     },
   );
 
@@ -168,12 +230,17 @@ export async function repoRoutes(app: FastifyInstance) {
           ...topicsInclude,
         },
       });
-      if (!repo || !canViewRepo(viewerId(request), repo)) {
+      const viewer = viewerId(request);
+      if (!repo || !canViewRepo(viewer, repo)) {
         return reply.status(404).send({ error: "Repository not found" });
       }
-      // Best-effort SPDX detection at the default branch (cached per head sha).
-      const license = await detectRepoLicense(repo.storageKey);
-      return { ...repoResponse(repo), license };
+      // Best-effort SPDX detection at the default branch (cached per head sha),
+      // plus visibility-scoped fork lineage for the header (issue #113).
+      const [license, lineage] = await Promise.all([
+        detectRepoLicense(repo.storageKey),
+        resolveForkLineage(repo, viewer),
+      ]);
+      return { ...repoResponse(repo, lineage), license };
     },
   );
 
@@ -201,7 +268,7 @@ export async function repoRoutes(app: FastifyInstance) {
         orderBy: { updatedAt: "desc" },
         include: { owner: { select: { handle: true } }, ...topicsInclude },
       });
-      return { repos: repos.map(repoResponse) };
+      return { repos: repos.map((r) => repoResponse(r)) };
     },
   );
 
