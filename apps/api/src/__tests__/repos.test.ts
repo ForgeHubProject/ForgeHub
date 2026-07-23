@@ -14,6 +14,10 @@ vi.mock("../prisma.js", () => ({
       findMany: vi.fn(),
       findFirst: vi.fn(),
       findFirstOrThrow: vi.fn(),
+      findUnique: vi.fn(),
+      // Fork lineage (issue #113): the repo-detail route counts direct forks and
+      // walks the `forkedFrom` chain. Default to "no forks, root repo".
+      count: vi.fn().mockResolvedValue(0),
       update: vi.fn(),
       delete: vi.fn(),
     },
