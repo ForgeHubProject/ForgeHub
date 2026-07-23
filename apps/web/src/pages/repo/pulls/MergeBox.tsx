@@ -241,6 +241,8 @@ export function MergeBox({
           <p className="mt-0.5 text-fh-sm text-fh-fg-muted">
             {hasConflict ? (
               <>Resolving picks one side of the conflicting changes, then merges.</>
+            ) : protectionBlocked ? (
+              <>Merging is blocked by branch protection — see the rules below.</>
             ) : (
               <>Merging is available.</>
             )}
