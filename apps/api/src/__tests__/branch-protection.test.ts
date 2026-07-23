@@ -18,6 +18,7 @@ vi.mock("../prisma.js", () => ({
       deleteMany: vi.fn(),
       findMany: vi.fn().mockResolvedValue([]),
     },
+    workflowRun: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -251,22 +252,17 @@ describe("branch protection rule CRUD", () => {
 describe("merge endpoint enforces branch protection (hard gate)", () => {
   let app: FastifyInstance;
   let ownerToken: string;
-  let checkResp: { status: number; body?: unknown };
 
   beforeAll(async () => {
     app = await createTestServer();
     ownerToken = await authHeader(app, OWNER_ID);
-    // Stand-in for the CI epic's check-summary endpoint (this branch doesn't own it).
-    app.get("/repos/:handle/:name/commits/:sha/check-summary", async (_req, reply) => {
-      if (checkResp.status !== 200) return reply.status(checkResp.status).send({ error: "none" });
-      return checkResp.body;
-    });
   });
   afterAll(async () => { await app.close(); });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    checkResp = { status: 404 };
+    // The real CI check-summary route serves the protection gate; no runs → 404.
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
     vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
     vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
     vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
@@ -319,16 +315,18 @@ describe("merge endpoint enforces branch protection (hard gate)", () => {
     expect(res.json().error).toMatch(/change request/i);
   });
 
-  it("requireGreenChecks does NOT block when the check-summary endpoint is absent (404)", async () => {
+  it("requireGreenChecks does NOT block when the sha has no runs (check-summary 404)", async () => {
     vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(rule({ requireGreenChecks: true }) as never);
-    checkResp = { status: 404 };
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
     const res = await merge();
     expect(res.statusCode).toBe(200);
   });
 
   it("requireGreenChecks blocks when a check is pending", async () => {
     vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(rule({ requireGreenChecks: true }) as never);
-    checkResp = { status: 200, body: { total: 2, passing: 1, failing: 0, pending: 1 } };
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([
+      { checkRuns: [{ status: "completed", conclusion: "success" }, { status: "running", conclusion: null }] },
+    ] as never);
     const res = await merge();
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toMatch(/status checks/i);
@@ -336,14 +334,18 @@ describe("merge endpoint enforces branch protection (hard gate)", () => {
 
   it("requireGreenChecks blocks when a check is failing", async () => {
     vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(rule({ requireGreenChecks: true }) as never);
-    checkResp = { status: 200, body: { total: 2, passing: 1, failing: 1, pending: 0 } };
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([
+      { checkRuns: [{ status: "completed", conclusion: "success" }, { status: "completed", conclusion: "failure" }] },
+    ] as never);
     const res = await merge();
     expect(res.statusCode).toBe(409);
   });
 
   it("requireGreenChecks allows when all checks pass", async () => {
     vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(rule({ requireGreenChecks: true }) as never);
-    checkResp = { status: 200, body: { total: 2, passing: 2, failing: 0, pending: 0 } };
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([
+      { checkRuns: [{ status: "completed", conclusion: "success" }, { status: "completed", conclusion: "success" }] },
+    ] as never);
     const res = await merge();
     expect(res.statusCode).toBe(200);
   });
