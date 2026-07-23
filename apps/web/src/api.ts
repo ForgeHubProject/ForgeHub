@@ -1,8 +1,8 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
-  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
+  Issue, IssueComment, Label, Notification, PatScope, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
   Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
-  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
+  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent,
 } from "./types";
 
 /**
@@ -1399,16 +1399,65 @@ export async function createToken(
   token: string,
   name: string,
   expiresInDays?: number,
+  scopes?: PatScope[],
 ): Promise<PersonalAccessToken & { token: string }> {
   return req("/auth/tokens", {
     method: "POST",
     token,
-    body: JSON.stringify({ name, expiresInDays }),
+    body: JSON.stringify({ name, expiresInDays, scopes }),
   });
 }
 
 export async function revokeToken(token: string, id: string): Promise<void> {
   return req(`/auth/tokens/${id}`, { method: "DELETE", token });
+}
+
+// ─── webhooks (issue #87) ───────────────────────────────────────────────────────
+
+export async function listWebhooks(token: string, handle: string, repoName: string): Promise<{ hooks: Webhook[] }> {
+  return req(`/repos/${handle}/${repoName}/hooks`, { token });
+}
+
+export async function createWebhook(
+  token: string,
+  handle: string,
+  repoName: string,
+  input: { url: string; secret: string; events?: WebhookEvent[]; active?: boolean },
+): Promise<Webhook> {
+  return req(`/repos/${handle}/${repoName}/hooks`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function updateWebhook(
+  token: string,
+  handle: string,
+  repoName: string,
+  id: string,
+  patch: { url?: string; secret?: string; events?: WebhookEvent[]; active?: boolean },
+): Promise<Webhook> {
+  return req(`/repos/${handle}/${repoName}/hooks/${id}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+export async function deleteWebhook(token: string, handle: string, repoName: string, id: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/hooks/${id}`, { method: "DELETE", token });
+}
+
+export async function listWebhookDeliveries(
+  token: string,
+  handle: string,
+  repoName: string,
+  id: string,
+): Promise<{ deliveries: WebhookDelivery[] }> {
+  return req(`/repos/${handle}/${repoName}/hooks/${id}/deliveries`, { token });
+}
+
+export async function redeliverWebhookDelivery(
+  token: string,
+  handle: string,
+  repoName: string,
+  hookId: string,
+  deliveryId: string,
+): Promise<WebhookDelivery> {
+  return req(`/repos/${handle}/${repoName}/hooks/${hookId}/deliveries/${deliveryId}/redeliver`, { method: "POST", token });
 }
 
 export type SearchType = "repos" | "issues" | "users" | "code" | "entities";

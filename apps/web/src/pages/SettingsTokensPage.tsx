@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createToken, listTokens, revokeToken } from "../api";
 import { Header } from "../components/Header";
-import type { PersonalAccessToken, User } from "../types";
+import type { PatScope, PersonalAccessToken, User } from "../types";
 import {
   Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, PageHeading,
   RelativeTime, Select, Skeleton, TextInput, useToast,
@@ -30,27 +30,46 @@ function isExpired(expiresAt: string | null): boolean {
   return !!expiresAt && new Date(expiresAt).getTime() < Date.now();
 }
 
+// ── scopes ────────────────────────────────────────────────────────────────────
+
+const SCOPE_OPTIONS: { value: PatScope; label: string; hint: string }[] = [
+  { value: "repo:read", label: "repo:read", hint: "Read repositories and clone/pull over HTTPS" },
+  { value: "repo:write", label: "repo:write", hint: "Push commits and write repository data" },
+  { value: "admin", label: "admin", hint: "Manage settings, webhooks, and tokens" },
+];
+
+const SCOPE_TONE: Record<PatScope, "neutral" | "accent" | "danger"> = {
+  "repo:read": "neutral",
+  "repo:write": "accent",
+  admin: "danger",
+};
+
 // ── new-token dialog ──────────────────────────────────────────────────────────
 
 function NewTokenDialog({ open, onClose, onCreate }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, expiresInDays?: number) => Promise<void>;
+  onCreate: (name: string, expiresInDays: number | undefined, scopes: PatScope[]) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [expires, setExpires] = useState("90");
+  const [scopes, setScopes] = useState<PatScope[]>(["repo:read", "repo:write", "admin"]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function reset() { setName(""); setExpires("90"); setError(null); }
+  function reset() { setName(""); setExpires("90"); setScopes(["repo:read", "repo:write", "admin"]); setError(null); }
+
+  function toggleScope(s: PatScope) {
+    setScopes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || scopes.length === 0) return;
     setCreating(true);
     setError(null);
     try {
-      await onCreate(name.trim(), expires ? Number(expires) : undefined);
+      await onCreate(name.trim(), expires ? Number(expires) : undefined, scopes);
       reset();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create token");
@@ -67,7 +86,7 @@ function NewTokenDialog({ open, onClose, onCreate }: {
       footer={
         <>
           <Button variant="default" onClick={() => { reset(); onClose(); }} disabled={creating}>Cancel</Button>
-          <Button variant="primary" type="submit" form="new-token-form" loading={creating} disabled={!name.trim()}>
+          <Button variant="primary" type="submit" form="new-token-form" loading={creating} disabled={!name.trim() || scopes.length === 0}>
             Generate token
           </Button>
         </>
@@ -89,6 +108,21 @@ function NewTokenDialog({ open, onClose, onCreate }: {
             </Select>
           )}
         </Field>
+        <div>
+          <p className="text-fh-sm font-semibold text-fh-fg mb-1.5">Scopes</p>
+          <p className="text-fh-xs text-fh-fg-muted mb-2">Grant only what this token needs. A push requires <code className="font-mono">repo:write</code>; managing settings, webhooks, and tokens requires <code className="font-mono">admin</code>.</p>
+          <div className="space-y-1.5">
+            {SCOPE_OPTIONS.map((opt) => (
+              <label key={opt.value} className="flex items-start gap-2 rounded-md border border-fh-border px-3 py-2 cursor-pointer hover:bg-fh-surface-muted">
+                <input type="checkbox" className="mt-0.5 accent-fh-accent-emphasis" checked={scopes.includes(opt.value)} onChange={() => toggleScope(opt.value)} />
+                <span className="min-w-0">
+                  <span className="block text-fh-sm font-mono font-medium text-fh-fg">{opt.label}</span>
+                  <span className="block text-fh-xs text-fh-fg-muted">{opt.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
         {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
       </form>
     </Dialog>
@@ -158,8 +192,8 @@ export function SettingsTokensPage({ token, user, onLogout }: Props) {
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [token]);
 
-  async function handleCreate(name: string, expiresInDays?: number) {
-    const created = await createToken(token, name, expiresInDays);
+  async function handleCreate(name: string, expiresInDays: number | undefined, scopes: PatScope[]) {
+    const created = await createToken(token, name, expiresInDays, scopes);
     setNewToken(created.token);
     setShowCreate(false);
     load();
@@ -229,6 +263,9 @@ export function SettingsTokensPage({ token, user, onLogout }: Props) {
                       {expired
                         ? <Badge tone="danger">Expired</Badge>
                         : <Badge tone="success">Active</Badge>}
+                      {(t.scopes ?? []).map((s) => (
+                        <Badge key={s} tone={SCOPE_TONE[s]}><span className="font-mono">{s}</span></Badge>
+                      ))}
                     </div>
                     <p className="text-fh-xs text-fh-fg-subtle mt-1.5 flex items-center gap-1.5 flex-wrap">
                       <span>Created <RelativeTime date={t.createdAt} /></span>
