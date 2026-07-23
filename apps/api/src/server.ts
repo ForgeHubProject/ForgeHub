@@ -28,6 +28,7 @@ import { prCommentRoutes } from "./routes/pr-comments.js";
 import { projectRoutes } from "./routes/projects.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { releaseRoutes } from "./routes/releases.js";
+import { orgRoutes } from "./routes/orgs.js";
 import { repoRoutes } from "./routes/repos.js";
 import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
@@ -144,6 +145,7 @@ export async function buildServer() {
   await app.register(sessionRoutes);
   await app.register(tokenRoutes);
   await app.register(repoRoutes);
+  await app.register(orgRoutes);
   await app.register(snapshotRoutes);
   await app.register(compareRoutes);
   await app.register(fhrRoutes);
