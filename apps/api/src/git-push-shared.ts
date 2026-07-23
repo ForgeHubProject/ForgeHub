@@ -7,6 +7,7 @@ import { triggerWorkflowsForPrSync } from "./ci/trigger.js";
 import { emitPushEvents } from "./push-events.js";
 import { installPreReceiveHook } from "./git-hooks.js";
 import { syncProtectionConfig } from "./branch-protection.js";
+import { syncProtectedTagsConfig } from "./protected-tags.js";
 
 const execFile = promisify(execFileCb);
 
@@ -55,6 +56,7 @@ export async function preparePushProtection(
 ): Promise<void> {
   await installPreReceiveHook(repoPath).catch((err) => app.log.error({ err }, "installPreReceiveHook (push)"));
   await syncProtectionConfig(repoId, storageKey).catch((err) => app.log.error({ err }, "syncProtectionConfig (push)"));
+  await syncProtectedTagsConfig(repoId, storageKey).catch((err) => app.log.error({ err }, "syncProtectedTagsConfig (push)"));
 }
 
 /**
