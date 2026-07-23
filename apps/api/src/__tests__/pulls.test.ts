@@ -44,6 +44,10 @@ vi.mock("../prisma.js", () => ({
     protectedBranch: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    personalAccessToken: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 
@@ -102,6 +106,14 @@ vi.mock("../ingest.js", () => ({
   ingestCommitRange: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Server-side merges fan out `push` webhooks + push CI through this helper
+// (wave-B MINOR-1). Mock it so we can assert the merge handlers wire it with the
+// right branch/sha; the helper's own effects are unit-tested in push-events.test.ts.
+vi.mock("../push-events.js", () => ({
+  emitPushEvents: vi.fn(),
+  ZERO_SHA: "0".repeat(40),
+}));
+
 vi.mock("bcryptjs", () => ({
   default: {
     hash: vi.fn().mockResolvedValue("$hashed$"),
@@ -112,6 +124,8 @@ vi.mock("bcryptjs", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
+import { hashToken } from "../tokens.js";
+import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -773,5 +787,218 @@ describe("POST /repos/:handle/:name/pulls/:number/revert", () => {
   it("401 when not authenticated", async () => {
     const res = await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/revert" });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// ─── wave-B MINOR-1: merges fan out `push` webhooks + push CI ──────────────────
+
+describe("merge/revert push fan-out (wave-B MINOR-1)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    vi.mocked(emitPushEvents).mockClear();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
+    const { performMerge, resolveBranchSha, branchExists, performRevert } = await import("../git-utils.js");
+    vi.mocked(resolveBranchSha).mockResolvedValue("abc1234");
+    vi.mocked(performMerge).mockResolvedValue({ ok: true, sha: "deadbeef" });
+    vi.mocked(branchExists).mockResolvedValue(false);
+    vi.mocked(performRevert).mockResolvedValue({ ok: true, branch: "revert-pr-1", sha: "revert00" });
+  });
+
+  it("fires a `push` fan-out for the target branch tip on a successful merge", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(emitPushEvents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(emitPushEvents)).toHaveBeenCalledWith(
+      "repo-pr-1", "alice/my-repo.git", OWNER_ID,
+      [{ branch: "main", oldSha: "abc1234", newSha: "deadbeef" }],
+    );
+  });
+
+  it("fires a `push` fan-out on a successful merge-resolve", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge-resolve",
+      headers: { authorization: ownerToken },
+      payload: { strategy: "ours" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(emitPushEvents)).toHaveBeenCalledWith(
+      "repo-pr-1", "alice/my-repo.git", OWNER_ID,
+      [{ branch: "main", oldSha: "abc1234", newSha: "deadbeef" }],
+    );
+  });
+
+  it("fires a `push` fan-out for the new revert branch (zero before-sha)", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", mergedAt: new Date(), mergeMethod: "merge", mergeCommitSha: "mergesha1" }) as never,
+    );
+    vi.mocked(prisma.pullRequest.count).mockResolvedValue(1 as never);
+    vi.mocked(prisma.pullRequest.create).mockResolvedValue(
+      makePR({ id: "pr-revert", number: 2, fromBranch: "revert-pr-1" }) as never,
+    );
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/revert",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(emitPushEvents)).toHaveBeenCalledWith(
+      "repo-pr-1", "alice/my-repo.git", OWNER_ID,
+      [{ branch: "revert-pr-1", oldSha: ZERO_SHA, newSha: "revert00" }],
+    );
+  });
+
+  it("does NOT fire a `push` fan-out when branch protection blocks the merge (409)", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    // Protected: requires 2 approvals, but the PR has none → hard-gate block.
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue({
+      requirePullRequest: true, requiredApprovals: 2, requireGreenChecks: false, blockForcePush: false,
+    } as never);
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().protection).toBe(true);
+    expect(vi.mocked(emitPushEvents)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire a `push` fan-out when the merge conflicts (409)", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: false, conflicts: true });
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(vi.mocked(emitPushEvents)).not.toHaveBeenCalled();
+  });
+});
+
+// ─── wave-B MAJOR-2: PAT scope enforcement on PR write endpoints ───────────────
+
+describe("PAT scope enforcement on PR write endpoints (wave-B MAJOR-2)", () => {
+  const READ_PAT = "fhp_read_pr";
+  const WRITE_PAT = "fhp_write_pr";
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Two PATs owned by the repo owner (so a 403 proves the scope gate, not
+    // missing repo/write access): one read-only, one with repo:write.
+    vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) => {
+      if (args.where.tokenHash === hashToken(READ_PAT)) return Promise.resolve({ id: "pat-read", userId: OWNER_ID, scopes: "repo:read", expiresAt: null });
+      if (args.where.tokenHash === hashToken(WRITE_PAT)) return Promise.resolve({ id: "pat-write", userId: OWNER_ID, scopes: "repo:read,repo:write", expiresAt: null });
+      return Promise.resolve(null);
+    }) as never);
+    vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+    const { resolveBranchSha, performMerge } = await import("../git-utils.js");
+    vi.mocked(resolveBranchSha).mockResolvedValue("abc1234");
+    vi.mocked(performMerge).mockResolvedValue({ ok: true, sha: "deadbeef" });
+  });
+
+  const readHdr = { authorization: `Bearer ${READ_PAT}` };
+
+  it("403s a repo:read PAT creating a PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(null as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls",
+      headers: readHdr, payload: { title: "x", fromBranch: "feature" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(vi.mocked(prisma.pullRequest.create)).not.toHaveBeenCalled();
+  });
+
+  it("403s a repo:read PAT merging a PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: readHdr,
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("403s a repo:read PAT resolving+merging a PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge-resolve",
+      headers: readHdr, payload: { strategy: "ours" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+  });
+
+  it("403s a repo:read PAT reverting a PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", mergedAt: new Date(), mergeCommitSha: "mergesha1" }) as never,
+    );
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/revert", headers: readHdr,
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(vi.mocked(prisma.pullRequest.create)).not.toHaveBeenCalled();
+  });
+
+  it("403s a repo:read PAT changing PR state (PATCH)", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: readHdr, payload: { state: "closed" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("repo:write");
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("lets a repo:write PAT and a session token merge (gate passes)", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+
+    const viaPat = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: `Bearer ${WRITE_PAT}` },
+    });
+    expect(viaPat.statusCode).toBe(200);
+
+    const viaSession = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(viaSession.statusCode).toBe(200);
   });
 });
