@@ -2,7 +2,9 @@ import { writeFile } from "node:fs/promises";
 import { prisma } from "../prisma.js";
 import { ciLogPath, ciRunDir, ensureCiDir } from "../git-storage.js";
 import { enqueueRun, isCiEnabled } from "./runner.js";
+import { pruneCompletedRuns } from "./retention.js";
 import {
+  branchAllowed,
   defaultWorkflowName,
   listWorkflowFilesAtCommit,
   parseWorkflow,
@@ -26,10 +28,12 @@ type TriggerParams = {
   commitSha: string;
   event: CiEvent;
   ref?: string;
+  /** For pull_request events: the PR's TARGET (base) branch, matched by pr filters. */
+  baseBranch?: string;
   prId?: string;
 };
 
-/** Core: parse the commit's workflows and enqueue runs for those matching `event`. */
+/** Core: parse the commit's workflows and enqueue runs for those matching `event` (and any branch filter). */
 export async function triggerWorkflows(p: TriggerParams): Promise<void> {
   if (!isCiEnabled()) return;
 
@@ -43,6 +47,11 @@ export async function triggerWorkflows(p: TriggerParams): Promise<void> {
       continue;
     }
     if (!parsed.workflow.events.includes(p.event)) continue;
+    // Branch filters (v1): a `push` filter matches the pushed branch; a
+    // `pull_request` filter matches the PR's TARGET (base) branch. An unfiltered
+    // event triggers on every branch (v0 behavior).
+    if (p.event === "push" && !branchAllowed(parsed.workflow.branchFilters.push, p.ref)) continue;
+    if (p.event === "pull_request" && !branchAllowed(parsed.workflow.branchFilters.pull_request, p.baseBranch)) continue;
     await createAndEnqueueRun(p, file.path, parsed.workflow);
   }
 }
@@ -64,6 +73,52 @@ async function createAndEnqueueRun(p: TriggerParams, workflowPath: string, workf
     },
   });
   enqueueRun(run.id);
+  // Retention (v1): cap a repo's completed-run history on disk + in the DB.
+  await pruneCompletedRuns(p.repoId, p.storageKey).catch((err) =>
+    console.error("[ci-retention] prune after enqueue failed", err),
+  );
+}
+
+/**
+ * Re-run (v1): create a FRESH queued WorkflowRun that clones a source run's
+ * repo/sha/workflow/trigger/ref/pr, linked back via `rerunOfId`, with a fresh
+ * queued CheckRun per job (same job ids/names — the sha is identical, so the runner
+ * re-reads the very same immutable workflow file). Enqueues it and prunes old runs.
+ * Returns the new run id.
+ */
+export async function createRerun(source: {
+  id: string;
+  repoId: string;
+  storageKey: string;
+  commitSha: string;
+  trigger: string;
+  ref: string | null;
+  prId: string | null;
+  workflowName: string;
+  workflowPath: string;
+  checkRuns: Array<{ jobId: string; jobName: string }>;
+}): Promise<string> {
+  const run = await prisma.workflowRun.create({
+    data: {
+      repoId: source.repoId,
+      commitSha: source.commitSha,
+      trigger: source.trigger,
+      ref: source.ref,
+      prId: source.prId,
+      workflowName: source.workflowName,
+      workflowPath: source.workflowPath,
+      status: "queued",
+      rerunOfId: source.id,
+      checkRuns: {
+        create: source.checkRuns.map((c) => ({ jobId: c.jobId, jobName: c.jobName, status: "queued" })),
+      },
+    },
+  });
+  enqueueRun(run.id);
+  await pruneCompletedRuns(source.repoId, source.storageKey).catch((err) =>
+    console.error("[ci-retention] prune after rerun failed", err),
+  );
+  return run.id;
 }
 
 async function recordParseFailure(p: TriggerParams, workflowPath: string, error: string): Promise<void> {
@@ -127,12 +182,15 @@ export async function triggerWorkflowsForPrSync(
   const byBranch = new Map(changed.map((c) => [c.branch, c]));
   const prs = await prisma.pullRequest.findMany({
     where: { repoId, state: "OPEN", fromBranch: { in: [...byBranch.keys()] } },
-    select: { id: true, fromBranch: true },
+    select: { id: true, fromBranch: true, toBranch: true },
   });
   for (const pr of prs) {
     const c = byBranch.get(pr.fromBranch);
     if (!c) continue;
-    await triggerWorkflows({ repoId, storageKey, commitSha: c.newSha, event: "pull_request", ref: pr.fromBranch, prId: pr.id });
+    await triggerWorkflows({
+      repoId, storageKey, commitSha: c.newSha, event: "pull_request",
+      ref: pr.fromBranch, baseBranch: pr.toBranch, prId: pr.id,
+    });
   }
 }
 
@@ -143,7 +201,11 @@ export async function triggerWorkflowsForPrOpen(
   prId: string,
   fromBranch: string,
   headSha: string,
+  baseBranch?: string,
 ): Promise<void> {
   if (!isCiEnabled()) return;
-  await triggerWorkflows({ repoId, storageKey, commitSha: headSha, event: "pull_request", ref: fromBranch, prId });
+  await triggerWorkflows({
+    repoId, storageKey, commitSha: headSha, event: "pull_request",
+    ref: fromBranch, baseBranch, prId,
+  });
 }
