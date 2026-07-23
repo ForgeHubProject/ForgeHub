@@ -366,6 +366,69 @@ export type Issue = {
   lockReason?: string | null;
 };
 
+// ─── Projects: board + table over issues/PRs (issue #84) ─────────────────────
+
+/** Which kind of subject a project item points at. */
+export type ProjectSubjectType = "issue" | "pull";
+
+/** A project row in the repo's project list (list-page card). */
+export type ProjectSummary = {
+  id: string;
+  number: number;
+  name: string;
+  description: string | null;
+  closed: boolean;
+  itemCount: number;
+  columnCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * The hydrated issue/PR a card represents. Null when the underlying issue/PR was
+ * deleted after being added — the card degrades to a muted "unavailable" state.
+ */
+export type ProjectItemSubject = {
+  type: ProjectSubjectType;
+  number: number;
+  title: string;
+  /** issue: open|closed · pull: open|merged|closed */
+  state: string;
+  labels: Label[];
+  assignee: string | null;
+} | null;
+
+/** One card on the board / one row in the table. */
+export type ProjectItem = {
+  id: string;
+  columnId: string;
+  position: number;
+  subjectType: ProjectSubjectType;
+  subjectNumber: number;
+  subject: ProjectItemSubject;
+  createdAt: string;
+};
+
+/** A status column and its ordered items. */
+export type ProjectColumn = {
+  id: string;
+  name: string;
+  position: number;
+  items: ProjectItem[];
+};
+
+/** The full board: ordered columns, each with ordered hydrated items. */
+export type ProjectDetail = {
+  id: string;
+  number: number;
+  name: string;
+  description: string | null;
+  closed: boolean;
+  columns: ProjectColumn[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 /** A named, per-user snapshot of the issue-list filter bar (issue #120). */
 export type SavedFilter = {
   id: string;

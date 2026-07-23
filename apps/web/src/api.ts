@@ -1,6 +1,8 @@
 import type {
   BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
-  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry, PublicProfile, PullRequest, RefCompareResult,
+  Issue, IssueComment, Label, Notification, PersonalAccessToken, PRFileEntry,
+  ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType, ProjectSummary,
+  PublicProfile, PullRequest, RefCompareResult,
   Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
   Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User,
 } from "./types";
@@ -1132,6 +1134,163 @@ export async function deleteReviewComment(
   commentId: string,
 ): Promise<void> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}`, { method: "DELETE", token });
+}
+
+// ─── projects: board + table over issues/PRs (issue #84) ───────────────────────
+
+export async function listProjects(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  state: "open" | "closed" | "all" = "open",
+): Promise<{ projects: ProjectSummary[] }> {
+  return req(`/repos/${handle}/${repoName}/projects?state=${state}`, { token: token ?? undefined });
+}
+
+export async function createProject(
+  token: string,
+  handle: string,
+  repoName: string,
+  name: string,
+  description?: string,
+): Promise<ProjectDetail> {
+  return req(`/repos/${handle}/${repoName}/projects`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function getProject(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<ProjectDetail> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}`, { token: token ?? undefined });
+}
+
+export async function updateProject(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  patch: { name?: string; description?: string | null; closed?: boolean },
+): Promise<ProjectDetail> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteProject(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}`, { method: "DELETE", token });
+}
+
+export async function createProjectColumn(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  name: string,
+): Promise<ProjectColumn> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/columns`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function renameProjectColumn(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  columnId: string,
+  name: string,
+): Promise<{ id: string; name: string; position: number }> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/columns/${columnId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function reorderProjectColumns(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  order: string[],
+): Promise<{ columns: { id: string; name: string; position: number }[] }> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/columns/order`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ order }),
+  });
+}
+
+export async function deleteProjectColumn(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  columnId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/columns/${columnId}`, { method: "DELETE", token });
+}
+
+export async function addProjectItem(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  columnId: string,
+  type: ProjectSubjectType,
+  subjectNumber: number,
+): Promise<ProjectItem> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/items`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ columnId, type, number: subjectNumber }),
+  });
+}
+
+/**
+ * Move an item to `columnId` at 0-based `position` within that column. The
+ * server renumbers the affected column(s) densely, so an optimistic client that
+ * inserted at the same index stays in sync.
+ */
+export async function moveProjectItem(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  itemId: string,
+  columnId: string,
+  position: number,
+): Promise<{ id: string; columnId: string; position: number; subjectType: ProjectSubjectType; subjectNumber: number }> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/items/${itemId}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ columnId, position }),
+  });
+}
+
+export async function removeProjectItem(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  itemId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/projects/${number}/items/${itemId}`, { method: "DELETE", token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────
