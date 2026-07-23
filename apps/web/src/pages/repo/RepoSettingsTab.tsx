@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, addDeployKey, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteWebhook,
-  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, updateLabel, updateTopics, updateWebhook,
+  addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteWebhook,
+  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateTopics, updateWebhook,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type {
-  BranchInfo, BranchProtectionRules, DeployKey, Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
+  BranchInfo, BranchProtectionRules, DeployKey, Label, ProtectedTag, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
 } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
@@ -36,6 +36,7 @@ const BOOKMARK = "M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v1
 const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
 const WEBHOOK = "M8.5 4.5a1.5 1.5 0 00-1.415 2A.75.75 0 015.67 7.003 3 3 0 118.5 9c-.257 0-.505-.032-.742-.093l-1.86 3.196A2.5 2.5 0 114.5 11.5c.086 0 .17.004.253.013l.867-1.49A.75.75 0 016.914 10.8l-.867 1.49c.257.27.453.6.567.966H10.5a.75.75 0 010 1.5H6.61a2.5 2.5 0 11-1.06-4.386l1.767-3.037A.75.75 0 017.9 6.976 1.5 1.5 0 108.5 4.5zm-4 7.5a1 1 0 100 2 1 1 0 000-2zm7.5-1.5a2.5 2.5 0 10-2.45 2.5.75.75 0 000-1.5A1 1 0 1112 10.5a.75.75 0 001.5 0z";
 const BRANCH = "M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z";
+const TAG = "M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.75 1.75 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z";
 const KEY = "M10.5 0a5.499 5.499 0 00-5.243 7.148L.436 11.97a1.489 1.489 0 00-.436 1.053v1.487C0 15.328.672 16 1.5 16h1.487c.395 0 .774-.157 1.054-.436l.31-.311a.75.75 0 00.22-.53v-.807h.807a.75.75 0 00.53-.22l.716-.716a.75.75 0 00.22-.53v-.807h.462l4.822-4.821A5.499 5.499 0 0010.5 0zm1.5 4.75a1 1 0 11-2 0 1 1 0 012 0z";
 
 /** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
@@ -1152,6 +1153,143 @@ function BranchesSection({ token, handle, repoName, isOwner }: {
   );
 }
 
+// ── Protected tags (issue #117) ─────────────────────────────────────────────────
+
+function TagsSection({ token, handle, repoName, isOwner }: {
+  token: string; handle: string; repoName: string; isOwner: boolean;
+}) {
+  const [rules, setRules] = useState<ProtectedTag[] | null>(null);
+  const [pattern, setPattern] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ProtectedTag | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setRules(null);
+    listProtectedTags(token, handle, repoName)
+      .then((d) => setRules(d.protectedTags))
+      .catch(() => setRules([]));
+  }, [token, handle, repoName]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    const p = pattern.trim();
+    if (!p) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const row = await addProtectedTag(token, handle, repoName, p);
+      setRules((prev) => [...(prev ?? []), row].sort((a, b) => a.pattern.localeCompare(b.pattern)));
+      setPattern("");
+      toast(`Protected ${row.pattern}`, { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to protect tag pattern");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await removeProtectedTag(token, handle, repoName, pendingDelete.id);
+      setRules((prev) => (prev ? prev.filter((r) => r.id !== pendingDelete.id) : prev));
+      toast(`Removed ${pendingDelete.pattern}`, { tone: "success" });
+      setPendingDelete(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to remove pattern", { tone: "danger" });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div>
+      <SectionHeader
+        title="Protected tags"
+        description="Protect tags matching a pattern so they can't be deleted or overwritten — over the API or a git push. Creating a new matching tag is still allowed, so releases keep working."
+      />
+
+      {isOwner ? (
+        <form onSubmit={add} className="bg-fh-surface border border-fh-border rounded-md p-4 mb-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex-1 min-w-[220px]">
+              <Field label="Tag name pattern" hint="Use * as a wildcard, e.g. v* protects every tag starting with v.">
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    value={pattern}
+                    placeholder="v* , release-* , v1.0.0…"
+                    onChange={(e) => setPattern(e.target.value)}
+                    className="font-mono"
+                    autoComplete="off"
+                  />
+                )}
+              </Field>
+            </div>
+            <Button variant="primary" type="submit" loading={adding} disabled={!pattern.trim()}>
+              Add rule
+            </Button>
+          </div>
+          {error && <p className="text-fh-sm text-fh-danger-fg mt-2">{error}</p>}
+        </form>
+      ) : (
+        <p className="mb-4 text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          Only the repository owner can change protected tags.
+        </p>
+      )}
+
+      {rules === null ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton variant="block" width={16} height={16} className="rounded" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
+        </div>
+      ) : rules.length === 0 ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState
+            icon={<Icon path={TAG} size={28} />}
+            title="No protected tags"
+            description="Add a pattern above to keep matching tags from being deleted or moved."
+          />
+        </div>
+      ) : (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {rules.map((r) => (
+            <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+              <span className="shrink-0 text-fh-fg-muted"><Icon path={TAG} size={16} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-fh-sm font-mono font-medium text-fh-fg truncate">{r.pattern}</p>
+                <p className="text-fh-xs text-fh-fg-subtle mt-0.5">Added <RelativeTime date={r.createdAt} /></p>
+              </div>
+              {isOwner && (
+                <Button variant="danger" size="sm" onClick={() => setPendingDelete(r)}>Remove</Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Remove protected tag rule"
+          message={<>Stop protecting tags matching <span className="font-mono font-semibold">{pendingDelete.pattern}</span>? Matching tags could then be deleted or overwritten.</>}
+          confirmLabel="Remove rule"
+          loading={deleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Deploy keys (issue #116) ────────────────────────────────────────────────────
 
 function DeployKeyForm({ onSave, onCancel }: {
@@ -1388,7 +1526,7 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "topics" | "collaborators" | "branches" | "labels" | "webhooks" | "deploy-keys" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "branches" | "tags" | "labels" | "webhooks" | "deploy-keys" | "danger";
 
 export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
@@ -1402,6 +1540,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
     { key: "topics", label: "Topics", icon: BOOKMARK },
     { key: "collaborators", label: "Collaborators", icon: PEOPLE },
     { key: "branches", label: "Branches", icon: BRANCH },
+    { key: "tags", label: "Tags", icon: TAG },
     { key: "labels", label: "Labels", icon: LABEL },
     { key: "webhooks", label: "Webhooks", icon: WEBHOOK },
     { key: "deploy-keys", label: "Deploy keys", icon: KEY },
@@ -1448,6 +1587,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
         {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
+        {section === "tags" && <TagsSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
         {section === "deploy-keys" && <DeployKeysSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
