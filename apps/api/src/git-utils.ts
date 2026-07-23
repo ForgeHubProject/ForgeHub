@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -544,6 +544,25 @@ export async function readFileAtBranch(
 
 // ─── commits ─────────────────────────────────────────────────────────────────────────────
 
+// ─── commit signatures (Verified badge — issue #117) ──────────────────────────
+//
+// A *display* of git's own signature verification (distinct from FHR handler
+// signing). `%G?` gives git's verdict; `%GS`/`%GK` the signer + key. Full "G"
+// verification needs gpg, which may be ABSENT in some deployments — there `%G?`
+// degrades to N even for genuinely signed commits, so we ALSO detect a raw
+// `gpgsig` header on the commit object and surface "signed (unverified)". Trust
+// stores (allowed-signers) are a documented follow-up.
+
+export type CommitSignatureStatus = "verified" | "signed-unverified" | "unsigned";
+
+export type CommitSignature = {
+  status: CommitSignatureStatus;
+  /** Signer identity from `%GS` (e.g. "Alice <alice@example.com>"), when known. */
+  signer: string | null;
+  /** Signing key id / fingerprint from `%GK`, when known. */
+  keyId: string | null;
+};
+
 export type CommitInfo = {
   sha: string;
   shortSha: string;
@@ -553,7 +572,128 @@ export type CommitInfo = {
   authorEmail: string;
   date: string;
   parents: string[];
+  signature: CommitSignature;
 };
+
+/** Trailing signature fields appended to every commit `--format` we parse. */
+const SIG_FORMAT = "\x1f%G?\x1f%GS\x1f%GK";
+
+/**
+ * Map git's signature verdict to a display status. `%G?` codes: G good, U good
+ * with unknown validity, B bad, X/Y expired sig/key, R revoked key, E can't
+ * check (e.g. gpg missing), N no signature. G/U ⇒ verified; any other non-N code
+ * ⇒ a present-but-unverified signature; N/"" ⇒ fall back to the raw-header probe
+ * so a signed commit still reads as "signed" where gpg can't run.
+ */
+export function classifySignature(
+  gStatus: string,
+  signer: string,
+  keyId: string,
+  rawHasGpgSig: boolean,
+): CommitSignature {
+  const s = signer.trim() || null;
+  const k = keyId.trim() || null;
+  if (gStatus === "G" || gStatus === "U") return { status: "verified", signer: s, keyId: k };
+  if (gStatus && gStatus !== "N") return { status: "signed-unverified", signer: s, keyId: k };
+  if (rawHasGpgSig) return { status: "signed-unverified", signer: s, keyId: k };
+  return { status: "unsigned", signer: null, keyId: null };
+}
+
+/** True when a raw commit object's header block carries a `gpgsig` line. */
+export function commitHeaderHasGpgSig(rawCommit: string): boolean {
+  const headerEnd = rawCommit.indexOf("\n\n");
+  const block = headerEnd >= 0 ? rawCommit.slice(0, headerEnd) : rawCommit;
+  return block.split("\n").some((l) => l.startsWith("gpgsig"));
+}
+
+/** One parsed commit plus its raw signature verdict fields (pre-classification). */
+type RawCommit = { base: Omit<CommitInfo, "signature">; gStatus: string; signer: string; keyId: string };
+
+/** Parse a `--format=%H..%P` + {@link SIG_FORMAT} log line into a {@link RawCommit}. */
+function parseCommitLine(line: string): RawCommit {
+  const [sha, subject, authorName, authorEmail, date, parents, gStatus, signer, keyId] = line.split("\x1f");
+  return {
+    base: {
+      sha: sha ?? "",
+      shortSha: (sha ?? "").slice(0, 7),
+      subject: subject ?? "",
+      message: subject ?? "",
+      authorName: authorName ?? "",
+      authorEmail: authorEmail ?? "",
+      date: date ?? "",
+      parents: parents?.trim() ? parents.trim().split(" ") : [],
+    },
+    gStatus: gStatus ?? "",
+    signer: signer ?? "",
+    keyId: keyId ?? "",
+  };
+}
+
+/**
+ * SHAs (from the given list) whose commit object carries a `gpgsig` header —
+ * resolved in a single `git cat-file --batch`. Used as the "is it signed?"
+ * fallback when gpg can't verify. Best-effort: any failure yields an empty set.
+ */
+async function rawSignedShaSet(storageKey: string, shas: string[]): Promise<Set<string>> {
+  if (shas.length === 0) return new Set();
+  const cwd = bareRepoPathFromKey(storageKey);
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("git", ["cat-file", "--batch"], { cwd });
+    } catch {
+      resolve(new Set());
+      return;
+    }
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (c: Buffer) => chunks.push(c));
+    child.on("error", () => resolve(new Set()));
+    child.on("close", () => {
+      try {
+        resolve(parseCatFileBatchForGpgSig(Buffer.concat(chunks)));
+      } catch {
+        resolve(new Set());
+      }
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.write(shas.join("\n") + "\n");
+    child.stdin.end();
+  });
+}
+
+/** Frame `git cat-file --batch` output (`<sha> <type> <size>\n<payload>\n`) and collect signed commits. */
+function parseCatFileBatchForGpgSig(buf: Buffer): Set<string> {
+  const signed = new Set<string>();
+  const NL = 0x0a;
+  let i = 0;
+  while (i < buf.length) {
+    const nl = buf.indexOf(NL, i);
+    if (nl < 0) break;
+    const header = buf.toString("utf8", i, nl);
+    i = nl + 1;
+    const parts = header.split(" ");
+    // "<sha> missing" (2 fields) carries no payload — skip to the next record.
+    if (parts.length < 3) continue;
+    const [sha, type, sizeStr] = parts;
+    const size = Number.parseInt(sizeStr ?? "", 10);
+    if (!Number.isFinite(size)) break;
+    if (type === "commit" && commitHeaderHasGpgSig(buf.toString("utf8", i, i + size))) {
+      signed.add(sha);
+    }
+    i += size + 1; // payload + trailing newline
+  }
+  return signed;
+}
+
+/** Attach a {@link CommitSignature} to each raw commit (one batch probe for the page). */
+async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promise<CommitInfo[]> {
+  const needRaw = raws.filter((r) => r.gStatus === "" || r.gStatus === "N").map((r) => r.base.sha);
+  const signedSet = needRaw.length ? await rawSignedShaSet(storageKey, needRaw) : new Set<string>();
+  return raws.map((r) => ({
+    ...r.base,
+    signature: classifySignature(r.gStatus, r.signer, r.keyId, signedSet.has(r.base.sha)),
+  }));
+}
 
 export async function listCommits(
   storageKey: string,
@@ -568,22 +708,11 @@ export async function listCommits(
     const out = await git(storageKey, [
       "log", ref,
       `--skip=${skip}`, `-n`, String(perPage),
-      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+      `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
     ]);
     if (!out) return [];
-    return out.split("\n").filter(Boolean).map((line) => {
-      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
-      return {
-        sha: sha ?? "",
-        shortSha: (sha ?? "").slice(0, 7),
-        subject: subject ?? "",
-        message: subject ?? "",
-        authorName: authorName ?? "",
-        authorEmail: authorEmail ?? "",
-        date: date ?? "",
-        parents: parents?.trim() ? parents.trim().split(" ") : [],
-      };
-    });
+    const raws = out.split("\n").filter(Boolean).map(parseCommitLine);
+    return annotateSignatures(storageKey, raws);
   } catch {
     return [];
   }
@@ -595,21 +724,27 @@ export async function getCommit(
 ): Promise<(CommitInfo & { changedFiles: string[] }) | null> {
   try {
     const meta = await git(storageKey, [
-      "show", "--no-patch", "--format=%H\x1f%an\x1f%ae\x1f%aI\x1f%P", sha,
+      "show", "--no-patch", `--format=%H\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`, sha,
     ]);
-    const [fullSha, authorName, authorEmail, date, parents] = meta.split("\x1f");
+    const [fullSha, authorName, authorEmail, date, parents, gStatus, signer, keyId] = meta.split("\x1f");
     const fullMsg = await git(storageKey, ["show", "--no-patch", "--format=%B", sha]);
     const subject = fullMsg.split("\n")[0]?.trim() ?? "";
     const filesOut = await git(storageKey, ["diff-tree", "--no-commit-id", "-r", "--name-only", sha]);
+    const resolvedSha = fullSha ?? "";
+    const g = gStatus ?? "";
+    const rawSigned = g === "" || g === "N"
+      ? (await rawSignedShaSet(storageKey, [resolvedSha])).has(resolvedSha)
+      : false;
     return {
-      sha: fullSha ?? "",
-      shortSha: (fullSha ?? "").slice(0, 7),
+      sha: resolvedSha,
+      shortSha: resolvedSha.slice(0, 7),
       subject,
       message: fullMsg.trim(),
       authorName: authorName ?? "",
       authorEmail: authorEmail ?? "",
       date: date ?? "",
       parents: parents?.trim() ? parents.trim().split(" ") : [],
+      signature: classifySignature(g, signer ?? "", keyId ?? "", rawSigned),
       changedFiles: filesOut.split("\n").filter(Boolean),
     };
   } catch {
@@ -820,22 +955,10 @@ export async function listMergeBaseCommits(
     if (!mergeBase) return [];
     const out = await git(storageKey, [
       "log", `${mergeBase}..${fromBranch}`,
-      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+      `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
     ]);
     if (!out) return [];
-    return out.split("\n").filter(Boolean).map((line) => {
-      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
-      return {
-        sha: sha ?? "",
-        shortSha: (sha ?? "").slice(0, 7),
-        subject: subject ?? "",
-        message: subject ?? "",
-        authorName: authorName ?? "",
-        authorEmail: authorEmail ?? "",
-        date: date ?? "",
-        parents: parents?.trim() ? parents.trim().split(" ") : [],
-      };
-    });
+    return annotateSignatures(storageKey, out.split("\n").filter(Boolean).map(parseCommitLine));
   } catch {
     return [];
   }
@@ -869,22 +992,10 @@ export async function listRangeCommits(
     const range = fromRef ? `${fromRef}..${toRef}` : toRef;
     const out = await git(storageKey, [
       "log", range,
-      "--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P",
+      `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
     ]);
     if (!out) return [];
-    return out.split("\n").filter(Boolean).map((line) => {
-      const [sha, subject, authorName, authorEmail, date, parents] = line.split("\x1f");
-      return {
-        sha: sha ?? "",
-        shortSha: (sha ?? "").slice(0, 7),
-        subject: subject ?? "",
-        message: subject ?? "",
-        authorName: authorName ?? "",
-        authorEmail: authorEmail ?? "",
-        date: date ?? "",
-        parents: parents?.trim() ? parents.trim().split(" ") : [],
-      };
-    });
+    return annotateSignatures(storageKey, out.split("\n").filter(Boolean).map(parseCommitLine));
   } catch {
     return [];
   }
