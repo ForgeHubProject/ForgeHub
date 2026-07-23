@@ -1,12 +1,12 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
-  CommitInfo, Composition, Constraint, Design, DesignCompareResult, DesignVersion,
+  CommitInfo, Composition, Constraint, DeployKey, Design, DesignCompareResult, DesignVersion,
   DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment, Label, Milestone,
   Notification, PRFileEntry, PatScope, PersonalAccessToken, ProjectColumn, ProjectDetail,
   ProjectItem, ProjectSubjectType, ProjectSummary, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
-  Snapshot, SnapshotSummary, SyncForkResult, TagInfo, TimelineEvent, TreeEntry, User,
-  Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey,
+  SavedFilter, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, TimelineEvent, TreeEntry,
+  User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -1981,4 +1981,51 @@ export async function deleteDesign(
   designId: string,
 ): Promise<void> {
   return req(`/repos/${handle}/${repoName}/issues/${number}/designs/${designId}`, { method: "DELETE", token });
+}
+
+// ─── SSH keys + deploy keys (issue #116) ──────────────────────────────────────
+
+export async function listSSHKeys(token: string): Promise<{ keys: SSHKey[] }> {
+  return req("/user/keys", { token });
+}
+
+export async function addSSHKey(token: string, title: string, publicKey: string): Promise<SSHKey> {
+  return req("/user/keys", { method: "POST", token, body: JSON.stringify({ title, publicKey }) });
+}
+
+export async function deleteSSHKey(token: string, id: string): Promise<void> {
+  return req(`/user/keys/${id}`, { method: "DELETE", token });
+}
+
+export async function listDeployKeys(token: string, handle: string, repoName: string): Promise<{ keys: DeployKey[] }> {
+  return req(`/repos/${handle}/${repoName}/keys`, { token });
+}
+
+export async function addDeployKey(
+  token: string,
+  handle: string,
+  repoName: string,
+  input: { title: string; publicKey: string; readOnly: boolean },
+): Promise<DeployKey> {
+  return req(`/repos/${handle}/${repoName}/keys`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function deleteDeployKey(token: string, handle: string, repoName: string, id: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/keys/${id}`, { method: "DELETE", token });
+}
+
+/**
+ * Build the `ssh://git@host:port/owner/repo.git` clone URL shown in the clone box
+ * (issue #116). The port comes from server config; the host uses the server's
+ * explicit override when set, otherwise the browser's current hostname.
+ */
+export function sshCloneUrl(opts: {
+  handle: string;
+  repoName: string;
+  sshPort: number;
+  sshHost?: string | null;
+  hostname: string;
+}): string {
+  const host = opts.sshHost || opts.hostname;
+  return `ssh://git@${host}:${opts.sshPort}/${opts.handle}/${opts.repoName}.git`;
 }

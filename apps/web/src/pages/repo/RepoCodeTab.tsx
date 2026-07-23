@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, getCheckSummary, listCommits, listTree } from "../../api";
+import { API_BASE, downloadArchive, getCheckSummary, listCommits, listTree, sshCloneUrl } from "../../api";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
@@ -95,12 +95,21 @@ function BookIcon() {
 }
 
 // ── clone dropdown ────────────────────────────────────────────────────────────
-function CloneDropdown({ token, handle, repoName, visibility, currentRef }: {
+function CloneDropdown({ token, handle, repoName, visibility, currentRef, sshPort, sshHost }: {
   token: string; handle: string; repoName: string; visibility: string; currentRef: string;
+  sshPort?: number | null; sshHost?: string | null;
 }) {
   const { toast } = useToast();
-  const url = `${API_BASE}/git/${handle}/${repoName}.git`;
+  const httpsUrl = `${API_BASE}/git/${handle}/${repoName}.git`;
+  // SSH is offered only when the server config exposes a port (issue #116). The
+  // host comes from the browser unless the server pins an explicit override.
+  const sshEnabled = typeof sshPort === "number" && sshPort > 0;
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const sshUrl = sshEnabled ? sshCloneUrl({ handle, repoName, sshPort, sshHost, hostname }) : "";
+  const [protocol, setProtocol] = useState<"https" | "ssh">("https");
   const [downloading, setDownloading] = useState(false);
+
+  const url = protocol === "ssh" && sshEnabled ? sshUrl : httpsUrl;
 
   function copy() {
     void navigator.clipboard.writeText(url).then(() => toast("Clone URL copied", { tone: "success" }));
@@ -128,7 +137,28 @@ function CloneDropdown({ token, handle, repoName, visibility, currentRef }: {
         </Button>
       }
     >
-      <DropdownLabel>Clone with HTTPS</DropdownLabel>
+      <div className="flex items-center justify-between px-3 pt-2 pb-1">
+        <DropdownLabel>Clone with {protocol === "ssh" ? "SSH" : "HTTPS"}</DropdownLabel>
+        {sshEnabled && (
+          <div className="inline-flex rounded-md border border-fh-border overflow-hidden text-fh-xs" role="tablist" aria-label="Clone protocol">
+            {(["https", "ssh"] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                role="tab"
+                aria-selected={protocol === p}
+                onClick={() => setProtocol(p)}
+                className={
+                  "px-2.5 py-1 font-medium cursor-pointer " +
+                  (protocol === p ? "bg-fh-surface-muted text-fh-fg" : "bg-fh-surface text-fh-fg-muted hover:text-fh-fg")
+                }
+              >
+                {p === "https" ? "HTTPS" : "SSH"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="px-3 pb-2 pt-1">
         <div className="flex items-center gap-1.5">
           <span className="flex-1 min-w-0 truncate font-mono text-fh-xs text-fh-fg-muted bg-fh-surface-inset border border-fh-border rounded-md px-2 py-1.5">
@@ -145,8 +175,14 @@ function CloneDropdown({ token, handle, repoName, visibility, currentRef }: {
           </button>
         </div>
         <p className="mt-2 text-fh-xs text-fh-fg-subtle">
-          Clone with <code className="font-mono text-fh-fg-muted">git clone {"<url>"}</code>.
-          {visibility === "private" && " You'll be prompted for your ForgeHub username and password."}
+          {protocol === "ssh" && sshEnabled ? (
+            <>Clone with <code className="font-mono text-fh-fg-muted">git clone {"<url>"}</code> using an SSH key added in Settings → SSH keys.</>
+          ) : (
+            <>
+              Clone with <code className="font-mono text-fh-fg-muted">git clone {"<url>"}</code>.
+              {visibility === "private" && " You'll be prompted for your ForgeHub username and password."}
+            </>
+          )}
         </p>
       </div>
       <DropdownSeparator />
@@ -442,7 +478,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         <Button variant="default" size="sm" leadingIcon={<CompareGlyph />} onClick={() => navigate(`${base}/compare`)}>
           Compare
         </Button>
-        <CloneDropdown token={token} handle={handle} repoName={repoName} visibility={repo.visibility} currentRef={currentRef} />
+        <CloneDropdown token={token} handle={handle} repoName={repoName} visibility={repo.visibility} currentRef={currentRef} sshPort={repo.sshPort} sshHost={repo.sshHost} />
       </div>
 
       {/* File tree */}

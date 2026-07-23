@@ -50,6 +50,9 @@ The API is fully functional end-to-end. Below is a summary of what is running.
 | `POST` | `/auth/tokens` | Create a named, optionally-expiring Personal Access Token (plaintext shown once) |
 | `GET` | `/auth/tokens` | List the caller's tokens (name, prefix, expiry, last used — never the secret) |
 | `DELETE` | `/auth/tokens/:id` | Revoke a token immediately |
+| `POST` | `/user/keys` | Add an SSH public key (`title`, `publicKey`); returns the fingerprint |
+| `GET` | `/user/keys` | List the caller's SSH keys (title, fingerprint, last used) |
+| `DELETE` | `/user/keys/:id` | Remove an SSH key |
 
 ### Repositories
 
@@ -197,6 +200,30 @@ Bare repositories are served over standard Git HTTPS transport so any Git client
 Auth on Git endpoints accepts `Authorization: Bearer <jwt>`, `Authorization: Basic base64(x:<jwt>)`, or a Personal Access Token as the Basic-auth password (`git clone http://<handle>:<pat>@host/...`). Public repos are readable anonymously; write requires owner or `writer` collaborator. The `forge` CLI's `forge login <url>` command wraps this: it logs in, mints a PAT, and stores it via git's own credential-helper protocol so neither `git` nor `forge` need the token passed by hand afterward.
 
 **Run self-hosted instances behind HTTPS.** Git credential helpers (and most OS/browser credential managers) key lookups on `protocol` + `host` and generally won't offer to fill or prompt for a plain `http://` remote the way they do for `https://`. Plain HTTP will work for git operations themselves, but credential-manager integration (`forge login`, `git credential fill`) degrades — put a TLS-terminating proxy in front of any instance where that matters.
+
+### Git over SSH (issue #116)
+
+ForgeHub also serves git over SSH — `git clone ssh://git@<host>:<port>/owner/repo.git` — authenticated by public key. It is an in-process [`ssh2`](https://github.com/mscdex/ssh2) server (not system `sshd`), so there is no OS user or `authorized_keys` file to manage: a presented key's `SHA256` fingerprint is matched against registered keys, the actor is resolved, and the transport shells out to `git-upload-pack` / `git-receive-pack` on the bare repo.
+
+**It is off by default.** The SSH front starts only when `FORGEHUB_SSH_PORT` is set (mirroring how the CI runner gates on `FORGEHUB_CI`). On first start it generates and persists an ed25519 **host key** under `<GIT_STORAGE_ROOT>-ssh/host_key`, reused across restarts so clients' `known_hosts` stay stable.
+
+| Env | Effect |
+|-----|--------|
+| `FORGEHUB_SSH_PORT` | Port for the SSH git transport. Unset ⇒ SSH disabled. |
+| `FORGEHUB_SSH_HOST` | Optional host shown in the web clone box's SSH URL. Unset ⇒ the browser's hostname is used. |
+
+Two credential kinds authenticate:
+
+- **User SSH keys** (`/user/keys`) authorize git as that user, with their full repo access — the same owner/collaborator checks as HTTPS.
+- **Deploy keys** (`/repos/:handle/:name/keys`, owner-managed) are scoped to a single repo for CI/automation. They are **read-only by default** and may push only when write is explicitly granted; a deploy key is refused on any other repo.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/keys` | List a repo's deploy keys (owner only) |
+| `POST` | `/repos/:handle/:name/keys` | Add a deploy key (`title`, `publicKey`, optional `readOnly`, default `true`) |
+| `DELETE` | `/repos/:handle/:name/keys/:id` | Remove a deploy key |
+
+SSH and HTTPS share **identical authorization and post-receive behavior**: a push over SSH runs the same branch-protection pre-receive hook and the same ingestion + webhook + CI fan-out as a push over HTTPS — the two transports are indistinguishable downstream. (v0 non-goals, as for PATs: SSH certificate authorities and per-key expiry.)
 
 ## Local development
 
