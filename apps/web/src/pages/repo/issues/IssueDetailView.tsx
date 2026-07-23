@@ -11,6 +11,7 @@ import {
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
+import { DesignsSection } from "./DesignsSection";
 import type { Issue, IssueComment, Label, Milestone, TimelineEvent, User } from "../../../types";
 import { StatePill, UserLink } from "./parts";
 import { SidebarLabels, SidebarAssignee, SidebarMilestone, SidebarTimeTracking } from "./Sidebar";
@@ -403,6 +404,17 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
               <p className="text-fh-sm text-fh-fg-muted italic">No description provided.</p>
             )}
           </TimelineCard>
+
+          {/* Designs (#121): attach + version design files, with FHR semantic diffs. */}
+          <DesignsSection
+            token={token}
+            handle={handle}
+            repoName={repoName}
+            number={number}
+            viewerHandle={user.handle}
+            canManageRepo={canManage}
+            onChanged={refreshTimeline}
+          />
 
           {stream.map((item) =>
             item.kind === "comment" ? (

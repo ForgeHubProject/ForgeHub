@@ -29,7 +29,10 @@ export type TimelineEventKind =
   | "transferred"
   // Milestones (#83)
   | "milestoned"
-  | "demilestoned";
+  | "demilestoned"
+  // Design management (#121)
+  | "design_added"
+  | "design_versioned";
 
 export type RecordEventParams = {
   repoId: string;

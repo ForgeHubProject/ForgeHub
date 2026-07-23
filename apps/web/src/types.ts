@@ -220,6 +220,42 @@ export function gltfChangeType(c: DiffChange): DiffChangeType {
   return "modified";
 }
 
+// ─── Design management (#121) ────────────────────────────────────────────────────
+
+/** One uploaded version of a design attached to an issue. */
+export type DesignVersion = {
+  version: number;
+  contentType: string;
+  size: number;
+  /** Carries an ingested entity tree (semantic-diff capable). */
+  hasSnapshot: boolean;
+  /** Renders inline as an image (visual-diff capable). */
+  isImage: boolean;
+  uploadedBy: string | null;
+  createdAt: string;
+};
+
+/** A design (named file) attached to an issue, with its version history. */
+export type Design = {
+  id: string;
+  name: string;
+  currentVersion: number;
+  /** The format has an FHR handler (semantic diffing available when ingested). */
+  semantic: boolean;
+  isImage: boolean;
+  createdBy: string | null;
+  createdAt: string;
+  versions: DesignVersion[];
+};
+
+/** Result of comparing two design versions — `mode` selects the render path. */
+export type DesignCompareResult =
+  | { mode: "semantic"; handlerId: string; format: string; version: string; from: number; to: number; changes: DiffChange[] }
+  | { mode: "visual"; from: DesignVersionRef; to: DesignVersionRef }
+  | { mode: "binary"; from: DesignVersionRef; to: DesignVersionRef };
+
+export type DesignVersionRef = { version: number; contentType: string; size: number };
+
 export type BranchInfo = {
   name: string;
   sha: string;

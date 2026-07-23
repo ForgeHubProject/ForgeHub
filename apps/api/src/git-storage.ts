@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -57,6 +57,57 @@ export function readAssetStream(key: string): ReadStream {
 /** Delete a stored asset (idempotent — missing files are ignored). */
 export async function removeAsset(key: string): Promise<void> {
   await rm(assetPathFromKey(key), { force: true });
+}
+
+// ─── design file storage (issue #121) ────────────────────────────────────────
+//
+// Design/artifact files attached to issues live under a sibling of the git storage
+// root (`<root>-designs`), mirroring the release-asset separation — never inside
+// the bare repos. A storage key is a relative path `<repoId>/<designId>/<version>`;
+// versions are immutable once written.
+
+function designsRoot(): string {
+  return `${path.resolve(storageRoot())}-designs`;
+}
+
+/** Build the relative storage key for one design version. */
+export function buildDesignStorageKey(repoId: string, designId: string, version: number): string {
+  return `${repoId}/${designId}/${version}`;
+}
+
+/** Resolve a design storage key to an absolute path, guarding against traversal. */
+export function designPathFromKey(key: string): string {
+  const root = path.resolve(designsRoot());
+  const full = path.resolve(root, key);
+  const rel = path.relative(root, full);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("Invalid design storage key path");
+  }
+  return full;
+}
+
+/** Stream design-file bytes to disk. Returns the number of bytes written. */
+export async function writeDesignStream(key: string, source: Readable): Promise<number> {
+  const full = designPathFromKey(key);
+  await mkdir(path.dirname(full), { recursive: true });
+  await pipeline(source, createWriteStream(full));
+  const st = await stat(full);
+  return st.size;
+}
+
+/** Open a readable stream over a stored design version. */
+export function readDesignStream(key: string): ReadStream {
+  return createReadStream(designPathFromKey(key));
+}
+
+/** Read a stored design version fully into a Buffer (for handler diff/ingest). */
+export async function readDesignBuffer(key: string): Promise<Buffer> {
+  return readFile(designPathFromKey(key));
+}
+
+/** Delete a stored design version (idempotent — missing files are ignored). */
+export async function removeDesign(key: string): Promise<void> {
+  await rm(designPathFromKey(key), { force: true });
 }
 
 // ─── CI (Actions) storage (issue #86) ────────────────────────────────────────

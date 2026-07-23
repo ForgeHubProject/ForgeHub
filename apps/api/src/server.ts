@@ -19,6 +19,7 @@ import { entityRoutes } from "./routes/entities.js";
 import { forkRoutes } from "./routes/forks.js";
 import { gitHttpRoutes } from "./routes/git-http.js";
 import { issueRoutes } from "./routes/issues.js";
+import { designRoutes } from "./routes/designs.js";
 import { labelRoutes } from "./routes/labels.js";
 import { milestoneRoutes } from "./routes/milestones.js";
 import { notificationRoutes } from "./routes/notifications.js";
@@ -134,6 +135,7 @@ export async function buildServer() {
   await app.register(releaseRoutes);
   await app.register(prCommentRoutes);
   await app.register(issueRoutes);
+  await app.register(designRoutes);
   await app.register(labelRoutes);
   await app.register(milestoneRoutes);
   await app.register(notificationRoutes);
