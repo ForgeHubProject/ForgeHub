@@ -63,6 +63,10 @@ function parseDueOn(raw: unknown): Date | null | undefined {
 }
 
 export async function milestoneRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to mutate; session/JWT auth is unscoped and
+  // no-ops this guard (issue #87). The route bodies keep their own canWrite check.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/milestones
   // Returns every milestone (client filters by the open/closed toggle) with its
   // progress, plus repo-wide open/closed milestone counts for the toggle.
@@ -126,7 +130,7 @@ export async function milestoneRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/milestones — writer-gated create.
-  app.post("/repos/:handle/:name/milestones", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/milestones", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -191,7 +195,7 @@ export async function milestoneRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/milestones/:number — writer-gated update.
-  app.patch("/repos/:handle/:name/milestones/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/milestones/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 
@@ -244,7 +248,7 @@ export async function milestoneRoutes(app: FastifyInstance) {
 
   // DELETE /repos/:handle/:name/milestones/:number — writer-gated. SetNull on the
   // schema clears associations; the issues/PRs themselves are untouched.
-  app.delete("/repos/:handle/:name/milestones/:number", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/milestones/:number", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
 

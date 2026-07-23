@@ -73,9 +73,17 @@ vi.mock("../prisma.js", () => ({
     timelineEvent: {
       findFirst: vi.fn(),
     },
+    personalAccessToken: { findUnique: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
+
+// Webhook side-channel: keep the real module (other exports feed server wiring) but
+// spy on emitRepoEvent so the issue/comment routes' emits are observable (#87 S5a/S5b).
+vi.mock("../webhook-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../webhook-service.js")>();
+  return { ...actual, emitRepoEvent: vi.fn().mockResolvedValue(undefined) };
+});
 
 vi.mock("../notifications-service.js", () => ({
   notifySubscribers: vi.fn().mockResolvedValue(undefined),
@@ -131,6 +139,8 @@ vi.mock("bcryptjs", () => ({
 
 import { prisma } from "../prisma.js";
 import { recordEvent } from "../timeline-service.js";
+import { emitRepoEvent } from "../webhook-service.js";
+import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -528,6 +538,63 @@ describe("POST /repos/:handle/:name/issues", () => {
   });
 });
 
+describe("POST /issues — webhook emit + PAT scope (wave-A S5a/D1)", () => {
+  const READ_PAT = "fhp_read_iss";
+  let app: FastifyInstance;
+  let authorToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    authorToken = await authHeader(app, AUTHOR_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+    vi.mocked(prisma.issue.count).mockResolvedValue(0 as never);
+    vi.mocked(prisma.issue.create).mockResolvedValue(makeIssue() as never);
+    // A repo:read PAT owned by the (reader) author: without the scope gate the
+    // create would succeed, so a 403 proves the gate — not lack of repo access.
+    vi.mocked(prisma.personalAccessToken.findUnique).mockImplementation(((args: { where: { tokenHash: string } }) =>
+      Promise.resolve(args.where.tokenHash === hashToken(READ_PAT)
+        ? { id: "pat-1", userId: AUTHOR_ID, scopes: "repo:read", expiresAt: null }
+        : null)) as never);
+    vi.mocked(prisma.personalAccessToken.update).mockResolvedValue({} as never);
+  });
+
+  it("emits issues.opened after creating an issue", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/issues",
+      headers: { authorization: authorToken }, payload: { title: "Fix the thing" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(emitRepoEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoId: "repo-issues-1", event: "issues", action: "opened", senderId: AUTHOR_ID,
+        subject: { number: 1, title: "Fix the thing" },
+      }),
+    );
+  });
+
+  it("403s a repo:read PAT creating an issue (session stays 2xx)", async () => {
+    const denied = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/issues",
+      headers: { authorization: `Bearer ${READ_PAT}` }, payload: { title: "Fix the thing" },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error).toContain("repo:write");
+    expect(prisma.issue.create).not.toHaveBeenCalled();
+
+    const ok = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/issues",
+      headers: { authorization: authorToken }, payload: { title: "Fix the thing" },
+    });
+    expect(ok.statusCode).toBe(201);
+  });
+});
+
 describe("GET /repos/:handle/:name/issues/:number", () => {
   let app: FastifyInstance;
 
@@ -757,6 +824,25 @@ describe("GET issues filtered by milestone", () => {
     expect(arg.where.milestone).toEqual({ title: "v1.0" });
   });
 
+  it("resolves a NUMBER milestone filter by per-repo number (wave-A D2)", async () => {
+    // The web serializes the filter by number; the resolver looks up the milestone
+    // and filters by its id.
+    vi.mocked(prisma.milestone.findFirst).mockResolvedValue({ id: "ms-3" } as never);
+    await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues?milestone=3&state=all" });
+    expect(vi.mocked(prisma.milestone.findFirst)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { repoId: "repo-issues-1", number: 3 } }),
+    );
+    const arg = vi.mocked(prisma.issue.findMany).mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(arg.where.milestoneId).toBe("ms-3");
+  });
+
+  it("falls back to a title match when a numeric value has no matching milestone number", async () => {
+    vi.mocked(prisma.milestone.findFirst).mockResolvedValue(null);
+    await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues?milestone=42&state=all" });
+    const arg = vi.mocked(prisma.issue.findMany).mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(arg.where.milestone).toEqual({ title: "42" });
+  });
+
   it("'none' filters to issues without a milestone", async () => {
     await app.inject({ method: "GET", url: "/repos/alice/my-repo/issues?milestone=none&state=all" });
     const arg = vi.mocked(prisma.issue.findMany).mock.calls[0][0] as { where: Record<string, unknown> };
@@ -880,6 +966,56 @@ describe("Comments on issues", () => {
       headers: { authorization: authorToken },
     });
     expect(res.statusCode).toBe(204);
+  });
+});
+
+// ─── issue_comment webhook (wave-A S5b) ─────────────────────────────────────────
+
+describe("issue_comment webhook emit", () => {
+  let app: FastifyInstance;
+  let authorToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    authorToken = await authHeader(app, AUTHOR_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(makeIssue() as never);
+    vi.mocked(prisma.issueComment.create).mockResolvedValue(makeComment() as never);
+  });
+
+  it("emits issue_comment.created for a real prose comment", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/issues/1/comments",
+      headers: { authorization: authorToken }, payload: { body: "Looks good to me" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(emitRepoEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoId: "repo-issues-1", event: "issue_comment", action: "created", senderId: AUTHOR_ID,
+        subject: {
+          issue: { number: 1, title: "Fix the thing" },
+          comment: { id: "comment-1", author: "dev" },
+        },
+      }),
+    );
+  });
+
+  it("does NOT emit issue_comment for a command-only body (no comment stored)", async () => {
+    // A body that is only a slash-command creates no comment, so nothing fires.
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/issues/1/comments",
+      headers: { authorization: authorToken }, payload: { body: "/frobnicate" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(prisma.issueComment.create).not.toHaveBeenCalled();
+    expect(vi.mocked(emitRepoEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "issue_comment" }),
+    );
   });
 });
 

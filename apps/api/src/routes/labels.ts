@@ -13,6 +13,10 @@ function formatLabel(label: { id: string; name: string; color: string; descripti
 }
 
 export async function labelRoutes(app: FastifyInstance) {
+  // A PAT must carry `repo:write` to mutate labels; session/JWT auth is unscoped
+  // and no-ops this guard (issue #87). Route bodies keep their canWrite check.
+  const write = app.requireScope("repo:write");
+
   // GET /repos/:handle/:name/labels
   app.get("/repos/:handle/:name/labels", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
@@ -30,7 +34,7 @@ export async function labelRoutes(app: FastifyInstance) {
   });
 
   // POST /repos/:handle/:name/labels
-  app.post("/repos/:handle/:name/labels", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.post("/repos/:handle/:name/labels", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = request.user.sub;
 
@@ -70,7 +74,7 @@ export async function labelRoutes(app: FastifyInstance) {
   });
 
   // PATCH /repos/:handle/:name/labels/:labelId
-  app.patch("/repos/:handle/:name/labels/:labelId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.patch("/repos/:handle/:name/labels/:labelId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, labelId } = request.params as { handle: string; name: string; labelId: string };
     const userId = request.user.sub;
 
@@ -107,7 +111,7 @@ export async function labelRoutes(app: FastifyInstance) {
   });
 
   // DELETE /repos/:handle/:name/labels/:labelId
-  app.delete("/repos/:handle/:name/labels/:labelId", { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.delete("/repos/:handle/:name/labels/:labelId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, labelId } = request.params as { handle: string; name: string; labelId: string };
     const userId = request.user.sub;
 

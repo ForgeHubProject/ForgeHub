@@ -616,13 +616,14 @@ function TopicsSection({ token, handle, repoName }: { token: string; handle: str
 
 const EVENT_OPTIONS: { value: WebhookEvent; label: string; hint: string }[] = [
   { value: "push", label: "Push", hint: "Commits pushed to any branch" },
-  { value: "issues", label: "Issues", hint: "Issue closed, reopened, labeled…" },
+  { value: "issues", label: "Issues", hint: "Issue opened, closed, reopened, labeled…" },
+  { value: "issue_comment", label: "Issue comments", hint: "A comment is added to an issue" },
   { value: "pull_request", label: "Pull requests", hint: "PR opened, closed, or merged" },
   { value: "release", label: "Releases", hint: "A release is published" },
 ];
 
 const EVENT_LABEL: Record<string, string> = {
-  "*": "all events", push: "push", issues: "issues", pull_request: "pull_request", release: "release",
+  "*": "all events", push: "push", issues: "issues", issue_comment: "issue_comment", pull_request: "pull_request", release: "release",
 };
 
 function eventChips(events: (WebhookEvent | "*")[]) {
@@ -699,7 +700,7 @@ function WebhookForm({ onSave, onCancel }: {
 }) {
   const [url, setUrl] = useState("");
   const [secret, setSecret] = useState("");
-  const [events, setEvents] = useState<WebhookEvent[]>(["push", "issues", "pull_request", "release"]);
+  const [events, setEvents] = useState<WebhookEvent[]>(["push", "issues", "issue_comment", "pull_request", "release"]);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
