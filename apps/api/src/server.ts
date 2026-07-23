@@ -37,6 +37,9 @@ import { tokenRoutes } from "./routes/tokens.js";
 import { timelineRoutes } from "./routes/timeline.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { ciRoutes } from "./routes/ci.js";
+import { userKeyRoutes } from "./routes/user-keys.js";
+import { deployKeyRoutes } from "./routes/deploy-keys.js";
+import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 
@@ -145,9 +148,21 @@ export async function buildServer() {
   await app.register(compositionRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
+  await app.register(userKeyRoutes);
+  await app.register(deployKeyRoutes);
 
   await app.register(projectRoutes);
   await app.register(gitHttpRoutes);
+
+  // SSH git transport (issue #116). Hard-off unless FORGEHUB_SSH_PORT is set; when
+  // started, it is torn down with the Fastify app so tests (and clean shutdowns)
+  // don't leak the listener.
+  const sshServer = await startSshServer(app);
+  if (sshServer) {
+    app.addHook("onClose", async () => {
+      await sshServer.close();
+    });
+  }
 
   return app;
 }

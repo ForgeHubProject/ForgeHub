@@ -49,6 +49,7 @@ model User {
   addedProjectItems ProjectItem[]             @relation("ProjectItemAddedBy")
   designs          Design[]                   @relation("DesignCreator")
   designVersions   DesignVersion[]            @relation("DesignVersionUploader")
+  sshKeys          SSHKey[]
 }
 
 model PersonalAccessToken {
@@ -100,6 +101,7 @@ model Repo {
   workflowRuns    WorkflowRun[]
 
   projects        Project[]
+  deployKeys      DeployKey[]
 
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
@@ -862,4 +864,47 @@ model DesignVersion {
   uploadedBy User      @relation("DesignVersionUploader", fields: [uploadedById], references: [id])
 
   @@unique([designId, version])
+}
+
+// ─── SSH keys + deploy keys + SSH git transport (issue #116) ──────────────────────
+//
+// Named, revocable public-key credentials, complementing the PAT/HTTPS path (#87)
+// with the same "named credential" UX over a different transport. A user's SSHKey
+// authorizes git-over-SSH as that user (their full repo access); a repo's DeployKey
+// is repo-scoped for CI/automation and honors `readOnly`. The SSH front
+// (src/ssh/server.ts) matches the presented public key's SHA256 fingerprint to one
+// of these rows, resolves the actor, and invokes upload-pack / receive-pack through
+// the SAME access checks + post-receive ingestion as git-http.ts. `fingerprint` is
+// unique per table AND deduped across both tables at insert time (a key can back at
+// most one credential anywhere). The stored `publicKey` is the normalized
+// "type base64" OpenSSH line — public by nature, so it is safe to return.
+
+model SSHKey {
+  id          String    @id @default(cuid())
+  userId      String
+  title       String
+  publicKey   String
+  fingerprint String    @unique
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model DeployKey {
+  id          String   @id @default(cuid())
+  repoId      String
+  title       String
+  publicKey   String
+  fingerprint String   @unique
+  // Read-only by default: a deploy key clones/pulls but cannot push unless a repo
+  // admin explicitly grants write. Enforced identically to git-http's canWrite.
+  readOnly    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
 }
