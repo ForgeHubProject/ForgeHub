@@ -1,5 +1,6 @@
 import type {
-  BlameHunk, BranchInfo, CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
+  BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules,
+  CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
   Issue, IssueComment, Label, Milestone, Notification, PatScope, PersonalAccessToken, PRFileEntry,
   ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType, ProjectSummary,
   PublicProfile, PullRequest, RefCompareResult,
@@ -375,6 +376,45 @@ export async function deleteBranch(
   branch: string,
 ): Promise<void> {
   return req(`/repos/${handle}/${repoName}/branches/${encodeURIComponent(branch)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+// ─── branch protection (issue #85) ──────────────────────────────────────────────────────
+
+export async function getBranchProtection(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  branch: string,
+): Promise<BranchProtection> {
+  return req(`/repos/${handle}/${repoName}/branches/${encodeURIComponent(branch)}/protection`, {
+    token: token ?? undefined,
+  });
+}
+
+export async function putBranchProtection(
+  token: string,
+  handle: string,
+  repoName: string,
+  branch: string,
+  rules: BranchProtectionRules,
+): Promise<{ branch: string; protected: boolean; rules: BranchProtectionRules }> {
+  return req(`/repos/${handle}/${repoName}/branches/${encodeURIComponent(branch)}/protection`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(rules),
+  });
+}
+
+export async function deleteBranchProtection(
+  token: string,
+  handle: string,
+  repoName: string,
+  branch: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/branches/${encodeURIComponent(branch)}/protection`, {
     method: "DELETE",
     token,
   });
