@@ -9,6 +9,13 @@ vi.mock("../prisma.js", () => ({
       findUnique: vi.fn(),
       findUniqueOrThrow: vi.fn(),
     },
+    // Login/register record a Session (issue #117); return a stable id so the
+    // handler can embed it in the JWT's `sid` claim.
+    session: {
+      create: vi.fn().mockResolvedValue({ id: "sess-test" }),
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 

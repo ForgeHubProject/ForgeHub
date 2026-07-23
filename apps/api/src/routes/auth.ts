@@ -1,7 +1,23 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma.js";
 import { loginBodySchema, registerBodySchema } from "../validation.js";
+
+/**
+ * Record an interactive-login Session (issue #117) and mint a JWT that carries
+ * its id as the `sid` claim, so the login can later be listed and revoked. The
+ * device/UA and IP are captured best-effort for the sessions settings page.
+ */
+async function issueSessionToken(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  userId: string,
+): Promise<string> {
+  const userAgent = (request.headers["user-agent"] ?? "").slice(0, 512) || null;
+  const ip = request.ip || null;
+  const session = await prisma.session.create({ data: { userId, userAgent, ip } });
+  return reply.jwtSign({ sub: userId, sid: session.id });
+}
 
 type DbUser = {
   id: string; email: string; handle: string; displayName: string | null;
@@ -50,7 +66,7 @@ export async function authRoutes(app: FastifyInstance) {
       const user = await prisma.user.create({
         data: { email, handle, passwordHash, displayName: parsed.data.displayName?.trim() || null },
       });
-      const token = await reply.jwtSign({ sub: user.id });
+      const token = await issueSessionToken(request, reply, user.id);
       return reply.status(201).send({ user: publicUser(user), token });
     } catch (e: unknown) {
       if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
@@ -72,7 +88,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(401).send({ error: "Invalid email or password" });
     }
 
-    const token = await reply.jwtSign({ sub: user.id });
+    const token = await issueSessionToken(request, reply, user.id);
     return { user: publicUser(user), token };
   });
 
