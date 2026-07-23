@@ -781,26 +781,30 @@ function WebhookRow({ token, handle, repoName, hook, onChange, onDelete }: {
 
   return (
     <div>
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className={cx("shrink-0", hook.active ? "text-fh-success-fg" : "text-fh-fg-subtle")}>
-          <Icon path={WEBHOOK} size={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-fh-sm font-mono text-fh-fg truncate">{hook.url}</p>
-          <p className="text-fh-xs text-fh-fg-muted mt-0.5 flex items-center gap-1 flex-wrap">
-            {eventChips(hook.events).map((e) => (
-              <span key={e} className="inline-flex rounded-full bg-fh-surface-muted px-1.5 py-0.5 font-mono">{e}</span>
-            ))}
-          </p>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <span className={cx("shrink-0 mt-0.5", hook.active ? "text-fh-success-fg" : "text-fh-fg-subtle")}>
+            <Icon path={WEBHOOK} size={18} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-fh-sm font-mono text-fh-fg break-all">{hook.url}</p>
+            <p className="text-fh-xs text-fh-fg-muted mt-0.5 flex items-center gap-1 flex-wrap">
+              {eventChips(hook.events).map((e) => (
+                <span key={e} className="inline-flex rounded-full bg-fh-surface-muted px-1.5 py-0.5 font-mono">{e}</span>
+              ))}
+            </p>
+          </div>
         </div>
-        {hook.active ? <Badge tone="success">Active</Badge> : <Badge tone="neutral">Inactive</Badge>}
-        <Button variant="default" size="sm" loading={toggling} onClick={() => void toggleActive()}>
-          {hook.active ? "Disable" : "Enable"}
-        </Button>
-        <Button variant="invisible" size="sm" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Hide" : "Deliveries"}
-        </Button>
-        <Button variant="danger" size="sm" onClick={() => onDelete(hook)}>Delete</Button>
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
+          {hook.active ? <Badge tone="success">Active</Badge> : <Badge tone="neutral">Inactive</Badge>}
+          <Button variant="default" size="sm" loading={toggling} onClick={() => void toggleActive()}>
+            {hook.active ? "Disable" : "Enable"}
+          </Button>
+          <Button variant="invisible" size="sm" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Hide" : "Deliveries"}
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => onDelete(hook)}>Delete</Button>
+        </div>
       </div>
       {expanded && (
         <div className="border-t border-fh-border bg-fh-surface-inset/40">
