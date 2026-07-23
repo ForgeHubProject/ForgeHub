@@ -1,12 +1,13 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
-  CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult, DesignVersion,
-  DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment, Label, Milestone,
-  Notification, PRFileEntry, PatScope, PersonalAccessToken, ProjectColumn, ProjectDetail,
-  ProjectItem, ProjectSubjectType, ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult,
-  Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SessionInfo,
-  SavedFilter, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, TimelineEvent, TreeEntry,
-  User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
+  DesignVersion, DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
+  PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
+  ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult, Release,
+  ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
+  TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -185,11 +186,13 @@ export async function createRepo(
   name: string,
   description: string | undefined,
   visibility: "public" | "private",
+  /** Optional owning namespace (issue #114): an org handle to create the repo in. */
+  owner?: string,
 ): Promise<Repo> {
   return req("/repos", {
     method: "POST",
     token,
-    body: JSON.stringify({ name, description: description || undefined, visibility }),
+    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined }),
   });
 }
 
@@ -2127,4 +2130,88 @@ export async function getContributions(
   if (to) qs.set("to", to);
   const q = qs.toString() ? `?${qs}` : "";
   return req(`/users/${handle}/contributions${q}`, { token: token ?? undefined });
+}
+
+// ─── Organizations & teams (issue #114) ──────────────────────────────────────
+
+export async function createOrg(
+  token: string,
+  input: { handle: string; displayName?: string; description?: string },
+): Promise<Organization> {
+  return req("/orgs", { method: "POST", token, body: JSON.stringify(input) });
+}
+
+/** Orgs the caller belongs to — feeds the create-repo namespace picker. */
+export async function getMyOrgs(token: string): Promise<{ orgs: Organization[] }> {
+  return req("/orgs/mine", { token });
+}
+
+export async function getOrg(token: string | null, handle: string): Promise<OrgProfile> {
+  return req(`/orgs/${handle}`, { token: token ?? undefined });
+}
+
+export async function updateOrg(
+  token: string,
+  handle: string,
+  patch: { displayName?: string; description?: string | null },
+): Promise<Organization> {
+  return req(`/orgs/${handle}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+export async function addOrgMember(
+  token: string,
+  handle: string,
+  input: { handle: string; role?: OrgRole },
+): Promise<void> {
+  return req(`/orgs/${handle}/members`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function updateOrgMember(
+  token: string,
+  handle: string,
+  memberHandle: string,
+  role: OrgRole,
+): Promise<void> {
+  return req(`/orgs/${handle}/members/${memberHandle}`, { method: "PATCH", token, body: JSON.stringify({ role }) });
+}
+
+export async function removeOrgMember(token: string, handle: string, memberHandle: string): Promise<void> {
+  return req(`/orgs/${handle}/members/${memberHandle}`, { method: "DELETE", token });
+}
+
+export async function getOrgTeams(token: string, handle: string): Promise<{ teams: Team[] }> {
+  return req(`/orgs/${handle}/teams`, { token });
+}
+
+export async function createTeam(
+  token: string,
+  handle: string,
+  input: { name: string; slug?: string },
+): Promise<Team> {
+  return req(`/orgs/${handle}/teams`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function deleteTeam(token: string, handle: string, slug: string): Promise<void> {
+  return req(`/orgs/${handle}/teams/${slug}`, { method: "DELETE", token });
+}
+
+export async function addTeamMember(token: string, handle: string, slug: string, memberHandle: string): Promise<Team> {
+  return req(`/orgs/${handle}/teams/${slug}/members`, { method: "POST", token, body: JSON.stringify({ handle: memberHandle }) });
+}
+
+export async function removeTeamMember(token: string, handle: string, slug: string, memberHandle: string): Promise<void> {
+  return req(`/orgs/${handle}/teams/${slug}/members/${memberHandle}`, { method: "DELETE", token });
+}
+
+export async function grantTeamRepo(
+  token: string,
+  handle: string,
+  slug: string,
+  input: { repo: string; role: "READER" | "WRITER" },
+): Promise<Team> {
+  return req(`/orgs/${handle}/teams/${slug}/repos`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export async function revokeTeamRepo(token: string, handle: string, slug: string, repoName: string): Promise<void> {
+  return req(`/orgs/${handle}/teams/${slug}/repos/${repoName}`, { method: "DELETE", token });
 }

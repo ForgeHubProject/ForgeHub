@@ -124,6 +124,7 @@ export function Header({ user, onLogout, token }: Props) {
           </div>
           <DropdownItem onSelect={() => navigate(`/${user.handle}`)}>Your profile</DropdownItem>
           <DropdownItem onSelect={() => navigate("/")}>Your repositories</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
           <DropdownItem onSelect={() => navigate("/notifications")}>
             Notifications
             {unreadCount > 0 && (
