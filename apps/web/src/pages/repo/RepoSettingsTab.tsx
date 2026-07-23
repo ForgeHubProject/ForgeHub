@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, Collaborator, createLabel, createWebhook, deleteLabel, deleteWebhook,
-  getRepo, getTopics, listCollaborators, listLabels, listWebhooks, listWebhookDeliveries,
-  redeliverWebhookDelivery, removeCollaborator, updateLabel, updateTopics, updateWebhook,
+  addCollaborator, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteLabel, deleteWebhook,
+  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listLabels, listWebhooks, listWebhookDeliveries,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, updateLabel, updateTopics, updateWebhook,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
-import type { Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent } from "../../types";
+import type {
+  BranchInfo, BranchProtectionRules, Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
+} from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
   RelativeTime, Select, Skeleton, Spinner, TextInput, cx, useToast,
@@ -33,6 +35,7 @@ const LABEL = "M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25
 const BOOKMARK = "M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 01-1.227.579L8 11.722l-3.773 3.107A.751.751 0 013 14.25V2.75zm1.75-.25a.25.25 0 00-.25.25v9.91l3.023-2.489a.75.75 0 01.954 0l3.023 2.49V2.75a.25.25 0 00-.25-.25h-6.5z";
 const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
 const WEBHOOK = "M8.5 4.5a1.5 1.5 0 00-1.415 2A.75.75 0 015.67 7.003 3 3 0 118.5 9c-.257 0-.505-.032-.742-.093l-1.86 3.196A2.5 2.5 0 114.5 11.5c.086 0 .17.004.253.013l.867-1.49A.75.75 0 016.914 10.8l-.867 1.49c.257.27.453.6.567.966H10.5a.75.75 0 010 1.5H6.61a2.5 2.5 0 11-1.06-4.386l1.767-3.037A.75.75 0 017.9 6.976 1.5 1.5 0 108.5 4.5zm-4 7.5a1 1 0 100 2 1 1 0 000-2zm7.5-1.5a2.5 2.5 0 10-2.45 2.5.75.75 0 000-1.5A1 1 0 1112 10.5a.75.75 0 001.5 0z";
+const BRANCH = "M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z";
 
 /** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
 function normalizeTopic(raw: string): string {
@@ -912,6 +915,242 @@ function WebhooksSection({ token, handle, repoName }: { token: string; handle: s
   );
 }
 
+// ── Branch protection (issue #85) ───────────────────────────────────────────────
+
+const EMPTY_RULES: BranchProtectionRules = {
+  requirePullRequest: false,
+  requiredApprovals: 0,
+  requireGreenChecks: false,
+  blockForcePush: false,
+};
+
+function RuleToggle({ checked, onChange, label, hint }: {
+  checked: boolean; onChange: (v: boolean) => void; label: string; hint: string;
+}) {
+  return (
+    <label className="flex items-start gap-2.5 rounded-md border border-fh-border px-3 py-2.5 cursor-pointer hover:bg-fh-surface-muted">
+      <input type="checkbox" className="mt-0.5 accent-fh-accent-emphasis" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="min-w-0">
+        <span className="block text-fh-sm font-medium text-fh-fg">{label}</span>
+        <span className="block text-fh-xs text-fh-fg-muted">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+/** Inline editor for one branch's protection rules (owner-gated by the caller). */
+function ProtectionEditor({ token, handle, repoName, branch, wasProtected, onDone }: {
+  token: string; handle: string; repoName: string; branch: string;
+  wasProtected: boolean; onDone: (next: { protected: boolean; rules: BranchProtectionRules }) => void;
+}) {
+  const [rules, setRules] = useState<BranchProtectionRules>(EMPTY_RULES);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    let live = true;
+    getBranchProtection(token, handle, repoName, branch)
+      .then((d) => { if (live) setRules(d.rules); })
+      .catch(() => {})
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [token, handle, repoName, branch]);
+
+  function set<K extends keyof BranchProtectionRules>(key: K, value: BranchProtectionRules[K]) {
+    setRules((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const d = await putBranchProtection(token, handle, repoName, branch, rules);
+      toast(`Protection saved for ${branch}`, { tone: "success" });
+      onDone({ protected: d.protected, rules: d.rules });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save protection");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setRemoving(true);
+    setError(null);
+    try {
+      await deleteBranchProtection(token, handle, repoName, branch);
+      toast(`Protection removed from ${branch}`, { tone: "success" });
+      onDone({ protected: false, rules: EMPTY_RULES });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove protection");
+      setRemoving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="px-4 py-4 space-y-2">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 py-4 space-y-3 bg-fh-surface-inset/40">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <RuleToggle
+          checked={rules.requirePullRequest}
+          onChange={(v) => set("requirePullRequest", v)}
+          label="Require a pull request before merging"
+          hint="Blocks direct pushes to this branch — changes must land through a PR."
+        />
+        <RuleToggle
+          checked={rules.blockForcePush}
+          onChange={(v) => set("blockForcePush", v)}
+          label="Block force pushes"
+          hint="Rejects non-fast-forward (history-rewriting) pushes to this branch."
+        />
+        <RuleToggle
+          checked={rules.requireGreenChecks}
+          onChange={(v) => set("requireGreenChecks", v)}
+          label="Require status checks to pass"
+          hint="Blocks the merge until the head commit's checks are green (inert until CI is configured)."
+        />
+        <div className="rounded-md border border-fh-border px-3 py-2.5">
+          <Field label="Required approving reviews" hint="Non-stale approvals needed to merge (0 = no approval gate).">
+            {(id) => (
+              <TextInput
+                id={id}
+                type="number"
+                min={0}
+                max={20}
+                className="w-24"
+                value={String(rules.requiredApprovals)}
+                onChange={(e) => {
+                  const n = Math.max(0, Math.min(20, Math.floor(Number(e.target.value) || 0)));
+                  set("requiredApprovals", n);
+                }}
+              />
+            )}
+          </Field>
+        </div>
+      </div>
+
+      {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-fh-border">
+        {wasProtected ? (
+          <Button variant="danger" size="sm" loading={removing} disabled={saving} onClick={() => void remove()}>
+            Remove protection
+          </Button>
+        ) : (
+          <span className="text-fh-xs text-fh-fg-subtle">
+            A protected branch cannot be deleted, even with no rules enabled.
+          </span>
+        )}
+        <Button variant="primary" size="sm" loading={saving} disabled={removing} onClick={() => void save()}>
+          {wasProtected ? "Save changes" : "Protect branch"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function BranchesSection({ token, handle, repoName, isOwner }: {
+  token: string; handle: string; repoName: string; isOwner: boolean;
+}) {
+  const [branches, setBranches] = useState<BranchInfo[] | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBranches(null);
+    listBranches(token, handle, repoName)
+      .then((d) => setBranches(d.branches))
+      .catch(() => setBranches([]));
+  }, [token, handle, repoName]);
+
+  function applyChange(branch: string, next: { protected: boolean }) {
+    setBranches((prev) =>
+      prev ? prev.map((b) => (b.name === branch ? { ...b, protected: next.protected } : b)) : prev,
+    );
+    setEditing(null);
+  }
+
+  return (
+    <div>
+      <SectionHeader
+        title="Branch protection"
+        description="Protect branches with enforced rules — require pull requests, approvals, or green checks, and block force-pushes."
+      />
+
+      {!isOwner && (
+        <p className="mb-4 text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          Only the repository owner can change branch protection.
+        </p>
+      )}
+
+      {branches === null ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton variant="block" width={16} height={16} className="rounded" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
+        </div>
+      ) : branches.length === 0 ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState icon={<Icon path={BRANCH} size={28} />} title="No branches yet"
+            description="Push a branch to this repository to configure protection." />
+        </div>
+      ) : (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {branches.map((b) => {
+            const isEditing = editing === b.name;
+            return (
+              <div key={b.name}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <span className="shrink-0 text-fh-fg-muted"><Icon path={BRANCH} size={16} /></span>
+                  <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+                    <span className="text-fh-sm font-mono font-medium text-fh-fg truncate">{b.name}</span>
+                    {b.isDefault && <Badge tone="accent">default</Badge>}
+                    {b.protected && <Badge tone="success">protected</Badge>}
+                  </div>
+                  {isOwner && (
+                    <Button
+                      variant={isEditing ? "invisible" : "default"}
+                      size="sm"
+                      onClick={() => setEditing(isEditing ? null : b.name)}
+                    >
+                      {isEditing ? "Cancel" : b.protected ? "Edit" : "Protect"}
+                    </Button>
+                  )}
+                </div>
+                {isEditing && isOwner && (
+                  <div className="border-t border-fh-border">
+                    <ProtectionEditor
+                      token={token}
+                      handle={handle}
+                      repoName={repoName}
+                      branch={b.name}
+                      wasProtected={b.protected}
+                      onDone={(next) => applyChange(b.name, next)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
 function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
@@ -979,16 +1218,20 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "topics" | "collaborators" | "labels" | "webhooks" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "branches" | "labels" | "webhooks" | "danger";
 
-export function RepoSettingsTab({ token, handle, repoName }: Props) {
+export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
   const fullName = `${handle}/${repoName}`;
+  // Repos are namespaced under their owner's handle, so the URL handle IS the
+  // owner — the owner-gated protection controls key off this.
+  const isOwner = user.handle.toLowerCase() === handle.toLowerCase();
 
   const nav: { key: SectionKey; label: string; icon: string; danger?: boolean }[] = [
     { key: "general", label: "General", icon: GEAR },
     { key: "topics", label: "Topics", icon: BOOKMARK },
     { key: "collaborators", label: "Collaborators", icon: PEOPLE },
+    { key: "branches", label: "Branches", icon: BRANCH },
     { key: "labels", label: "Labels", icon: LABEL },
     { key: "webhooks", label: "Webhooks", icon: WEBHOOK },
     { key: "danger", label: "Danger zone", icon: ALERT, danger: true },
@@ -1033,6 +1276,7 @@ export function RepoSettingsTab({ token, handle, repoName }: Props) {
         {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} />}
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
+        {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
         {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}
