@@ -6,6 +6,7 @@ import {
   buildAssetStorageKey, writeAssetStream, readAssetStream, removeAsset,
 } from "../git-storage.js";
 import { notifySubscribers } from "../notifications-service.js";
+import { emitRepoEvent } from "../webhook-service.js";
 
 const assetInclude = { uploadedBy: { select: { handle: true } } } as const;
 const releaseInclude = {
@@ -191,6 +192,10 @@ export async function releaseRoutes(app: FastifyInstance) {
 
     if (!isDraft) {
       void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "RELEASE", subjectId: release.id, subjectTitle: release.name, reason: "SUBSCRIBED" });
+      void emitRepoEvent({
+        repoId: repo.id, event: "release", action: "published", senderId: userId,
+        subject: { tagName: release.tagName, name: release.name, isPrerelease: release.isPrerelease, body: release.body },
+      });
     }
 
     return reply.status(201).send(formatRelease(release));

@@ -11,12 +11,42 @@ export type User = {
   createdAt?: string;
 };
 
+/** v0 PAT scopes (issue #87). `admin` ⊇ `repo:write` ⊇ `repo:read`. */
+export type PatScope = "repo:read" | "repo:write" | "admin";
+
 export type PersonalAccessToken = {
   id: string;
   name: string;
   prefix: string;
+  scopes: PatScope[];
   expiresAt: string | null;
   lastUsedAt: string | null;
+  createdAt: string;
+};
+
+// ─── Outbound webhooks (issue #87) ────────────────────────────────────────────
+
+/** Subscribable webhook events shown as checkboxes; "*" means all. */
+export type WebhookEvent = "push" | "issues" | "pull_request" | "release";
+
+export type Webhook = {
+  id: string;
+  url: string;
+  /** Subscribed events, or ["*"] for all. */
+  events: (WebhookEvent | "*")[];
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WebhookDelivery = {
+  id: string;
+  event: string;
+  statusCode: number | null;
+  ok: boolean;
+  durationMs: number;
+  error: string | null;
+  redeliveredFromId: string | null;
   createdAt: string;
 };
 

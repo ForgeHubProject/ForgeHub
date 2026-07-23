@@ -34,6 +34,9 @@ import { compositionRoutes } from "./routes/composition.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
 import { timelineRoutes } from "./routes/timeline.js";
+import { webhookRoutes } from "./routes/webhooks.js";
+import { resolvePatBearer } from "./pat-auth.js";
+import { hasScope, type PatScope } from "./scopes.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -54,14 +57,26 @@ export async function buildServer() {
     limits: { fileSize: maxAssetBytes, files: 1 },
   });
 
+  // Every request starts unscoped; the PAT paths below stamp the token's scopes.
+  // null ⇒ session/JWT (or guest) ⇒ full power, so `requireScope` is a no-op.
+  app.decorateRequest("patScopes", null);
+
   app.decorate(
     "authenticate",
     async function authenticate(request: FastifyRequest, reply: FastifyReply) {
       try {
         await request.jwtVerify();
+        return; // session/JWT — unscoped, full access
       } catch {
-        return reply.status(401).send({ error: "Unauthorized" });
+        // Not a valid session JWT — fall through to Personal Access Token auth.
       }
+      const pat = await resolvePatBearer(request);
+      if (pat) {
+        request.user = { sub: pat.userId };
+        request.patScopes = pat.scopes;
+        return;
+      }
+      return reply.status(401).send({ error: "Unauthorized" });
     },
   );
 
@@ -70,11 +85,31 @@ export async function buildServer() {
     async function optionalAuthenticate(request: FastifyRequest) {
       try {
         await request.jwtVerify();
+        return;
       } catch {
-        // guest — private routes must use `authenticate` instead
+        // Not a session JWT — try a PAT, else treat as guest.
       }
+      const pat = await resolvePatBearer(request);
+      if (pat) {
+        request.user = { sub: pat.userId };
+        request.patScopes = pat.scopes;
+      }
+      // guest — private routes must use `authenticate` instead
     },
   );
+
+  // PreHandler factory. A session/JWT (patScopes null) always passes; a PAT must
+  // carry the required scope (issue #87). Consulted by write-gated (repo:write)
+  // and settings/token (admin) routes.
+  app.decorate("requireScope", function requireScope(scope: PatScope) {
+    return async function scopeGuard(request: FastifyRequest, reply: FastifyReply) {
+      const scopes = request.patScopes;
+      if (scopes === null || scopes === undefined) return; // session — full access
+      if (!hasScope(scopes, scope)) {
+        return reply.status(403).send({ error: `Token is missing the '${scope}' scope` });
+      }
+    };
+  });
 
   app.get("/health", async () => ({ ok: true }));
 
@@ -105,6 +140,8 @@ export async function buildServer() {
   await app.register(searchRoutes);
   await app.register(topicRoutes);
   await app.register(compositionRoutes);
+  await app.register(webhookRoutes);
+
   await app.register(projectRoutes);
   await app.register(gitHttpRoutes);
 

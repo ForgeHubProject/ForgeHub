@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import {
-  addCollaborator, Collaborator, createLabel, deleteLabel, getRepo, getTopics,
-  listCollaborators, listLabels, removeCollaborator, updateLabel, updateTopics,
+  addCollaborator, Collaborator, createLabel, createWebhook, deleteLabel, deleteWebhook,
+  getRepo, getTopics, listCollaborators, listLabels, listWebhooks, listWebhookDeliveries,
+  redeliverWebhookDelivery, removeCollaborator, updateLabel, updateTopics, updateWebhook,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
-import type { Label, Repo, SearchUserResult, User } from "../../types";
+import type { Label, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
-  RelativeTime, Select, Skeleton, TextInput, cx, useToast,
+  RelativeTime, Select, Skeleton, Spinner, TextInput, cx, useToast,
 } from "../../ui";
 
 type Props = {
@@ -31,6 +32,7 @@ const PEOPLE = "M5.5 3.5a2 2 0 100 4 2 2 0 000-4zM2 5.5a3.5 3.5 0 115.898 2.549 
 const LABEL = "M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25 6.25a.25.25 0 010 .354l-5.025 5.025a.25.25 0 01-.354 0l-6.25-6.25a.25.25 0 01-.073-.177zm-1.5 0V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 010 2.474l-5.026 5.026a1.75 1.75 0 01-2.474 0l-6.25-6.25A1.75 1.75 0 011 7.775zM6 5a1 1 0 100 2 1 1 0 000-2z";
 const BOOKMARK = "M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 01-1.227.579L8 11.722l-3.773 3.107A.751.751 0 013 14.25V2.75zm1.75-.25a.25.25 0 00-.25.25v9.91l3.023-2.489a.75.75 0 01.954 0l3.023 2.49V2.75a.25.25 0 00-.25-.25h-6.5z";
 const ALERT = "M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575zm1.763.707a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368zm.53 3.996v2.5a.75.75 0 01-1.5 0v-2.5a.75.75 0 011.5 0zM9 11a1 1 0 11-2 0 1 1 0 012 0z";
+const WEBHOOK = "M8.5 4.5a1.5 1.5 0 00-1.415 2A.75.75 0 015.67 7.003 3 3 0 118.5 9c-.257 0-.505-.032-.742-.093l-1.86 3.196A2.5 2.5 0 114.5 11.5c.086 0 .17.004.253.013l.867-1.49A.75.75 0 016.914 10.8l-.867 1.49c.257.27.453.6.567.966H10.5a.75.75 0 010 1.5H6.61a2.5 2.5 0 11-1.06-4.386l1.767-3.037A.75.75 0 017.9 6.976 1.5 1.5 0 108.5 4.5zm-4 7.5a1 1 0 100 2 1 1 0 000-2zm7.5-1.5a2.5 2.5 0 10-2.45 2.5.75.75 0 000-1.5A1 1 0 1112 10.5a.75.75 0 001.5 0z";
 
 /** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
 function normalizeTopic(raw: string): string {
@@ -610,6 +612,305 @@ function TopicsSection({ token, handle, repoName }: { token: string; handle: str
   );
 }
 
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+
+const EVENT_OPTIONS: { value: WebhookEvent; label: string; hint: string }[] = [
+  { value: "push", label: "Push", hint: "Commits pushed to any branch" },
+  { value: "issues", label: "Issues", hint: "Issue closed, reopened, labeled…" },
+  { value: "pull_request", label: "Pull requests", hint: "PR opened, closed, or merged" },
+  { value: "release", label: "Releases", hint: "A release is published" },
+];
+
+const EVENT_LABEL: Record<string, string> = {
+  "*": "all events", push: "push", issues: "issues", pull_request: "pull_request", release: "release",
+};
+
+function eventChips(events: (WebhookEvent | "*")[]) {
+  if (events.includes("*")) return ["all events"];
+  return events.map((e) => EVENT_LABEL[e] ?? e);
+}
+
+/** A delivery's HTTP status as a colored chip. */
+function DeliveryStatusChip({ d }: { d: WebhookDelivery }) {
+  if (d.ok) return <Badge tone="success">{d.statusCode ?? "OK"}</Badge>;
+  if (d.statusCode != null) return <Badge tone="danger">{d.statusCode}</Badge>;
+  return <Badge tone="danger">failed</Badge>;
+}
+
+function DeliveriesPanel({ token, handle, repoName, hookId }: {
+  token: string; handle: string; repoName: string; hookId: string;
+}) {
+  const [deliveries, setDeliveries] = useState<WebhookDelivery[] | null>(null);
+  const [redelivering, setRedelivering] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  function load() {
+    listWebhookDeliveries(token, handle, repoName, hookId)
+      .then((d) => setDeliveries(d.deliveries))
+      .catch(() => setDeliveries([]));
+  }
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [token, handle, repoName, hookId]);
+
+  async function redeliver(id: string) {
+    setRedelivering(id);
+    try {
+      await redeliverWebhookDelivery(token, handle, repoName, hookId, id);
+      toast("Redelivered", { tone: "success" });
+      load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Redeliver failed", { tone: "danger" });
+    } finally {
+      setRedelivering(null);
+    }
+  }
+
+  if (deliveries === null) {
+    return <div className="px-4 py-3 flex items-center gap-2 text-fh-sm text-fh-fg-muted"><Spinner size={14} /> Loading recent deliveries…</div>;
+  }
+  if (deliveries.length === 0) {
+    return <p className="px-4 py-3 text-fh-sm text-fh-fg-subtle italic">No deliveries yet. Trigger a subscribed event to see attempts here.</p>;
+  }
+  return (
+    <ul className="divide-y divide-fh-border">
+      {deliveries.map((d) => (
+        <li key={d.id} className="flex items-center gap-3 px-4 py-2.5">
+          <DeliveryStatusChip d={d} />
+          <div className="min-w-0 flex-1">
+            <p className="text-fh-sm text-fh-fg flex items-center gap-1.5 flex-wrap">
+              <code className="font-mono text-fh-xs bg-fh-surface-muted rounded px-1.5 py-0.5">{d.event}</code>
+              {d.redeliveredFromId && <Badge tone="neutral">redelivered</Badge>}
+              <span className="text-fh-xs text-fh-fg-subtle">{d.durationMs}ms · <RelativeTime date={d.createdAt} /></span>
+            </p>
+            {d.error && <p className="text-fh-xs text-fh-danger-fg truncate" title={d.error}>{d.error}</p>}
+          </div>
+          <Button variant="invisible" size="sm" loading={redelivering === d.id} onClick={() => void redeliver(d.id)}>
+            Redeliver
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function WebhookForm({ onSave, onCancel }: {
+  onSave: (input: { url: string; secret: string; events: WebhookEvent[]; active: boolean }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [secret, setSecret] = useState("");
+  const [events, setEvents] = useState<WebhookEvent[]>(["push", "issues", "pull_request", "release"]);
+  const [active, setActive] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggleEvent(e: WebhookEvent) {
+    setEvents((prev) => (prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]));
+  }
+
+  async function submit(ev: React.FormEvent) {
+    ev.preventDefault();
+    if (!url.trim() || !secret.trim() || events.length === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({ url: url.trim(), secret: secret.trim(), events, active });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create webhook");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-4 mb-4">
+      <p className="text-fh-sm font-semibold text-fh-fg">Add a webhook</p>
+      <Field label="Payload URL" required hint="We POST a signed JSON body here. Private/loopback targets are blocked unless the instance allows them.">
+        {(id) => <TextInput id={id} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/hook" autoComplete="off" />}
+      </Field>
+      <Field label="Secret" required hint="Signs the X-ForgeHub-Signature-256 header (HMAC-SHA256). Stored write-only.">
+        {(id) => <TextInput id={id} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="a strong shared secret" autoComplete="off" />}
+      </Field>
+      <div>
+        <p className="text-fh-sm font-semibold text-fh-fg mb-2">Events</p>
+        <div className="grid sm:grid-cols-2 gap-2">
+          {EVENT_OPTIONS.map((opt) => (
+            <label key={opt.value} className="flex items-start gap-2 rounded-md border border-fh-border px-3 py-2 cursor-pointer hover:bg-fh-surface-muted">
+              <input type="checkbox" className="mt-0.5 accent-fh-accent-emphasis" checked={events.includes(opt.value)} onChange={() => toggleEvent(opt.value)} />
+              <span className="min-w-0">
+                <span className="block text-fh-sm font-medium text-fh-fg">{opt.label}</span>
+                <span className="block text-fh-xs text-fh-fg-muted">{opt.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" className="accent-fh-accent-emphasis" checked={active} onChange={(e) => setActive(e.target.checked)} />
+        <span className="text-fh-sm text-fh-fg">Active — deliver events immediately</span>
+      </label>
+      {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+      <div className="flex justify-end gap-2 pt-1 border-t border-fh-border">
+        <Button variant="default" onClick={onCancel} disabled={saving}>Cancel</Button>
+        <Button variant="primary" type="submit" loading={saving} disabled={!url.trim() || !secret.trim() || events.length === 0}>
+          Add webhook
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function WebhookRow({ token, handle, repoName, hook, onChange, onDelete }: {
+  token: string; handle: string; repoName: string; hook: Webhook;
+  onChange: (h: Webhook) => void; onDelete: (h: Webhook) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const { toast } = useToast();
+
+  async function toggleActive() {
+    setToggling(true);
+    try {
+      const updated = await updateWebhook(token, handle, repoName, hook.id, { active: !hook.active });
+      onChange(updated);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to update webhook", { tone: "danger" });
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <span className={cx("shrink-0 mt-0.5", hook.active ? "text-fh-success-fg" : "text-fh-fg-subtle")}>
+            <Icon path={WEBHOOK} size={18} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-fh-sm font-mono text-fh-fg break-all">{hook.url}</p>
+            <p className="text-fh-xs text-fh-fg-muted mt-0.5 flex items-center gap-1 flex-wrap">
+              {eventChips(hook.events).map((e) => (
+                <span key={e} className="inline-flex rounded-full bg-fh-surface-muted px-1.5 py-0.5 font-mono">{e}</span>
+              ))}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
+          {hook.active ? <Badge tone="success">Active</Badge> : <Badge tone="neutral">Inactive</Badge>}
+          <Button variant="default" size="sm" loading={toggling} onClick={() => void toggleActive()}>
+            {hook.active ? "Disable" : "Enable"}
+          </Button>
+          <Button variant="invisible" size="sm" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Hide" : "Deliveries"}
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => onDelete(hook)}>Delete</Button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="border-t border-fh-border bg-fh-surface-inset/40">
+          <DeliveriesPanel token={token} handle={handle} repoName={repoName} hookId={hook.id} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WebhooksSection({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const [hooks, setHooks] = useState<Webhook[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNew, setShowNew] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Webhook | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    listWebhooks(token, handle, repoName)
+      .then((d) => setHooks(d.hooks))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, handle, repoName]);
+
+  async function handleCreate(input: { url: string; secret: string; events: WebhookEvent[]; active: boolean }) {
+    const hook = await createWebhook(token, handle, repoName, input);
+    setHooks((prev) => [hook, ...prev]);
+    setShowNew(false);
+    toast("Webhook created — a ping was sent", { tone: "success" });
+  }
+
+  function upsert(h: Webhook) {
+    setHooks((prev) => prev.map((x) => (x.id === h.id ? h : x)));
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await deleteWebhook(token, handle, repoName, pendingDelete.id);
+      setHooks((prev) => prev.filter((h) => h.id !== pendingDelete.id));
+      toast("Webhook deleted", { tone: "success" });
+      setPendingDelete(null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete webhook", { tone: "danger" });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-4 pb-3 mb-4 border-b border-fh-border">
+        <div>
+          <h2 className="text-fh-lg font-semibold text-fh-fg">Webhooks</h2>
+          <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+            POST signed event payloads to an external URL. Each delivery is signed with HMAC-SHA256 and logged for debugging.
+          </p>
+        </div>
+        {!showNew && <Button variant="primary" onClick={() => setShowNew(true)}>Add webhook</Button>}
+      </div>
+
+      {showNew && <WebhookForm onSave={handleCreate} onCancel={() => setShowNew(false)} />}
+
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton variant="block" width={18} height={18} className="rounded" />
+              <Skeleton className="h-4 flex-1" />
+            </div>
+          ))}
+        </div>
+      ) : hooks.length === 0 && !showNew ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState
+            icon={<Icon path={WEBHOOK} size={28} />}
+            title="No webhooks yet"
+            description="Add a webhook to notify an external service when this repository changes."
+          />
+        </div>
+      ) : (
+        hooks.length > 0 && (
+          <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+            {hooks.map((h) => (
+              <WebhookRow key={h.id} token={token} handle={handle} repoName={repoName} hook={h} onChange={upsert} onDelete={setPendingDelete} />
+            ))}
+          </div>
+        )
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete webhook"
+          message={<>Delete the webhook to <span className="font-mono font-semibold break-all">{pendingDelete.url}</span>? Deliveries will stop immediately.</>}
+          confirmLabel="Delete webhook"
+          loading={deleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
 function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
@@ -677,7 +978,7 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "topics" | "collaborators" | "labels" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "labels" | "webhooks" | "danger";
 
 export function RepoSettingsTab({ token, handle, repoName }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
@@ -688,6 +989,7 @@ export function RepoSettingsTab({ token, handle, repoName }: Props) {
     { key: "topics", label: "Topics", icon: BOOKMARK },
     { key: "collaborators", label: "Collaborators", icon: PEOPLE },
     { key: "labels", label: "Labels", icon: LABEL },
+    { key: "webhooks", label: "Webhooks", icon: WEBHOOK },
     { key: "danger", label: "Danger zone", icon: ALERT, danger: true },
   ];
 
@@ -731,6 +1033,7 @@ export function RepoSettingsTab({ token, handle, repoName }: Props) {
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
+        {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
         {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}
       </div>
     </div>

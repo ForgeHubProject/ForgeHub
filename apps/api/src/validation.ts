@@ -26,9 +26,14 @@ export const loginBodySchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+/** v0 PAT scope set (issue #87). See src/scopes.ts for the hierarchy + defaults. */
+export const patScopeSchema = z.enum(["repo:read", "repo:write", "admin"]);
+
 export const createTokenBodySchema = z.object({
   name: z.string().min(1).max(120),
   expiresInDays: z.number().int().positive().max(3650).optional(),
+  /** Optional subset; when omitted the token is minted with the full scope set. */
+  scopes: z.array(patScopeSchema).optional(),
 });
 
 export const repoVisibilitySchema = z.enum(["public", "private"]);
@@ -69,4 +74,25 @@ export const topicSchema = z
 /** PUT /repos/:handle/:name/topics — the full replacement set (max 20, deduped by the route). */
 export const updateTopicsBodySchema = z.object({
   topics: z.array(topicSchema).max(20),
+});
+
+// ─── Webhooks (issue #87) ──────────────────────────────────────────────────────
+
+/** Subscribable outbound-webhook event names. `ping` is server-internal only. */
+export const WEBHOOK_EVENTS = ["push", "issues", "pull_request", "release"] as const;
+export const webhookEventSchema = z.enum(WEBHOOK_EVENTS);
+
+export const createWebhookBodySchema = z.object({
+  url: z.string().url().max(2000),
+  secret: z.string().min(1).max(500),
+  /** Subscribed events; when omitted the hook receives all ("*"). */
+  events: z.array(webhookEventSchema).min(1).optional(),
+  active: z.boolean().optional(),
+});
+
+export const updateWebhookBodySchema = z.object({
+  url: z.string().url().max(2000).optional(),
+  secret: z.string().min(1).max(500).optional(),
+  events: z.array(webhookEventSchema).min(1).optional(),
+  active: z.boolean().optional(),
 });
