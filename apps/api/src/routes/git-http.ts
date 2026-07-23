@@ -10,6 +10,8 @@ import { emitHeadPushedForPush } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { triggerWorkflowsForPush, triggerWorkflowsForPrSync } from "../ci/trigger.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
+import { installPreReceiveHook } from "../git-hooks.js";
+import { syncProtectionConfig } from "../branch-protection.js";
 
 const execFile = promisify(execFileCb);
 
@@ -304,6 +306,14 @@ export async function gitHttpRoutes(app: FastifyInstance) {
     }
 
     const repoPath = bareRepoPathFromKey(repo.storageKey);
+
+    // Branch protection (issue #85): make sure the pre-receive hook is installed
+    // (backfills repos predating the feature) and refresh its rules file from
+    // the DB so it enforces the current policy. The hook rejects protected-branch
+    // violations BEFORE the pack is accepted (pre-receive); server-side merges
+    // push through local git with FORGEHUB_INTERNAL_PUSH=1 and bypass it.
+    await installPreReceiveHook(repoPath).catch((err) => app.log.error({ err }, "installPreReceiveHook (push)"));
+    await syncProtectionConfig(repo.id, repo.storageKey).catch((err) => app.log.error({ err }, "syncProtectionConfig (push)"));
 
     // Snapshot all branch SHAs before the push
     const shasBefore = new Map<string, string>();
