@@ -188,14 +188,28 @@ export async function profileRoutes(app: FastifyInstance) {
 
     const { from, to } = resolveRange(fromQ, toQ);
 
-    // Repo-visibility predicate pushed into every query: a repo is readable when
-    // it is PUBLIC, owned by the viewer, or the viewer is a collaborator. Guests
-    // see PUBLIC only. Private activity the viewer can't read never leaves the DB.
+    // Repo-visibility predicate pushed into every query, mirroring
+    // repo-access.ts `canRead`'s FULL readable set (issue #114). A repo is
+    // readable when it is:
+    //   - PUBLIC (everyone, incl. guests), OR — for a signed-in viewer —
+    //   - owned/created by the viewer, OR
+    //   - one the viewer is a direct RepoCollaborator on, OR
+    //   - owned by an org the viewer is an OWNER of, OR
+    //   - granted to a team the viewer belongs to (READER *or* WRITER — both
+    //     confer read; matches `teamRoleFor` returning non-null in canRead).
+    // Guests see PUBLIC only. Private activity the viewer can't read never leaves
+    // the DB — and a bare org MEMBER with no team grant still sees nothing, so
+    // org-repo authorship stays hidden from strangers exactly as before.
     const readableRepo = {
       OR: [
         { visibility: "PUBLIC" as const },
         ...(viewerId
-          ? [{ ownerId: viewerId }, { collaborators: { some: { userId: viewerId } } }]
+          ? [
+              { ownerId: viewerId },
+              { collaborators: { some: { userId: viewerId } } },
+              { org: { memberships: { some: { userId: viewerId, role: "OWNER" } } } },
+              { teamAccess: { some: { team: { memberships: { some: { userId: viewerId } } } } } },
+            ]
           : []),
       ],
     };
