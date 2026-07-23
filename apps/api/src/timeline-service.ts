@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { webhookBridgeForTimelineEvent } from "./webhook-service.js";
 
 /** Which conversation a timeline event belongs to. */
 export type ConversationSubjectType = "ISSUE" | "PULL_REQUEST";
@@ -59,6 +60,18 @@ export async function recordEvent(p: RecordEventParams): Promise<void> {
       actorId: p.actorId,
       data: JSON.stringify({ actorHandle, ...(p.data ?? {}) }),
     },
+  });
+
+  // Fan the issue-lifecycle subset of timeline events out to outbound webhooks
+  // (issue #87). Best-effort side channel — never blocks or fails the caller.
+  void webhookBridgeForTimelineEvent({
+    repoId: p.repoId,
+    subjectType: p.subjectType,
+    subjectNumber: p.subjectNumber,
+    kind: p.kind,
+    actorId: p.actorId,
+    actorHandle,
+    data: p.data,
   });
 }
 

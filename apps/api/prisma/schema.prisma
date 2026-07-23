@@ -54,6 +54,13 @@ model PersonalAccessToken {
   name        String
   tokenHash   String    @unique
   tokenPrefix String
+  // ─── PAT scopes (issue #87) ───────────────────────────────────────────────────
+  // Comma-separated scope list. v0 set: `repo:read`, `repo:write`, `admin`
+  // (see src/scopes.ts). The default is the FULL set so tokens minted before this
+  // column existed keep working exactly as they did (any PAT = full-power) — the
+  // migration backfills existing rows with this default. New tokens choose a subset
+  // at creation. Enforced in the auth preHandlers + the git-http write path.
+  scopes      String    @default("repo:read,repo:write,admin")
   expiresAt   DateTime?
   lastUsedAt  DateTime?
   createdAt   DateTime  @default(now())
@@ -85,6 +92,7 @@ model Repo {
   timelineEvents  TimelineEvent[]
   crossReferences CrossReference[]
   savedFilters    SavedFilter[]
+  webhooks        Webhook[]
 
   @@unique([ownerId, name])
 }
@@ -547,4 +555,56 @@ model PullRequestReviewComment {
   replies       PullRequestReviewComment[] @relation("ReviewCommentThread")
 
   @@index([pullRequestId, inReplyToId])
+}
+
+// ─── Outbound webhooks (issue #87) ────────────────────────────────────────────────
+
+/**
+ * A repo-scoped outbound webhook. On each subscribed repo event the
+ * webhook-service POSTs a signed JSON payload to `url`. `secret` keys the
+ * HMAC-SHA256 body signature (X-ForgeHub-Signature-256). `events` is a
+ * comma-separated subscription list ("push,issues,pull_request,release") or "*"
+ * for all. Owner-only managed from repo settings. Best-effort delivery: a failure
+ * never fails the originating request (mirrors the mailer side-channel).
+ */
+model Webhook {
+  id        String   @id @default(cuid())
+  repoId    String
+  url       String
+  secret    String
+  events    String   @default("*")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repo       Repo              @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([repoId])
+}
+
+/**
+ * One delivery ATTEMPT of a webhook. The retry policy records every attempt as
+ * its own row (statusCode/ok/durationMs/error are per-attempt), so the deliveries
+ * log shows the full picture including retries. `payload` is the exact raw body
+ * that was signed and sent, so a manual redeliver replays byte-for-byte.
+ * `redeliveredFromId` links a manual/retry replay back to the delivery it came
+ * from (null for an original first attempt). `id` doubles as the
+ * X-ForgeHub-Delivery header value.
+ */
+model WebhookDelivery {
+  id                String   @id @default(cuid())
+  webhookId         String
+  event             String
+  payload           String
+  statusCode        Int?
+  ok                Boolean  @default(false)
+  durationMs        Int      @default(0)
+  error             String?
+  redeliveredFromId String?
+  createdAt         DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, createdAt])
 }

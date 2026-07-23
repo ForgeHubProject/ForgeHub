@@ -4,6 +4,7 @@ import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, performRebaseMerge, performRevert, performSquashMerge, resolveBranchSha, type CommitAuthor, type MergeMethod } from "../git-utils.js";
 import { notifySubscribers } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
+import { emitRepoEvent } from "../webhook-service.js";
 import { syncBodyReferences, closeIssuesForMergedPull } from "../references-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { ingestCommitRange } from "../ingest.js";
@@ -132,6 +133,10 @@ export async function pullRoutes(app: FastifyInstance) {
     });
 
     void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: pr.id, subjectTitle: pr.title, reason: "SUBSCRIBED" });
+    void emitRepoEvent({
+      repoId: repo.id, event: "pull_request", action: "opened", senderId: userId,
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open" },
+    });
 
     // Parse the description: cross-refs, closing keywords (closed on merge), mentions.
     await syncBodyReferences({
@@ -271,6 +276,10 @@ export async function pullRoutes(app: FastifyInstance) {
 
     await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
       .catch((err) => request.log.error({ err }, "recordEvent merged"));
+    void emitRepoEvent({
+      repoId: repo.id, event: "pull_request", action: "merged", senderId: userId,
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "merged", mergeCommitSha: result.sha },
+    });
     await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
       .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
 
@@ -367,6 +376,10 @@ export async function pullRoutes(app: FastifyInstance) {
 
     await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
       .catch((err) => request.log.error({ err }, "recordEvent merged"));
+    void emitRepoEvent({
+      repoId: repo.id, event: "pull_request", action: "merged", senderId: userId,
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "merged", mergeCommitSha: result.sha },
+    });
     await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
       .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
 
@@ -552,6 +565,10 @@ export async function pullRoutes(app: FastifyInstance) {
         repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
         kind: updated.state === "CLOSED" ? "closed" : "reopened", actorId: userId,
       }).catch((err) => request.log.error({ err }, "recordEvent pull state"));
+      void emitRepoEvent({
+        repoId: repo.id, event: "pull_request", action: updated.state === "CLOSED" ? "closed" : "reopened", senderId: userId,
+        subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: updated.state.toLowerCase() },
+      });
     }
 
     return { id: updated.id, number: updated.number, state: updated.state.toLowerCase() };
