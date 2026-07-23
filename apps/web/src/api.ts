@@ -1,13 +1,12 @@
 import type {
-  BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules,
-  CommitDetail, CommitInfo, Composition, Constraint, DiffChange, DiffResult, FileDiff,
-  ForkSummary, SyncForkResult,
-  Issue, IssueComment, Label, Milestone, Notification, PatScope, PersonalAccessToken, PRFileEntry,
-  ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType, ProjectSummary,
-  PublicProfile, PullRequest, RefCompareResult,
+  BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
+  CommitInfo, Composition, Constraint, Design, DesignCompareResult, DesignVersion,
+  DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment, Label, Milestone,
+  Notification, PRFileEntry, PatScope, PersonalAccessToken, ProjectColumn, ProjectDetail,
+  ProjectItem, ProjectSubjectType, ProjectSummary, PublicProfile, PullRequest, RefCompareResult,
   Release, ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SavedFilter,
-  Snapshot, SnapshotSummary, TagInfo, TimelineEvent, TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent,
-  CheckSummary, WorkflowRun,
+  Snapshot, SnapshotSummary, SyncForkResult, TagInfo, TimelineEvent, TreeEntry, User,
+  Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -1883,4 +1882,103 @@ export async function cancelWorkflowRun(
     method: "POST",
     token: token ?? undefined,
   });
+}
+
+// ─── design management (#121) ──────────────────────────────────────────────────
+//
+// Design/artifact files attach to an issue and version across uploads. FHR
+// formats gain the SAME semantic diff as PR diffs; images get a visual before/
+// after; everything else a byte summary — the compare `mode` selects the render.
+
+/** List the designs attached to an issue, each with its version history. */
+export async function listDesigns(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ designs: Design[] }> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/designs`, { token: token ?? undefined });
+}
+
+/** Upload a file as a new design or a new version of an existing one (same name). */
+export async function uploadDesign(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  file: File,
+): Promise<{ design: Design; version: DesignVersion }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${BASE}/repos/${handle}/${repoName}/issues/${number}/designs`, {
+    method: "POST",
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ design: Design; version: DesignVersion }>;
+}
+
+/** Raw-bytes URL for one design version (auth-aware fetches wrap it in an object URL). */
+export function designVersionRawUrl(
+  handle: string,
+  repoName: string,
+  number: number,
+  designId: string,
+  version: number,
+): string {
+  return `${BASE}/repos/${handle}/${repoName}/issues/${number}/designs/${designId}/versions/${version}/raw`;
+}
+
+/**
+ * Fetch a design version's bytes as a Blob (auth-aware). Wrapped in an object URL
+ * by the gallery/visual-diff so <img> works on private repos without an
+ * Authorization header — the same pattern the FHR file-diff viewer uses.
+ */
+export async function fetchDesignVersionBlob(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+  designId: string,
+  version: number,
+): Promise<Blob> {
+  const res = await fetch(designVersionRawUrl(handle, repoName, number, designId, version), {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
+/** Compare two versions of a design (semantic / visual / binary by `mode`). */
+export async function compareDesignVersions(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  number: number,
+  designId: string,
+  from: number,
+  to: number,
+): Promise<DesignCompareResult> {
+  return req(
+    `/repos/${handle}/${repoName}/issues/${number}/designs/${designId}/compare?from=${from}&to=${to}`,
+    { token: token ?? undefined },
+  );
+}
+
+/** Delete a design and all its versions (author or repo writer). */
+export async function deleteDesign(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  designId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/issues/${number}/designs/${designId}`, { method: "DELETE", token });
 }
