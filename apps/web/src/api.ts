@@ -2065,6 +2065,20 @@ export async function deleteDeployKey(token: string, handle: string, repoName: s
   return req(`/repos/${handle}/${repoName}/keys/${id}`, { method: "DELETE", token });
 }
 
+/** Server configuration info (issue #154) — public, no auth required. */
+export type ServerInfo = {
+  sshEnabled: boolean;
+  sshPort: number | null;
+  sshHost: string | null;
+  /** SHA256 fingerprint of the server's SSH host key, for known_hosts verification. Null when SSH is off or key not yet generated. */
+  sshFingerprint: string | null;
+};
+
+/** GET /server/info — fetch SSH config and host-key fingerprint. No auth required. */
+export async function getServerInfo(): Promise<ServerInfo> {
+  return req<ServerInfo>("/server/info");
+}
+
 /**
  * Build the `ssh://git@host:port/owner/repo.git` clone URL shown in the clone box
  * (issue #116). The port comes from server config; the host uses the server's
