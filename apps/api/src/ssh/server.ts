@@ -12,6 +12,48 @@ import { resolveActorByFingerprint, touchSshKey, type SshActor } from "./store.j
 
 const { Server, utils: sshUtils } = ssh2;
 
+// ─── auth rate-limiter (issue #154) ──────────────────────────────────────────
+//
+// Tracks failed publickey authentication attempts per source IP. After
+// MAX_FAILURES failures within WINDOW_MS, further auth requests from that IP
+// are rejected immediately for the remainder of the window. In-memory only —
+// resets on restart — which is intentional: DoS/stuffing attacks are typically
+// short-lived bursts; a persistent store would add complexity with little benefit
+// at this scale.
+
+const MAX_FAILURES = 5;
+const WINDOW_MS = 60_000; // 1 minute
+
+type FailRecord = { count: number; windowStart: number };
+const failMap = new Map<string, FailRecord>();
+
+/** Returns true if the IP is currently rate-limited (too many recent failures). */
+export function isRateLimited(ip: string): boolean {
+  const rec = failMap.get(ip);
+  if (!rec) return false;
+  if (Date.now() - rec.windowStart > WINDOW_MS) {
+    failMap.delete(ip);
+    return false;
+  }
+  return rec.count >= MAX_FAILURES;
+}
+
+/** Record one failed auth attempt for an IP. */
+export function recordAuthFailure(ip: string): void {
+  const now = Date.now();
+  const rec = failMap.get(ip);
+  if (!rec || now - rec.windowStart > WINDOW_MS) {
+    failMap.set(ip, { count: 1, windowStart: now });
+  } else {
+    rec.count += 1;
+  }
+}
+
+/** Reset the failure record for an IP on successful auth (avoid penalising legit retries). */
+export function resetAuthFailures(ip: string): void {
+  failMap.delete(ip);
+}
+
 /**
  * SSH git transport (issue #116).
  *
@@ -225,9 +267,20 @@ function onSession(app: FastifyInstance, actor: SshActor, accept: () => Session)
   session.on("subsystem", (_accept, reject) => reject());
 }
 
-function onAuthentication(app: FastifyInstance, ctx: AuthContext, bind: (actor: SshActor) => void): void {
+function onAuthentication(
+  app: FastifyInstance,
+  ctx: AuthContext,
+  ip: string,
+  bind: (actor: SshActor) => void,
+): void {
   if (ctx.method !== "publickey") {
     ctx.reject(["publickey"]);
+    return;
+  }
+
+  if (isRateLimited(ip)) {
+    app.log.warn({ ip }, "ssh: auth rejected — rate limit exceeded");
+    ctx.reject();
     return;
   }
 
@@ -235,6 +288,7 @@ function onAuthentication(app: FastifyInstance, ctx: AuthContext, bind: (actor: 
     const fingerprint = fingerprintFromRaw(ctx.key.data);
     const actor = await resolveActorByFingerprint(fingerprint);
     if (!actor) {
+      recordAuthFailure(ip);
       ctx.reject();
       return;
     }
@@ -245,16 +299,19 @@ function onAuthentication(app: FastifyInstance, ctx: AuthContext, bind: (actor: 
       const pub = sshUtils.parseKey(actor.publicKey);
       if (pub instanceof Error) {
         app.log.error({ err: pub, fingerprint }, "ssh: stored public key failed to parse");
+        recordAuthFailure(ip);
         ctx.reject();
         return;
       }
       const ok = ctx.blob ? pub.verify(ctx.blob, ctx.signature, ctx.hashAlgo) : false;
       if (ok !== true) {
+        recordAuthFailure(ip);
         ctx.reject();
         return;
       }
     }
 
+    resetAuthFailures(ip);
     bind(actor);
     ctx.accept();
   })().catch((err) => {
@@ -281,10 +338,11 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
 
   const hostKey = await loadOrCreateHostKey(app);
 
-  const server = new Server({ hostKeys: [hostKey] }, (client) => {
+  const server = new Server({ hostKeys: [hostKey] }, (client, info) => {
     // Per-connection resolved actor, set on successful auth and read at exec time.
     let actor: SshActor | null = null;
-    client.on("authentication", (ctx) => onAuthentication(app, ctx, (a) => { actor = a; }));
+    const ip = info.ip ?? "unknown";
+    client.on("authentication", (ctx) => onAuthentication(app, ctx, ip, (a) => { actor = a; }));
     client.on("session", (accept) => {
       if (!actor) return; // ssh2 only emits `session` after `ready`, but guard anyway.
       onSession(app, actor, accept);
