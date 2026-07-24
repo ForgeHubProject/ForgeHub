@@ -42,6 +42,7 @@ import { ciRoutes } from "./routes/ci.js";
 import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
+import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
@@ -140,6 +141,7 @@ export async function buildServer() {
 
   app.get("/health", async () => ({ ok: true }));
 
+  await app.register(serverInfoRoutes);
   await app.register(devUiRoutes);
   await app.register(authRoutes);
   await app.register(sessionRoutes);

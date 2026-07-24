@@ -184,6 +184,14 @@ function CloneDropdown({ token, handle, repoName, visibility, currentRef, sshPor
             </>
           )}
         </p>
+        {!sshEnabled && (
+          <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">
+            SSH is not enabled on this server.{" "}
+            <span title="Set FORGEHUB_SSH_PORT in the server environment to enable git clone over SSH.">
+              Set <code className="font-mono text-fh-fg-muted">FORGEHUB_SSH_PORT</code> to enable SSH cloning.
+            </span>
+          </p>
+        )}
       </div>
       <DropdownSeparator />
       <DropdownItem leadingIcon={<DownloadGlyph />} onSelect={downloadZip}>

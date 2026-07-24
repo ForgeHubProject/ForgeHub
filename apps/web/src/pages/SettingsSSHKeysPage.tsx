@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { addSSHKey, deleteSSHKey, listSSHKeys } from "../api";
+import { addSSHKey, deleteSSHKey, getServerInfo, listSSHKeys, type ServerInfo } from "../api";
 import { Header } from "../components/Header";
 import type { SSHKey, User } from "../types";
 import {
@@ -95,12 +95,15 @@ export function SettingsSSHKeysPage({ token, user, onLogout }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<SSHKey | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const { toast } = useToast();
 
   function load() {
     setLoading(true);
-    listSSHKeys(token)
-      .then((d) => setKeys(d.keys))
+    Promise.all([
+      listSSHKeys(token).then((d) => setKeys(d.keys)),
+      getServerInfo().then(setServerInfo).catch(() => {}),
+    ])
       .catch(() => {})
       .finally(() => setLoading(false));
   }
@@ -141,6 +144,31 @@ export function SettingsSSHKeysPage({ token, user, onLogout }: Props) {
           actions={<Button variant="primary" onClick={() => setShowCreate(true)}>New SSH key</Button>}
           divider
         />
+
+        {/* Server SSH host-key fingerprint (issue #154) — shown when SSH is enabled so
+            users can verify the fingerprint in their known_hosts on first connect. */}
+        {serverInfo?.sshEnabled && serverInfo.sshFingerprint && (
+          <div className="mb-6 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-fh-sm">
+            <p className="font-semibold text-fh-fg mb-1">Server SSH host key fingerprint</p>
+            <p className="text-fh-fg-muted text-fh-xs mb-2">
+              Verify this fingerprint when connecting for the first time to confirm you're talking to the right server.
+              Run <code className="font-mono text-fh-fg-muted">ssh-keygen -lf ~/.ssh/known_hosts</code> to see stored entries.
+            </p>
+            <code className="font-mono text-fh-xs text-fh-fg bg-fh-surface-inset border border-fh-border rounded px-2 py-1 break-all block">
+              {serverInfo.sshFingerprint}
+            </code>
+            {serverInfo.sshPort && (
+              <p className="mt-2 text-fh-xs text-fh-fg-subtle">
+                SSH port: <code className="font-mono text-fh-fg-muted">{serverInfo.sshPort}</code>
+              </p>
+            )}
+          </div>
+        )}
+        {serverInfo && !serverInfo.sshEnabled && (
+          <div className="mb-6 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-fh-sm text-fh-fg-muted">
+            SSH git transport is not enabled on this server. Set <code className="font-mono">FORGEHUB_SSH_PORT</code> to enable it.
+          </div>
+        )}
 
         {loading ? (
           <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
