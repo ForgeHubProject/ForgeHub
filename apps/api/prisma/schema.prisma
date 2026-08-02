@@ -39,6 +39,8 @@ model User {
   issueComments    IssueComment[]             @relation("IssueCommentAuthor")
   prComments       PullRequestComment[]       @relation("PRCommentAuthor")
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
+  reviewerRequests       PullRequestReviewerRequest[] @relation("ReviewerRequestUser")
+  sentReviewerRequests   PullRequestReviewerRequest[] @relation("ReviewerRequestRequester")
   prReviewComments PullRequestReviewComment[] @relation("PRReviewCommentAuthor")
   resolvedReviewComments PullRequestReviewComment[] @relation("PRReviewCommentResolver")
   releases         Release[]                  @relation("ReleaseAuthor")
@@ -229,6 +231,10 @@ model PullRequest {
   fromBranch  String
   toBranch    String
   state       PRState  @default(OPEN)
+  // Draft state (issue #82): a draft PR is open but not ready — both merge
+  // endpoints 409 while set. Cleared (one-way) via POST …/ready by the author
+  // or repo owner; there is no "convert back to draft" in v0.
+  isDraft     Boolean  @default(false)
   mergedAt    DateTime?
   /** How the PR was merged: "merge" | "squash" | "rebase". Null until merged. */
   mergeMethod    String?
@@ -241,14 +247,45 @@ model PullRequest {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  repo           Repo                       @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  author         User                       @relation(fields: [authorId], references: [id])
-  milestone      Milestone?                 @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
-  comments       PullRequestComment[]
-  reviews        PullRequestReview[]
-  reviewComments PullRequestReviewComment[]
+  repo             Repo                         @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  author           User                         @relation(fields: [authorId], references: [id])
+  milestone        Milestone?                   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  comments         PullRequestComment[]
+  reviews          PullRequestReview[]
+  reviewComments   PullRequestReviewComment[]
+  reviewerRequests PullRequestReviewerRequest[]
 
   @@unique([repoId, number])
+}
+
+// ─── Requested reviewers (issue #82) ─────────────────────────────────────────────
+//
+// An explicit "please review this" pointing at one user, requested by another.
+// At most one row per (PR, reviewer) — re-requesting UPDATES the row in place
+// (bumping createdAt, clearing fulfilledAt/dismissedAt) and re-notifies, so the
+// request's full lifecycle lives on a single record:
+//   active    — fulfilledAt and dismissedAt both null → sidebar shows "requested".
+//   fulfilled — the reviewer submitted a review while the request was active
+//               (stamped in the review submit paths) → sidebar shows "reviewed".
+//               Stored rather than computed from reviews so a re-request can put
+//               a reviewer back to "requested" without disturbing their reviews.
+//   dismissed — withdrawn via DELETE …/requested-reviewers; hidden from payloads
+//               but kept for provenance (and as the upsert target on re-request).
+// Only the repo owner and RepoCollaborator members are requestable (route-enforced).
+model PullRequestReviewerRequest {
+  id            String    @id @default(cuid())
+  pullRequestId String
+  userId        String
+  requestedById String
+  createdAt     DateTime  @default(now())
+  fulfilledAt   DateTime?
+  dismissedAt   DateTime?
+
+  pullRequest PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  user        User        @relation("ReviewerRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  requestedBy User        @relation("ReviewerRequestRequester", fields: [requestedById], references: [id])
+
+  @@unique([pullRequestId, userId])
 }
 
 model ProtectedBranch {

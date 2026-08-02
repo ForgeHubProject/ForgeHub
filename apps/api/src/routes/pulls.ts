@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, performRebaseMerge, performRevert, performSquashMerge, resolveBranchSha, type CommitAuthor, type MergeMethod } from "../git-utils.js";
-import { notifySubscribers } from "../notifications-service.js";
+import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { resolveMilestoneFilter } from "../milestone-filter.js";
@@ -51,6 +51,29 @@ async function reviewGate(
 function changesRequestedError(count: number): string {
   return `Changes were requested by ${count} reviewer${count === 1 ? "" : "s"}. `
     + "Resolve the requested changes, or merge with override to proceed anyway.";
+}
+
+/**
+ * Non-dismissed reviewer requests for the PR detail payload (issue #82).
+ * `state` is "requested" until the reviewer submits a review while the request
+ * is active (the review submit paths stamp `fulfilledAt`), then "reviewed" —
+ * a re-request clears the stamp and flips them back.
+ */
+async function loadRequestedReviewers(pullRequestId: string) {
+  const requests = await prisma.pullRequestReviewerRequest.findMany({
+    where: { pullRequestId, dismissedAt: null },
+    orderBy: { createdAt: "asc" },
+    include: {
+      user: { select: { handle: true } },
+      requestedBy: { select: { handle: true } },
+    },
+  });
+  return requests.map((r) => ({
+    handle: r.user.handle,
+    state: r.fulfilledAt ? ("reviewed" as const) : ("requested" as const),
+    requestedBy: r.requestedBy.handle,
+    requestedAt: r.createdAt.toISOString(),
+  }));
 }
 
 /**
@@ -138,6 +161,7 @@ export async function pullRoutes(app: FastifyInstance) {
         fromBranch: p.fromBranch,
         toBranch: p.toBranch,
         state: p.state.toLowerCase(),
+        isDraft: p.isDraft,
         mergedAt: p.mergedAt?.toISOString() ?? null,
         author: p.author.handle,
         milestone: p.milestone
@@ -158,8 +182,8 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
     if (!repo.storageKey) return reply.status(400).send({ error: "Repository has no git storage" });
 
-    const { title, description, fromBranch, toBranch } = request.body as {
-      title?: string; description?: string; fromBranch?: string; toBranch?: string;
+    const { title, description, fromBranch, toBranch, draft } = request.body as {
+      title?: string; description?: string; fromBranch?: string; toBranch?: string; draft?: boolean;
     };
 
     if (!title?.trim()) return reply.status(400).send({ error: "title is required" });
@@ -188,6 +212,7 @@ export async function pullRoutes(app: FastifyInstance) {
         fromBranch,
         toBranch: def,
         state: "OPEN",
+        isDraft: draft === true,
         authorId: userId,
       },
       include: { author: { select: { handle: true } } },
@@ -196,7 +221,7 @@ export async function pullRoutes(app: FastifyInstance) {
     void notifySubscribers({ actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: pr.id, subjectTitle: pr.title, reason: "SUBSCRIBED" });
     void emitRepoEvent({
       repoId: repo.id, event: "pull_request", action: "opened", senderId: userId,
-      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open" },
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open", isDraft: pr.isDraft },
     });
 
     // Actions-style CI (issue #86): enqueue a `pull_request` run at the new PR's
@@ -224,6 +249,7 @@ export async function pullRoutes(app: FastifyInstance) {
       fromBranch: pr.fromBranch,
       toBranch: pr.toBranch,
       state: pr.state.toLowerCase(),
+      isDraft: pr.isDraft,
       mergedAt: null,
       author: pr.author.handle,
       createdAt: pr.createdAt.toISOString(),
@@ -271,6 +297,9 @@ export async function pullRoutes(app: FastifyInstance) {
       ? await loadMergeProtection(app, repo, handle, name, pr, headSha, request.headers.authorization)
       : null;
 
+    // Reviewer-request state for the merge-box sidebar (issue #82).
+    const requestedReviewers = await loadRequestedReviewers(pr.id);
+
     return {
       id: pr.id,
       number: pr.number,
@@ -279,6 +308,8 @@ export async function pullRoutes(app: FastifyInstance) {
       fromBranch: pr.fromBranch,
       toBranch: pr.toBranch,
       state: pr.state.toLowerCase(),
+      isDraft: pr.isDraft,
+      requestedReviewers,
       mergeable,
       headSha,
       reviewSummary,
@@ -294,6 +325,159 @@ export async function pullRoutes(app: FastifyInstance) {
     };
   });
 
+  // POST /repos/:handle/:name/pulls/:number/ready — leave draft (issue #82).
+  // Author-or-owner gated like the PATCH state change; one-way (no back-to-draft).
+  app.post("/repos/:handle/:name/pulls/:number/ready", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    if (pr.authorId !== userId && repo.ownerId !== userId)
+      return reply.status(403).send({ error: "Only the author or owner can mark this PR ready for review" });
+    if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    if (!pr.isDraft) return reply.status(409).send({ error: "Pull request is not a draft" });
+
+    const updated = await prisma.pullRequest.update({ where: { id: pr.id }, data: { isDraft: false } });
+
+    await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "ready_for_review", actorId: userId })
+      .catch((err) => request.log.error({ err }, "recordEvent ready_for_review"));
+    void emitRepoEvent({
+      repoId: repo.id, event: "pull_request", action: "ready_for_review", senderId: userId,
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open", isDraft: false },
+    });
+
+    return { id: updated.id, number: updated.number, state: updated.state.toLowerCase(), isDraft: updated.isDraft };
+  });
+
+  // ── Requested reviewers (issue #82) ──────────────────────────────────────────
+
+  /**
+   * Shared preamble for the requested-reviewer endpoints: resolve repo + open PR,
+   * check the caller may manage requests (writer or PR author — mirrors GitHub,
+   * where the author can pick their own reviewers), and resolve the `handles`
+   * body to users. When `forRequest` (the POST path), each target must be
+   * allowed to review: the repo owner or a direct collaborator (any role —
+   * reviewing needs read access, not write), never the caller themselves and
+   * never the PR author. The DELETE path skips those checks so a request stays
+   * removable even after the reviewer loses collaborator status. Sends the error
+   * reply and returns null when any check fails, so every handle is validated
+   * before any write.
+   */
+  async function resolveReviewerRequestContext(
+    request: { params: unknown; body: unknown; user: { sub: string } },
+    reply: { status: (code: number) => { send: (body: unknown) => unknown } },
+    forRequest: boolean,
+  ) {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) { reply.status(404).send({ error: "Not found" }); return null; }
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) { reply.status(404).send({ error: "Pull request not found" }); return null; }
+
+    if (!canWrite(repo, userId) && pr.authorId !== userId) {
+      reply.status(403).send({ error: "Only a repository writer or the author can manage requested reviewers" });
+      return null;
+    }
+    if (pr.state !== "OPEN") {
+      reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+      return null;
+    }
+
+    const { handles } = (request.body ?? {}) as { handles?: unknown };
+    if (!Array.isArray(handles) || handles.length === 0 || !handles.every((h) => typeof h === "string" && h.trim())) {
+      reply.status(400).send({ error: "handles must be a non-empty array of user handles" });
+      return null;
+    }
+    const wanted = [...new Set(handles.map((h) => (h as string).trim().toLowerCase()))];
+
+    const users = await prisma.user.findMany({
+      where: { handle: { in: wanted } },
+      select: { id: true, handle: true },
+    });
+    const byHandle = new Map(users.map((u) => [u.handle, u]));
+
+    const reviewers: Array<{ id: string; handle: string }> = [];
+    for (const h of wanted) {
+      const user = byHandle.get(h);
+      if (!user) { reply.status(404).send({ error: `User '${h}' not found` }); return null; }
+      if (forRequest) {
+        if (user.id === userId) {
+          reply.status(422).send({ error: "You cannot request a review from yourself" });
+          return null;
+        }
+        if (user.id === pr.authorId) {
+          reply.status(422).send({ error: "The pull request author cannot be requested as a reviewer" });
+          return null;
+        }
+        const hasAccess = repo.ownerId === user.id || repo.collaborators.some((c) => c.userId === user.id);
+        if (!hasAccess) {
+          reply.status(422).send({ error: `'${h}' must be the repository owner or a collaborator to be requested` });
+          return null;
+        }
+      }
+      reviewers.push(user);
+    }
+
+    return { repo, pr, userId, reviewers };
+  }
+
+  // POST /repos/:handle/:name/pulls/:number/requested-reviewers — request (or
+  // re-request) reviews. Re-requesting a fulfilled/dismissed request revives the
+  // same row and re-notifies; an already-pending request is a quiet no-op.
+  app.post("/repos/:handle/:name/pulls/:number/requested-reviewers", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const ctx = await resolveReviewerRequestContext(request as never, reply as never, true);
+    if (!ctx) return;
+    const { repo, pr, userId, reviewers } = ctx;
+
+    for (const reviewer of reviewers) {
+      const existing = await prisma.pullRequestReviewerRequest.findUnique({
+        where: { pullRequestId_userId: { pullRequestId: pr.id, userId: reviewer.id } },
+      });
+      const alreadyPending = !!existing && !existing.fulfilledAt && !existing.dismissedAt;
+
+      await prisma.pullRequestReviewerRequest.upsert({
+        where: { pullRequestId_userId: { pullRequestId: pr.id, userId: reviewer.id } },
+        create: { pullRequestId: pr.id, userId: reviewer.id, requestedById: userId },
+        // Re-request: revive the row as a fresh request from the current actor.
+        update: { requestedById: userId, createdAt: new Date(), fulfilledAt: null, dismissedAt: null },
+      });
+
+      if (!alreadyPending) {
+        void notifyUser(reviewer.id, { actorId: userId, repoId: repo.id, subjectType: "PULL_REQUEST", subjectId: pr.id, subjectTitle: pr.title, reason: "REVIEW_REQUESTED" });
+        await recordEvent({
+          repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+          kind: "review_requested", actorId: userId, data: { reviewer: reviewer.handle },
+        }).catch((err) => request.log.error({ err }, "recordEvent review_requested"));
+      }
+    }
+
+    return reply.status(201).send({ requestedReviewers: await loadRequestedReviewers(pr.id) });
+  });
+
+  // DELETE /repos/:handle/:name/pulls/:number/requested-reviewers — withdraw
+  // requests. Dismisses (never deletes) so provenance survives and a later
+  // re-request revives the same row.
+  app.delete("/repos/:handle/:name/pulls/:number/requested-reviewers", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const ctx = await resolveReviewerRequestContext(request as never, reply as never, false);
+    if (!ctx) return;
+    const { pr, reviewers } = ctx;
+
+    await prisma.pullRequestReviewerRequest.updateMany({
+      where: { pullRequestId: pr.id, userId: { in: reviewers.map((r) => r.id) }, dismissedAt: null },
+      data: { dismissedAt: new Date() },
+    });
+
+    return { requestedReviewers: await loadRequestedReviewers(pr.id) };
+  });
+
   // POST /repos/:handle/:name/pulls/:number/merge
   app.post("/repos/:handle/:name/pulls/:number/merge", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
@@ -307,6 +491,8 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    // Draft gate (issue #82): a draft is not ready — hard 409, no override.
+    if (pr.isDraft) return reply.status(409).send({ error: "Pull request is a draft — mark it ready for review before merging", draft: true });
 
     const { commitMessage, mergeMethod: rawMethod, override } = (request.body ?? {}) as { commitMessage?: string; mergeMethod?: string; override?: boolean };
     const mergeMethod: MergeMethod = (rawMethod ?? "merge") as MergeMethod;
@@ -411,6 +597,8 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    // Draft gate (issue #82): a draft is not ready — hard 409, no override.
+    if (pr.isDraft) return reply.status(409).send({ error: "Pull request is a draft — mark it ready for review before merging", draft: true });
 
     const body = request.body as {
       strategy?: string;
