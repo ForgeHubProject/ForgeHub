@@ -105,6 +105,12 @@ export async function createDeepHistoryRepo(
     stream += `M 100644 inline ${i === 0 ? oldestFile : churnFile}\ndata ${body.length}\n${body}\n\n`;
   }
 
+  await fastImport(bareRepoPath, stream);
+  return key;
+}
+
+/** Stream a fast-import script into a fresh bare repo under the storage root. */
+async function fastImport(bareRepoPath: string, stream: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn("git", ["fast-import", "--quiet"], { cwd: bareRepoPath });
     child.on("error", reject);
@@ -112,7 +118,77 @@ export async function createDeepHistoryRepo(
     child.stdin.on("error", reject);
     child.stdin.end(stream);
   });
+}
 
+/**
+ * Like {@link createDeepHistoryRepo} but with a **merge topology**, which is the
+ * shape a linear chain cannot exercise: two independent lineages of
+ * `perLineage` commits each, joined by one merge commit at the tip.
+ *
+ * This is the difference between a *position* cap and an *ancestry* exclusion.
+ * `git log <ref> ^<boundary>` prunes the boundary and its ancestors — a single
+ * lineage — so on a linear chain it happens to equal "the newest N commits",
+ * and only on a merge DAG do the two come apart. The second lineage is dated
+ * strictly older than the first, so `rev-list` orders the whole of lineage A
+ * ahead of it and a boundary picked by walk position always lands inside A,
+ * leaving every commit of B outside the ancestry of that boundary and therefore
+ * still walkable.
+ *
+ * `rareFile` is touched only by the **root of the second lineage** — the oldest
+ * commit in the repo, and deliberately not an ancestor of the boundary.
+ * `churnFile` is rewritten by every commit of the first lineage. The merge
+ * carries both sides' content so ordinary path filtering can reach through it.
+ *
+ * Returns the storage key.
+ */
+export async function createMergeHistoryRepo(
+  key: string,
+  branch: string,
+  perLineage: number,
+  rareFile: string,
+  churnFile: string,
+): Promise<string> {
+  const { createBareRepo } = await import("../../git-storage.js");
+  const bareRepoPath = await createBareRepo(key);
+
+  const who = "committer ForgeHub Test <test@forgehub.io>";
+  const inline = (file: string, body: string) =>
+    `M 100644 inline ${file}\ndata ${body.length}\n${body}\n`;
+  let stream = "";
+
+  // Lineage A — the newer half. Every commit rewrites churnFile.
+  for (let i = 0; i < perLineage; i++) {
+    const message = `a${i}`;
+    stream += `commit refs/heads/_lineage_a\nmark :${i + 1}\n`;
+    stream += `${who} ${1800000000 + i} +0000\n`;
+    stream += `data ${message.length}\n${message}\n`;
+    if (i > 0) stream += `from :${i}\n`;
+    stream += inline(churnFile, String(i)) + "\n";
+  }
+
+  // Lineage B — older, and rooted independently (`from <null sha>` makes a root
+  // commit, i.e. an unrelated history). Only its root touches rareFile.
+  const bChurn = `b-${churnFile}`;
+  for (let i = 0; i < perLineage; i++) {
+    const mark = perLineage + i + 1;
+    const message = `b${i}`;
+    stream += `commit refs/heads/_lineage_b\nmark :${mark}\n`;
+    stream += `${who} ${1700000000 + i} +0000\n`;
+    stream += `data ${message.length}\n${message}\n`;
+    stream += i === 0 ? `from ${"0".repeat(40)}\n` : `from :${mark - 1}\n`;
+    stream += (i === 0 ? inline(rareFile, "0") : inline(bChurn, String(i))) + "\n";
+  }
+
+  // The merge, newest of all, carrying content from both sides.
+  const message = "merge lineage b";
+  stream += `commit refs/heads/${branch}\nmark :${2 * perLineage + 1}\n`;
+  stream += `${who} 1900000000 +0000\n`;
+  stream += `data ${message.length}\n${message}\n`;
+  stream += `from :${perLineage}\nmerge :${2 * perLineage}\n`;
+  stream += inline(rareFile, "0");
+  stream += inline(bChurn, String(perLineage - 1)) + "\n";
+
+  await fastImport(bareRepoPath, stream);
   return key;
 }
 

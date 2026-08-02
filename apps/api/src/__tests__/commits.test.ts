@@ -37,7 +37,7 @@ vi.mock("../prisma.js", () => ({
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { listCommits, getCommit, listTree, defaultBranch, PATH_HISTORY_SCAN_LIMIT } from "../git-utils.js";
-import { createDeepHistoryRepo, createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
+import { createDeepHistoryRepo, createMergeHistoryRepo, createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 
 // ─── Repo + server setup ──────────────────────────────────────────────────────
@@ -204,6 +204,91 @@ describe("listCommits() per-path scan bound", () => {
     const commits = await listCommits(deepKey, "main", { perPage: 1, page: DEPTH });
     expect(commits).toHaveLength(1);
     expect(commits[0]!.subject).toBe("c0");
+  });
+});
+
+// ─── git-utils: the scan bound is a POSITION cap, not an ancestry exclusion ────
+//
+// The cases above run on a strictly linear chain — the one topology where
+// `<ref> ^<boundary>` (prune the boundary and its ancestors) happens to equal
+// "the newest N commits", so they cannot tell a position cap from an ancestry
+// exclusion. Anyone who can push a public repo can create a second lineage, and
+// on this unauthenticated route that is all it takes to walk past an ancestry
+// exclusion: `^X` prunes one lineage, and everything past the cap that is not an
+// ancestor of X stays walkable. These cases run the same bound against a real
+// merge DAG.
+
+describe("listCommits() per-path scan bound on a merge DAG", () => {
+  // Two lineages of this depth plus one merge. Each lineage alone is longer than
+  // the limit, so the boundary a walk-position probe would pick always lands
+  // inside the newer lineage and can never be an ancestor of the older one.
+  const PER_LINEAGE = PATH_HISTORY_SCAN_LIMIT + 250;
+  let mergeKey: string;
+
+  beforeAll(async () => {
+    mergeKey = await createMergeHistoryRepo(
+      "test/merge-history.git", "main", PER_LINEAGE, "rare.txt", "churn.txt",
+    );
+  }, 60_000);
+
+  it("does not reach a path only the second lineage touches", async () => {
+    // rare.txt is touched solely by the root of the older lineage, far past the
+    // scan limit by walk position but outside the ancestry of any commit in the
+    // newer lineage. An ancestry exclusion leaves it fully reachable; a position
+    // cap does not.
+    const commits = await listCommits(mergeKey, "main", { path: "rare.txt" });
+    expect(commits).toEqual([]);
+  });
+
+  it("does not reach a path the whole second lineage churns", async () => {
+    // b-churn.txt is rewritten by every non-root commit of the older lineage —
+    // thousands of matches, none of them inside the newest-N window. Neither the
+    // first page nor a deeper one may reach them.
+    expect(await listCommits(mergeKey, "main", { path: "b-churn.txt", perPage: 1 })).toEqual([]);
+    expect(await listCommits(mergeKey, "main", { path: "b-churn.txt", perPage: 1, page: 2 })).toEqual([]);
+  });
+
+  it("still serves a path that lives inside the scan window", async () => {
+    const commits = await listCommits(mergeKey, "main", { path: "churn.txt", perPage: 1 });
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.subject).toBe(`a${PER_LINEAGE - 1}`);
+  });
+
+  it("leaves unfiltered reads reaching past the scan limit on a merge DAG", async () => {
+    const total = PER_LINEAGE * 2 + 1;
+    const commits = await listCommits(mergeKey, "main", { perPage: 1, page: total });
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.subject).toBe("b0");
+  });
+});
+
+// ─── git-utils: the cheap first window still widens to the full limit ─────────
+//
+// Enumerating the newest N commits costs an N-commit walk, so the common read
+// (the newest commit touching the directory on screen) starts on a small window
+// rather than paying for the whole limit on every navigation. Correctness must
+// not depend on the answer being in that window: anything inside the full scan
+// limit still has to be found.
+
+describe("listCommits() per-path scan window widening", () => {
+  // Comfortably past the fast first window, comfortably inside the scan limit.
+  const DEPTH = 900;
+  let midKey: string;
+
+  beforeAll(async () => {
+    midKey = await createDeepHistoryRepo("test/mid-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+  }, 30_000);
+
+  it("finds a path older than the first window but inside the scan limit", async () => {
+    const commits = await listCommits(midKey, "main", { path: "ancient.txt" });
+    expect(commits.map((c) => c.subject)).toEqual(["c0"]);
+  });
+
+  it("fills a full page from beyond the first window", async () => {
+    // churn.txt matches every commit but the oldest; a page starting past the
+    // first window can only be served from the widened one.
+    const commits = await listCommits(midKey, "main", { path: "churn.txt", perPage: 5, page: 100 });
+    expect(commits.map((c) => c.subject)).toEqual(["c404", "c403", "c402", "c401", "c400"]);
   });
 });
 
