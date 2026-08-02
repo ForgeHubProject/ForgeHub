@@ -60,6 +60,7 @@ model User {
   sessions         Session[]
   orgMemberships   OrgMembership[]
   teamMemberships  TeamMembership[]
+  reactions        Reaction[]
 }
 
 model PersonalAccessToken {
@@ -543,6 +544,45 @@ model Notification {
 
   @@unique([userId, subjectId])
   @@index([userId, read])
+}
+
+// ─── Emoji reactions (issue #90) ─────────────────────────────────────────────────
+
+/**
+ * Which body-bearing entity a reaction is attached to. Mirrors the Notification
+ * subject pattern: one polymorphic model instead of five parallel join tables.
+ * Covers Issue, PullRequest, IssueComment, PullRequestComment and
+ * PullRequestReviewComment (releases are a follow-up).
+ */
+enum ReactionSubjectType {
+  ISSUE
+  PULL_REQUEST
+  ISSUE_COMMENT
+  PR_COMMENT
+  PR_REVIEW_COMMENT
+}
+
+/**
+ * One user's emoji reaction on one subject. `emoji` is a shortcode from GitHub's
+ * fixed set of 8 (`+1 -1 laugh confused heart hooray rocket eyes`), validated
+ * server-side — no free-form emoji in v0. The unique constraint makes the PUT
+ * endpoint naturally idempotent (react twice = one row). The polymorphic
+ * subject FK can't cascade, so the subject delete handlers run an explicit
+ * `deleteMany`; the userId FK does cascade, so deleting a user sweeps their
+ * reactions automatically.
+ */
+model Reaction {
+  id          String              @id @default(cuid())
+  subjectType ReactionSubjectType
+  subjectId   String
+  userId      String
+  emoji       String
+  createdAt   DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectType, subjectId, userId, emoji])
+  @@index([subjectType, subjectId])
 }
 
 model Release {
