@@ -542,6 +542,29 @@ export async function readFileAtBranch(
   }
 }
 
+/**
+ * Read a UTF-8 file at a ref WITHOUT trimming (null if missing).
+ *
+ * `git()` — and therefore `readFileAtBranch` — returns `stdout.trim()`, which is
+ * harmless for the line lists most callers parse but destructive for content
+ * that is handed back to a user verbatim: an issue/PR template's leading blank
+ * line and trailing newline are part of the authored text. Use this whenever the
+ * exact bytes matter; use `readFileAtBranch` when only the lines do.
+ */
+export async function readFileAtRefExact(
+  storageKey: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  try {
+    const { stdout } = await execFile("git", ["show", `${ref}:${filePath}`], { cwd, maxBuffer: MAX });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
 // ─── commits ─────────────────────────────────────────────────────────────────────────────
 
 // ─── commit signatures (Verified badge — issue #117) ──────────────────────────

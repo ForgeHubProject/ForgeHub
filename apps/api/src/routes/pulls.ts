@@ -14,6 +14,7 @@ import { computeReviewSummary } from "../review-summary.js";
 import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } from "../branch-protection.js";
+import { applyCodeownersReviewers } from "../codeowners-service.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -73,6 +74,8 @@ async function loadRequestedReviewers(pullRequestId: string) {
     state: r.fulfilledAt ? ("reviewed" as const) : ("requested" as const),
     requestedBy: r.requestedBy.handle,
     requestedAt: r.createdAt.toISOString(),
+    // Provenance for the sidebar's "via CODEOWNERS" hint (issue #89).
+    viaCodeowners: r.viaCodeowners,
   }));
 }
 
@@ -232,6 +235,14 @@ export async function pullRoutes(app: FastifyInstance) {
         if (headSha) return triggerWorkflowsForPrOpen(repo.id, storageKey, pr.id, fromBranch, headSha, pr.toBranch);
       }).catch((err) => request.log.error({ err }, "PR-open CI trigger failed"));
     }
+
+    // CODEOWNERS auto-review-requests (issue #89). Best-effort — a broken or
+    // absent CODEOWNERS never blocks PR creation.
+    await applyCodeownersReviewers(
+      { id: repo.id, storageKey: repo.storageKey, ownerId: repo.ownerId, collaborators: repo.collaborators },
+      { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, authorId: pr.authorId },
+      userId,
+    ).catch((err) => request.log.error({ err }, "applyCodeownersReviewers (pull create)"));
 
     // Parse the description: cross-refs, closing keywords (closed on merge), mentions.
     await syncBodyReferences({
