@@ -335,6 +335,61 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
     // owner-1 + collab-1 — ex-collab is subscribed but unreachable.
     expect(res.json().watcherCount).toBe(2);
   });
+
+  // Regression (adversarial review, round 4): the PRIVATE branch still pulled
+  // EVERY watch row for the repo into Node — no take, no aggregate — on the
+  // repo-page hot path. The round-3 comment excused it with "there the
+  // subscriber set is bounded by the grantee set anyway", which is false: a
+  // Watch row is a subscription, never a grant, so rows outlive access changes
+  // that have no cleanup hook. `PATCH /repos/:name` is the sharpest case — it
+  // writes `visibility` and prunes nothing, so a public repo carrying 20 000
+  // subscribers keeps all 20 000 rows the instant it goes private, and the
+  // count then materialized every one of them to return the number 2.
+  // The bound must be imposed by the query, over the grantee set.
+  it("GET /social bounds a private repo's watcher read to the grantee set", async () => {
+    const GRANTEES = ["owner-1", "collab-1", "org-owner-1", "team-member-1"];
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({
+      ...PRIVATE_REPO,
+      ownerId: "owner-1",
+      collaborators: [{ userId: "collab-1", role: "READER" }],
+      org: { id: "org-1", handle: "acme", memberships: [
+        { userId: "org-owner-1", role: "OWNER" },
+        { userId: "org-member-1", role: "MEMBER" }, // not a grantee: bare member
+      ] },
+      teamAccess: [{ role: "READER", team: { memberships: [{ userId: "team-member-1" }] } }],
+    } as never);
+
+    // The "database": the four grantees (all with explicit ALL rows) plus the
+    // 20 000 subscriptions a visibility flip left behind. The stand-in honours
+    // `where.userId.in` the way a real query does, so an unbounded read hands
+    // back all 20 004 rows and a bounded one hands back 4.
+    const stored = [
+      ...GRANTEES.map((userId) => ({ userId, level: "ALL" })),
+      ...Array.from({ length: 20_000 }, (_, n) => ({ userId: `stale-${n}`, level: "ALL" })),
+    ];
+    let materialized = -1;
+    vi.mocked(prisma.watch.findMany).mockImplementation((async (args: {
+      where: { userId?: { in?: string[] } };
+    }) => {
+      const bound = args.where.userId?.in;
+      const rows = bound ? stored.filter((r) => bound.includes(r.userId)) : stored;
+      materialized = rows.length;
+      return rows;
+    }) as never);
+
+    const res = await app.inject({
+      method: "GET", url: "/repos/bob/priv/social",
+      headers: { authorization: ownerToken },
+    });
+    // Unchanged semantics: the four grantees, and not one stale subscriber.
+    expect(res.json().watcherCount).toBe(4);
+    // …and the route never pulled the stale rows into Node to work that out.
+    expect(materialized).toBe(GRANTEES.length);
+    const [args] = vi.mocked(prisma.watch.findMany).mock.calls[0]! as [
+      { where: { userId?: { in?: string[] } } },
+    ];
+    expect(args.where.userId?.in).toEqual(GRANTEES);
+  });
 });
 
 // ─── notifySubscribers: watch-driven fan-out ──────────────────────────────────
@@ -737,9 +792,11 @@ describe("GET /feed", () => {
   type Bound = { lt?: Date; lte?: Date };
   type Clause = { createdAt?: Date | Bound; id?: { gt?: string } };
   type OrderKey = { createdAt?: "asc" | "desc"; id?: "asc" | "desc" };
+  /** Everything the stand-in itself looks at — the rest is the source's payload. */
+  type SourceRow = { id: string; createdAt: Date };
 
-  function honourCursor(rows: IssueRow[]) {
-    const matches = (c: Clause, r: IssueRow): boolean => {
+  function honourCursor<R extends SourceRow>(rows: R[]) {
+    const matches = (c: Clause, r: R): boolean => {
       const at = c.createdAt;
       if (at instanceof Date) {
         if (r.createdAt.getTime() !== at.getTime()) return false;
@@ -752,7 +809,7 @@ describe("GET /feed", () => {
     };
     return (args: { where: Clause & { OR?: Clause[] }; take: number; orderBy?: OrderKey | OrderKey[] }) => {
       const keys = args.orderBy === undefined ? [] : Array.isArray(args.orderBy) ? args.orderBy : [args.orderBy];
-      const cmp = (a: IssueRow, b: IssueRow): number => {
+      const cmp = (a: R, b: R): number => {
         for (const k of keys) {
           if (k.createdAt) {
             const d = a.createdAt.getTime() - b.createdAt.getTime();
@@ -876,6 +933,60 @@ describe("GET /feed", () => {
       "issue-t1", "issue-t2", "issue-t3",
     ]);
   });
+
+  // Regression (adversarial review, round 4): both tie walks above run through
+  // `feedOverIssues`, which mocks the ISSUE source and hard-codes the other
+  // three to []. So they pin the id tiebreak on ONE of the four source queries —
+  // `pullRequest`, `release` and `timelineEvent` could each carry the identical
+  // data-loss defect with the whole suite green. Each source gets the same walk:
+  // one repo, five entries sharing a single timestamp, stored in the scrambled
+  // physical order observed on a real SQLite database, drained at per_page=2.
+  // Drop `{ id: "asc" }` from that source's `orderBy` and its window slices an
+  // arbitrary subset out of the tie group while the cursor advances past the
+  // rest — exactly the loss the issue-source walk already pins.
+  const TIE_PHYSICAL = ["s5", "s1", "s4", "s2", "s3"];
+
+  /** Point every feed source at one public repo, with `source` served by `ids`. */
+  function feedOverSource(source: "pr" | "release" | "event", ids: string[]) {
+    vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
+    // Also covers the timeline subject-title lookup, which reads issue/pr again.
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.release.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
+
+    const base = ids.map((id, n) => ({ id, repoId: "repo-pub", number: n + 1, createdAt: NOW }));
+    const author = { handle: "alice" };
+    if (source === "pr") {
+      vi.mocked(prisma.pullRequest.findMany).mockImplementation(
+        honourCursor(base.map((r) => ({ ...r, title: `PR ${r.id}`, author }))) as never,
+      );
+    } else if (source === "release") {
+      vi.mocked(prisma.release.findMany).mockImplementation(
+        honourCursor(base.map((r) => ({ ...r, tagName: `v${r.number}`, name: `Release ${r.id}`, author }))) as never,
+      );
+    } else {
+      vi.mocked(prisma.timelineEvent.findMany).mockImplementation(
+        honourCursor(
+          base.map((r) => ({
+            ...r, kind: "closed", subjectType: "ISSUE", subjectNumber: r.number,
+            data: JSON.stringify({ actorHandle: "alice" }),
+          })),
+        ) as never,
+      );
+    }
+  }
+
+  it.each(["pr", "release", "event"] as const)(
+    "walks a %s-source tie group to exhaustion without stranding an entry",
+    async (source) => {
+      feedOverSource(source, TIE_PHYSICAL);
+      expect(await walkFeed(2)).toEqual(
+        ["s1", "s2", "s3", "s4", "s5"].map((id) => `${source}-${id}`),
+      );
+    },
+  );
 
   it("ignores a malformed cursor instead of erroring", async () => {
     vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
