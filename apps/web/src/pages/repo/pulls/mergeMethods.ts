@@ -80,6 +80,43 @@ export function writeMergeMethod(handle: string, repoName: string, method: Merge
   }
 }
 
+/** The repo's merge policy as the PR payload carries it (issue #119). */
+export type MergePolicy = { allowedMethods: MergeMethod[]; defaultMethod: MergeMethod };
+
+/**
+ * The dropdown options the merge box may offer under a repo's policy, in the
+ * canonical order. An absent/empty policy (older API payloads) offers all three.
+ */
+export function allowedMergeOptions(policy?: MergePolicy | null): MergeMethodOption[] {
+  const allowed = policy?.allowedMethods?.filter(isMergeMethod);
+  if (!allowed || allowed.length === 0) return [...MERGE_METHOD_OPTIONS];
+  return MERGE_METHOD_OPTIONS.filter((o) => allowed.includes(o.method));
+}
+
+/**
+ * The method the merge box starts on: the remembered per-repo choice when the
+ * policy still allows it, else the repo's default, else the first allowed.
+ * Reads the raw stored value (not `readMergeMethod`) so "nothing remembered"
+ * falls through to the REPO default rather than the historic "merge" fallback.
+ */
+export function resolveInitialMethod(
+  handle: string,
+  repoName: string,
+  policy?: MergePolicy | null,
+  storage?: StorageLike | null,
+): MergeMethod {
+  const options = allowedMergeOptions(policy);
+  let remembered: string | null = null;
+  try {
+    remembered = (storage ?? safeLocalStorage())?.getItem(mergeMethodStorageKey(handle, repoName)) ?? null;
+  } catch {
+    remembered = null;
+  }
+  if (isMergeMethod(remembered) && options.some((o) => o.method === remembered)) return remembered;
+  if (policy && options.some((o) => o.method === policy.defaultMethod)) return policy.defaultMethod;
+  return options[0].method;
+}
+
 /** The title of the reverting PR ForgeHub opens for a merged PR. */
 export function revertPrTitle(originalTitle: string, number: number): string {
   return `Revert "${originalTitle}" (!${number})`;
