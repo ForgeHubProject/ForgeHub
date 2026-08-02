@@ -1638,12 +1638,14 @@ export async function unstarRepo(
   return req(`/repos/${handle}/${repoName}/star`, { method: "DELETE", token });
 }
 
-/** Repos a user starred (newest star first), filtered to what the viewer may read. */
+/** One page of the repos a user starred, filtered to what the viewer may read. */
 export async function listStarredRepos(
   token: string | null,
   handle: string,
-): Promise<{ repos: Array<Repo & { starredAt: string }> }> {
-  return req(`/users/${handle}/starred`, { token: token ?? undefined });
+  page = 1,
+  perPage = 25,
+): Promise<{ repos: Array<Repo & { starredAt: string }>; page: number; perPage: number; hasMore: boolean }> {
+  return req(`/users/${handle}/starred?page=${page}&per_page=${perPage}`, { token: token ?? undefined });
 }
 
 export async function setWatchLevel(
@@ -1651,7 +1653,7 @@ export async function setWatchLevel(
   handle: string,
   repoName: string,
   level: WatchLevel,
-): Promise<{ watchLevel: WatchLevel }> {
+): Promise<{ watchLevel: WatchLevel; watcherCount: number }> {
   return req(`/repos/${handle}/${repoName}/watch`, {
     method: "PUT",
     token,
@@ -1664,13 +1666,18 @@ export async function unwatchRepo(
   token: string,
   handle: string,
   repoName: string,
-): Promise<{ watchLevel: WatchLevel }> {
+): Promise<{ watchLevel: WatchLevel; watcherCount: number }> {
   return req(`/repos/${handle}/${repoName}/watch`, { method: "DELETE", token });
 }
 
-/** Recent activity across watched + starred repos, newest first. */
-export async function getFeed(token: string, page = 1, perPage = 25): Promise<FeedPage> {
-  return req(`/feed?page=${page}&per_page=${perPage}`, { token });
+/**
+ * Recent activity across watched + starred repos, newest first. Cursor-paged:
+ * pass the previous page's `nextCursor` to continue, so entries arriving in the
+ * meantime cannot shift the boundary and re-serve rows already displayed.
+ */
+export async function getFeed(token: string, cursor?: string | null, perPage = 25): Promise<FeedPage> {
+  const q = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+  return req(`/feed?per_page=${perPage}${q}`, { token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeB
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import { canRead, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
-import { ensureImplicitWatch } from "../watch-service.js";
+import { ensureImplicitWatch, pruneWatchOnAccessLoss } from "../watch-service.js";
 import {
   addCollaboratorBodySchema,
   createRepoBodySchema,
@@ -586,6 +586,11 @@ export async function repoRoutes(app: FastifyInstance) {
       await prisma.repoCollaborator.delete({
         where: { repoId_userId: { repoId: repo.id, userId: user.id } },
       });
+
+      // The implicit ALL watch must not outlive the grant that created it: drop
+      // it when the removal actually costs them read access (issue #88).
+      await pruneWatchOnAccessLoss(repo.id, user.id);
+
       return reply.status(204).send();
     },
   );

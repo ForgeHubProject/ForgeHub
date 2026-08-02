@@ -1125,3 +1125,12 @@ model TeamRepoAccess {
   @@unique([teamId, repoId])
   @@index([repoId])
 }
+
+// A completed one-shot data backfill, keyed by name (issue #88). A row means the
+// named backfill already ran to completion, so boot skips it instead of
+// re-scanning every repo forever — the cost of a "one-time" migration must not
+// grow with instance size on every restart. Absent row = not yet run.
+model BackfillMarker {
+  name        String   @id
+  completedAt DateTime @default(now())
+}

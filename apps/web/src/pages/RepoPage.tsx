@@ -291,7 +291,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
     const previous = social.watchLevel;
     setSocial({ ...social, watchLevel: level }); // optimistic — the menu closes immediately
     try {
-      await setWatchLevel(token, h, r, level);
+      const res = await setWatchLevel(token, h, r, level);
+      // The server's count is authoritative; the level was already applied.
+      setSocial((s) => (s ? { ...s, watcherCount: res.watcherCount } : s));
     } catch (e) {
       setSocial((s) => (s ? { ...s, watchLevel: previous } : s));
       toast(e instanceof Error ? e.message : "Could not update watching", { tone: "danger" });
@@ -434,6 +436,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
                     title="Choose how you're notified about this repository"
                   >
                     {social?.watchLevel === "all" ? "Watching" : social?.watchLevel === "ignore" ? "Ignoring" : "Watch"}
+                    <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted tabular-nums">
+                      {social?.watcherCount ?? 0}
+                    </span>
                   </Button>
                 }
               >

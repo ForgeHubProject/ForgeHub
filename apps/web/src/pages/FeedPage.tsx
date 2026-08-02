@@ -80,7 +80,9 @@ function ItemBody({ item }: { item: FeedItem }) {
 export function FeedPage({ token, user, onLogout }: Props) {
   useDocumentTitle("Feed · ForgeHub");
   const [items, setItems] = useState<FeedItem[]>([]);
-  const [page, setPage] = useState(1);
+  // Cursor, not a page number: the feed is a live stream, and an offset would
+  // shift under new activity — re-appending entries already on screen.
+  const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -89,10 +91,10 @@ export function FeedPage({ token, user, onLogout }: Props) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    getFeed(token, 1)
+    getFeed(token)
       .then((d) => {
         setItems(d.items);
-        setPage(1);
+        setCursor(d.nextCursor);
         setHasMore(d.hasMore);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load the feed"))
@@ -100,11 +102,12 @@ export function FeedPage({ token, user, onLogout }: Props) {
   }, [token]);
 
   async function loadMore() {
+    if (!cursor) return;
     setLoadingMore(true);
     try {
-      const d = await getFeed(token, page + 1);
+      const d = await getFeed(token, cursor);
       setItems((prev) => [...prev, ...d.items]);
-      setPage(d.page);
+      setCursor(d.nextCursor);
       setHasMore(d.hasMore);
     } catch {
       // Keep what we have; the button stays for a retry.

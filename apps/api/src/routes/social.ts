@@ -33,6 +33,29 @@ function defaultWatchLevel(
 // persisting from it would just duplicate the spine.
 const FEED_TIMELINE_KINDS = ["closed", "reopened", "merged"] as const;
 
+/**
+ * Feed cursor: the last entry already delivered, as `<createdAt ISO>|<item id>`.
+ * The item id breaks ties at an identical timestamp, matching the merge sort
+ * (createdAt DESC, then id ASC). Cursors — not offsets — because the feed is a
+ * live stream: activity arriving between two page fetches shifts every offset,
+ * which duplicates or skips entries. Malformed input is treated as "no cursor".
+ */
+type FeedCursor = { at: Date; id: string };
+
+function parseFeedCursor(raw: string | undefined): FeedCursor | null {
+  if (!raw) return null;
+  const sep = raw.indexOf("|");
+  if (sep <= 0) return null;
+  const at = new Date(raw.slice(0, sep));
+  const id = raw.slice(sep + 1);
+  if (Number.isNaN(at.getTime()) || id === "") return null;
+  return { at, id };
+}
+
+function encodeFeedCursor(item: FeedItem): string {
+  return `${item.createdAt}|${item.id}`;
+}
+
 /** One wire-format feed entry; `type` discriminates the per-source fields. */
 type FeedItem = {
   type: "issue_opened" | "pr_opened" | "release" | "timeline";
@@ -84,11 +107,20 @@ export async function socialRoutes(app: FastifyInstance) {
     return { starred: false, starCount };
   });
 
-  // GET /users/:handle/starred — the repos a user starred, newest star first,
-  // filtered to what the VIEWER may read (a private repo never leaks through
-  // someone else's starred list).
+  // GET /users/:handle/starred?page=N&per_page=N — the repos a user starred,
+  // newest star first, filtered to what the VIEWER may read (a private repo
+  // never leaks through someone else's starred list). The read is BOUNDED to the
+  // requested window like the neighbouring list endpoints — the per-repo access
+  // include (org memberships + team member sets) is far too heavy to pull for
+  // every star a user ever made. Viewer filtering happens after the window, so a
+  // page can come back shorter than `perPage`; `hasMore` still paginates
+  // correctly because it is answered from the raw star rows.
   app.get("/users/:handle/starred", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle: handleParam } = request.params as { handle: string };
+    const { page: pageQ, per_page: perPageQ } = request.query as { page?: string; per_page?: string };
+    const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
+    const perPage = Math.min(50, Math.max(1, parseInt(perPageQ ?? "25", 10) || 25));
+
     const user = await prisma.user.findUnique({ where: { handle: handleParam.toLowerCase() } });
     if (!user) return reply.status(404).send({ error: "User not found" });
 
@@ -96,6 +128,8 @@ export async function socialRoutes(app: FastifyInstance) {
     const stars = await prisma.star.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
+      skip: (page - 1) * perPage,
+      take: perPage + 1, // one beyond the window answers hasMore
       include: {
         repo: {
           include: {
@@ -108,17 +142,38 @@ export async function socialRoutes(app: FastifyInstance) {
       },
     });
 
+    const hasMore = stars.length > perPage;
     return {
       repos: stars
+        .slice(0, perPage)
         .filter((s) => canRead(s.repo, vid))
         .map((s) => ({ ...repoResponse(s.repo), starredAt: s.createdAt.toISOString() })),
+      page,
+      perPage,
+      hasMore,
     };
   });
 
   // ── Watching ───────────────────────────────────────────────────────────────
 
+  /**
+   * How many users the repo-wide fan-out actually reaches — the same set
+   * `notifySubscribers` computes: every explicit ALL row, plus every
+   * owner/collaborator whose implicit ALL was never materialized. Two bounded
+   * queries, no denormalized counter (matching `starCount`).
+   */
+  async function watcherCount(repo: { id: string; ownerId: string; collaborators: Array<{ userId: string }> }): Promise<number> {
+    const memberIds = [...new Set([repo.ownerId, ...repo.collaborators.map((c) => c.userId)])];
+    const [explicitAll, memberRows] = await Promise.all([
+      prisma.watch.count({ where: { repoId: repo.id, level: "ALL" } }),
+      prisma.watch.findMany({ where: { repoId: repo.id, userId: { in: memberIds } }, select: { userId: true } }),
+    ]);
+    const withRow = new Set(memberRows.map((r) => r.userId));
+    return explicitAll + memberIds.filter((id) => !withRow.has(id)).length;
+  }
+
   // GET /repos/:handle/:name/social — the viewer's star/watch state plus the
-  // grouped star count, in one call for the repo header.
+  // grouped star and watcher counts, in one call for the repo header.
   app.get("/repos/:handle/:name/social", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const vid = viewerId(request as { user?: { sub: string } });
@@ -126,8 +181,11 @@ export async function socialRoutes(app: FastifyInstance) {
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, vid)) return reply.status(404).send({ error: "Not found" });
 
-    const starCount = await prisma.star.count({ where: { repoId: repo.id } });
-    if (!vid) return { starCount, viewerStarred: false, watchLevel: "participating" as const };
+    const [starCount, watchers] = await Promise.all([
+      prisma.star.count({ where: { repoId: repo.id } }),
+      watcherCount(repo),
+    ]);
+    if (!vid) return { starCount, watcherCount: watchers, viewerStarred: false, watchLevel: "participating" as const };
 
     const [star, watch] = await Promise.all([
       prisma.star.findUnique({ where: { userId_repoId: { userId: vid, repoId: repo.id } } }),
@@ -135,6 +193,7 @@ export async function socialRoutes(app: FastifyInstance) {
     ]);
     return {
       starCount,
+      watcherCount: watchers,
       viewerStarred: !!star,
       watchLevel: watch ? fromDbWatchLevel(watch.level) : defaultWatchLevel(repo, vid),
     };
@@ -160,7 +219,7 @@ export async function socialRoutes(app: FastifyInstance) {
       create: { userId, repoId: repo.id, level },
       update: { level },
     });
-    return { watchLevel: parsed.data.level };
+    return { watchLevel: parsed.data.level, watcherCount: await watcherCount(repo) };
   });
 
   // DELETE /repos/:handle/:name/watch — drop the explicit choice, falling back
@@ -173,23 +232,25 @@ export async function socialRoutes(app: FastifyInstance) {
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
 
     await prisma.watch.deleteMany({ where: { userId, repoId: repo.id } });
-    return { watchLevel: defaultWatchLevel(repo, userId) };
+    return { watchLevel: defaultWatchLevel(repo, userId), watcherCount: await watcherCount(repo) };
   });
 
   // ── Feed ───────────────────────────────────────────────────────────────────
 
-  // GET /feed?page=N&per_page=N — recent activity across the caller's watched
-  // (non-IGNORE) + starred repos, newest first. Offset pagination over an
-  // in-memory merge of the (bounded) per-source reads: each source is fetched
-  // to the current window only, so a deep page costs proportionally, and v0
-  // needs no cross-table event index. Private-repo activity is filtered by a
-  // canRead pass over the candidate repos BEFORE any event query — losing
-  // access to a repo you starred silently drops it from the feed.
+  // GET /feed?cursor=<createdAt|id>&per_page=N — recent activity across the
+  // caller's watched (non-IGNORE) + starred repos, newest first. CURSOR
+  // pagination over an in-memory merge of the (bounded) per-source reads: every
+  // source is capped at `perPage + 1` rows at-or-before the cursor, so a deep
+  // page costs the same as the first one and no page re-fetches what earlier
+  // pages already read. Private-repo activity is filtered by a canRead pass over
+  // the candidate repos BEFORE any event query — losing access to a repo you
+  // starred silently drops it from the feed.
   app.get("/feed", { preHandler: [app.authenticate] }, async (request) => {
     const userId = request.user.sub;
-    const { page: pageQ, per_page: perPageQ } = request.query as { page?: string; per_page?: string };
-    const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
+    const { cursor: cursorQ, per_page: perPageQ } = request.query as { cursor?: string; per_page?: string };
     const perPage = Math.min(50, Math.max(1, parseInt(perPageQ ?? "25", 10) || 25));
+    const cursor = parseFeedCursor(cursorQ);
+    const empty = { items: [] as FeedItem[], perPage, nextCursor: null, hasMore: false };
 
     const [stars, watches] = await Promise.all([
       prisma.star.findMany({ where: { userId }, select: { repoId: true } }),
@@ -199,44 +260,47 @@ export async function socialRoutes(app: FastifyInstance) {
       ...stars.map((s) => s.repoId),
       ...watches.filter((w) => w.level !== "IGNORE").map((w) => w.repoId),
     ]);
-    if (candidateIds.size === 0) return { items: [], page, perPage, hasMore: false };
+    if (candidateIds.size === 0) return empty;
 
     const repos = await prisma.repo.findMany({
       where: { id: { in: [...candidateIds] } },
       include: { ...repoAccessInclude, owner: { select: { handle: true } } },
     });
     const readable = repos.filter((r) => canRead(r, userId));
-    if (readable.length === 0) return { items: [], page, perPage, hasMore: false };
+    if (readable.length === 0) return empty;
 
     const repoRef = new Map(
       readable.map((r) => [r.id, { ownerHandle: r.org?.handle ?? r.owner.handle, name: r.name }]),
     );
     const repoIds = [...repoRef.keys()];
 
-    // One row beyond the window is enough to answer hasMore.
-    const window = page * perPage + 1;
+    // One row beyond the page is enough to answer hasMore, per source. `lte`
+    // (not `lt`) keeps rows sharing the cursor's exact timestamp in play; the
+    // id tiebreak below drops the ones already delivered.
+    const window = perPage + 1;
+    const since = cursor ? { createdAt: { lte: cursor.at } } : {};
     const authorSel = { select: { handle: true } } as const;
     const [issues, pulls, releases, events] = await Promise.all([
       prisma.issue.findMany({
-        where: { repoId: { in: repoIds } },
+        where: { repoId: { in: repoIds }, ...since },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.pullRequest.findMany({
-        where: { repoId: { in: repoIds } },
+        where: { repoId: { in: repoIds }, ...since },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.release.findMany({
-        where: { repoId: { in: repoIds }, isDraft: false },
+        where: { repoId: { in: repoIds }, isDraft: false, ...since },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.timelineEvent.findMany({
-        where: { repoId: { in: repoIds }, kind: { in: [...FEED_TIMELINE_KINDS] } },
+        where: { repoId: { in: repoIds }, kind: { in: [...FEED_TIMELINE_KINDS] }, ...since },
         orderBy: { createdAt: "desc" },
         take: window,
       }),
@@ -293,9 +357,20 @@ export async function socialRoutes(app: FastifyInstance) {
     }
 
     entries.sort((a, b) => b.at.getTime() - a.at.getTime() || a.item.id.localeCompare(b.item.id));
-    const start = (page - 1) * perPage;
-    const pageItems = entries.slice(start, start + perPage).map((e) => e.item);
-    const hasMore = entries.length > page * perPage;
+    // Everything strictly after the cursor in that same order. Entries at the
+    // cursor's exact timestamp are kept only when their id sorts after it, so a
+    // page boundary that lands mid-timestamp neither repeats nor skips an entry.
+    const fresh = cursor
+      ? entries.filter(
+          (e) =>
+            e.at.getTime() < cursor.at.getTime() ||
+            (e.at.getTime() === cursor.at.getTime() && e.item.id.localeCompare(cursor.id) > 0),
+        )
+      : entries;
+    const pageItems = fresh.slice(0, perPage).map((e) => e.item);
+    const hasMore = fresh.length > perPage;
+    const last = pageItems.at(-1);
+    const nextCursor = hasMore && last ? encodeFeedCursor(last) : null;
 
     // Resolve subject titles for the timeline slice (2 bounded lookups max) so
     // the feed can say WHAT was closed/merged, not just its number.
@@ -334,6 +409,6 @@ export async function socialRoutes(app: FastifyInstance) {
       }
     }
 
-    return { items: pageItems, page, perPage, hasMore };
+    return { items: pageItems, perPage, nextCursor, hasMore };
   });
 }
