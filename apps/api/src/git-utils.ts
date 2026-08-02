@@ -700,22 +700,97 @@ async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promis
  * stops after `skip + perPage` commits, so a page costs what it returns. With
  * one it keeps walking until it has found that many *matching* commits, so a
  * rare or unknown path would scan the whole DAG — on a route that is
- * unauthenticated for public repos. Bounding the revision range keeps a
- * path-filtered page as cheap as an unfiltered one at the same depth.
+ * unauthenticated for public repos. Capping the *position* of the oldest commit
+ * considered keeps a path-filtered page as cheap as an unfiltered one.
  */
 export const PATH_HISTORY_SCAN_LIMIT = 2000;
 
 /**
- * The `^<sha>` exclusion that caps a path-filtered walk at
- * {@link PATH_HISTORY_SCAN_LIMIT} commits, or `[]` when history is shorter.
- * `rev-list --skip=N --max-count=1` carries no pathspec, so git stops as soon
- * as it has walked N+1 commits.
+ * Window tried before {@link PATH_HISTORY_SCAN_LIMIT}. Enumerating the newest N
+ * commits costs an N-commit walk, and the overwhelmingly common read — the code
+ * tab asking for the newest commit touching the directory on screen — is
+ * answered within a handful of commits. Starting small keeps browsing a
+ * thousand-commit repo from paying a thousand-commit walk per navigation; the
+ * full limit is only enumerated when the small window came up short of a page.
  */
-async function pathHistoryBound(storageKey: string, ref: string): Promise<string[]> {
-  const boundary = await git(storageKey, [
-    "rev-list", `--skip=${PATH_HISTORY_SCAN_LIMIT}`, "--max-count=1", ref,
-  ]);
-  return boundary ? [`^${boundary}`] : [];
+const PATH_HISTORY_FAST_WINDOW = 256;
+
+/** Run a git command with `input` fed to its stdin. */
+function gitWithStdin(storageKey: string, args: string[], input: string): Promise<string> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  return new Promise((resolve, reject) => {
+    const child = execFileCb("git", args, { cwd, maxBuffer: MAX }, (err, stdout) =>
+      err ? reject(err) : resolve(stdout.trim()),
+    );
+    child.stdin?.on("error", reject);
+    child.stdin?.end(input);
+  });
+}
+
+/**
+ * Path-filtered commit lines whose cost is capped by *position*: no commit older
+ * than the newest {@link PATH_HISTORY_SCAN_LIMIT} is ever considered.
+ *
+ * A position cap and an ancestry exclusion are different things, and git has no
+ * "stop after N commits walked" flag on `git log`. `^<sha>` prunes only that
+ * commit and *its ancestors* — one lineage — so on any repo with a second long
+ * lineage (a long-lived branch merged at the tip, a merged fork, an unrelated
+ * history) every commit past the cap that is not an ancestor of the boundary
+ * stays fully walkable, and the cap does nothing. So enumerate the newest N
+ * commits and filter exactly those: `rev-list --max-count=N` stops after N
+ * commits regardless of shape, and `log --no-walk` considers precisely the
+ * commits handed to it with no ancestry traversal at all.
+ *
+ * Two flag facts this depends on, both verified against git 2.43:
+ *  - `--max-count`/`-n` *cancels* `--no-walk` (git resumes traversing), so the
+ *    page size is applied here in JS, never handed to `git log`.
+ *  - `--skip` is safe alongside `--no-walk` and only indexes into the matches.
+ *
+ * Within the window a commit is reported when it is not TREESAME to any parent,
+ * so a side branch merged into the window contributes its own path-touching
+ * commits rather than being pruned away by first-parent simplification. That is
+ * a superset of the walking form's output, and still position-capped.
+ */
+async function pathFilteredCommitLines(
+  storageKey: string,
+  ref: string,
+  pathspec: string,
+  skip: number,
+  perPage: number,
+  format: string,
+): Promise<string[]> {
+  // A window of W commits can never yield more than W matches, so a page that
+  // starts beyond the fast window has nothing to gain from trying it first.
+  const windows = skip + perPage > PATH_HISTORY_FAST_WINDOW
+    ? [PATH_HISTORY_SCAN_LIMIT]
+    : [PATH_HISTORY_FAST_WINDOW, PATH_HISTORY_SCAN_LIMIT];
+
+  for (const windowSize of windows) {
+    const listed = await git(storageKey, ["rev-list", `--max-count=${windowSize}`, ref]);
+    const shas = listed.split("\n").filter(Boolean);
+    if (!shas.length) return [];
+    const out = await gitWithStdin(
+      storageKey,
+      [
+        "log", "--stdin", "--no-walk=unsorted", `--skip=${skip}`, `--format=${format}`,
+        // The `--` disambiguates the pathspec, so a path that looks like a ref
+        // is safe.
+        "--", pathspec,
+      ],
+      shas.join("\n") + "\n",
+    );
+    const lines = out.split("\n").filter(Boolean);
+    // Widening can only help when this window was both short of a full page and
+    // not already the whole history (or the hard limit).
+    if (
+      lines.length >= perPage ||
+      shas.length < windowSize ||
+      windowSize === PATH_HISTORY_SCAN_LIMIT
+    ) {
+      return lines.slice(0, perPage);
+    }
+  }
+  return [];
 }
 
 export async function listCommits(
@@ -726,19 +801,22 @@ export async function listCommits(
   const page = Math.max(1, options.page ?? 1);
   const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
   const skip = (page - 1) * perPage;
+  // \x1f (unit separator) won't appear in git metadata fields
+  const format = `%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`;
   try {
-    const bound = options.path ? await pathHistoryBound(storageKey, ref) : [];
-    // \x1f (unit separator) won't appear in git metadata fields
-    const out = await git(storageKey, [
-      "log", ref, ...bound,
-      `--skip=${skip}`, `-n`, String(perPage),
-      `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
-      // Per-path history: only commits touching this file or directory. The
-      // `--` disambiguates the pathspec, so a path that looks like a ref is safe.
-      ...(options.path ? ["--", options.path] : []),
-    ]);
-    if (!out) return [];
-    const raws = out.split("\n").filter(Boolean).map(parseCommitLine);
+    let lines: string[];
+    if (options.path) {
+      lines = await pathFilteredCommitLines(storageKey, ref, options.path, skip, perPage, format);
+    } else {
+      // No pathspec: `git log` already stops after skip + perPage commits, so
+      // the page costs what it returns and needs no bound.
+      const out = await git(storageKey, [
+        "log", ref, `--skip=${skip}`, `-n`, String(perPage), `--format=${format}`,
+      ]);
+      lines = out.split("\n").filter(Boolean);
+    }
+    if (!lines.length) return [];
+    const raws = lines.map(parseCommitLine);
     return annotateSignatures(storageKey, raws);
   } catch {
     return [];
