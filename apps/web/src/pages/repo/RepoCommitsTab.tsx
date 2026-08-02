@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
 import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
-import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { extensionForFilename, resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../views/diffViewers/computeTierUi";
 import { useSemanticExtensions } from "../../lib/fhrFormats";
 import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../ui";
 import {
@@ -80,6 +81,12 @@ export function FileDiffCard({
   const filename = blobPath.split("/").pop() ?? "";
   const semanticExtensions = useSemanticExtensions();
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
+  // Compute-tier chrome, semantic files only: the header pill owns the tier,
+  // the viewer renders it; both share one cached metadata fetch (#66 P4).
+  const ext = extensionForFilename(filename);
+  const isSemantic = semanticExtensions.has(ext);
+  const [tier, changeTier] = useComputeTier(ext);
+  const meta = useFileDiffMeta(token, base, blobPath, sha, isSemantic);
 
   return (
     <div id={`diff-${index}`} className="scroll-mt-4 rounded-md border border-fh-border bg-fh-surface">
@@ -113,6 +120,7 @@ export function FileDiffCard({
           {displayPath}
         </Link>
         <div className="flex flex-shrink-0 items-center gap-2.5">
+          {isSemantic && <ComputeTierPill tier={tier} onChange={changeTier} meta={meta} />}
           <DiffCounts additions={file.additions} deletions={file.deletions} />
           <ChangeTypeBadge status={file.status} />
         </div>
@@ -120,7 +128,14 @@ export function FileDiffCard({
 
       {expanded && (
         <div className="overflow-hidden rounded-b-md">
-          <Viewer file={file} repoBase={base} headRef={sha} token={token} />
+          <Viewer
+            file={file}
+            repoBase={base}
+            headRef={sha}
+            token={token}
+            computeTier={isSemantic ? tier : undefined}
+            onComputeTierChange={changeTier}
+          />
         </div>
       )}
     </div>
