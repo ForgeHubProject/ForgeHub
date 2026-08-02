@@ -61,7 +61,8 @@ const NOW = new Date("2026-02-01T00:00:00.000Z");
 
 const REPO = {
   id: "repo-1", name: "my-repo", visibility: "PUBLIC" as const,
-  storageKey: "alice/my-repo.git", ownerId: "user-1", collaborators: [] as Array<{ userId: string; role: string }>,
+  storageKey: "alice/my-repo.git", ownerId: "user-1",
+  collaborators: [] as Array<{ userId: string; role: "READER" | "WRITER" }>,
 };
 
 function issueRow(o: Record<string, unknown> = {}) {
@@ -162,6 +163,21 @@ describe("syncBodyReferences", () => {
     expect(prisma.notification.upsert).toHaveBeenCalledTimes(1);
     const notif = vi.mocked(prisma.notification.upsert).mock.calls[0][0] as { create: { userId: string; reason: string } };
     expect(notif.create).toMatchObject({ userId: "user-2", reason: "MENTIONED" });
+  });
+
+  // Review follow-up: the mention loop already holds the access-relevant repo,
+  // so notifyUser must not re-load it (org memberships + team member sets) once
+  // per @handle on the comment-create hot path.
+  it("reuses the caller's repo rather than re-loading it per mention", async () => {
+    await syncBodyReferences({
+      repo: REPO, actorId: "user-1",
+      source: { type: "ISSUE", id: "issue-1" },
+      container: { subjectType: "ISSUE", id: "issue-1", number: 1, title: "Root" },
+      body: "cc @bob and @carol",
+    });
+
+    expect(prisma.notification.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.repo.findUnique).not.toHaveBeenCalled();
   });
 
   it("marks closing keywords as closing refs", async () => {
