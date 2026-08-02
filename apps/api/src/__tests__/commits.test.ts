@@ -141,6 +141,26 @@ describe("listCommits()", () => {
     const commits = await listCommits(repo.storageKey, "nonexistent-branch");
     expect(commits).toEqual([]);
   });
+
+  it("filters history to commits touching a file path", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "src/main.ts" });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("filters history to commits touching a directory path", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "src" });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("combines a path filter with pagination", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "readme.txt", perPage: 1, page: 2 });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("returns empty array for a path no commit touches", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "no/such/file.txt" });
+    expect(commits).toEqual([]);
+  });
 });
 
 // ─── git-utils: getCommit ─────────────────────────────────────────────────────
@@ -227,6 +247,26 @@ describe("GET /repos/:h/:r/commits", () => {
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/commits?branch=feature%2Fcfg" });
     expect(res.statusCode).toBe(200);
     expect(res.json().commits).toHaveLength(3);
+  });
+
+  it("filters by ?path and echoes it in the payload", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/repos/alice/my-repo/commits?branch=${encodeURIComponent(defBranch)}&path=${encodeURIComponent("src/main.ts")}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.path).toBe("src/main.ts");
+    expect(body.commits).toHaveLength(1);
+    expect(body.commits[0].sha).toBe(sha1);
+  });
+
+  it("treats a blank ?path as no filter", async () => {
+    const res = await app.inject({ method: "GET", url: `/repos/alice/my-repo/commits?branch=${encodeURIComponent(defBranch)}&path=` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.path).toBeNull();
+    expect(body.commits).toHaveLength(2);
   });
 
   it("returns 404 for unknown repo", async () => {

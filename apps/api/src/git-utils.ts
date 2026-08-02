@@ -698,7 +698,7 @@ async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promis
 export async function listCommits(
   storageKey: string,
   ref: string,
-  options: { page?: number; perPage?: number } = {},
+  options: { page?: number; perPage?: number; path?: string } = {},
 ): Promise<CommitInfo[]> {
   const page = Math.max(1, options.page ?? 1);
   const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
@@ -709,6 +709,9 @@ export async function listCommits(
       "log", ref,
       `--skip=${skip}`, `-n`, String(perPage),
       `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
+      // Per-path history: only commits touching this file or directory. The
+      // `--` disambiguates the pathspec, so a path that looks like a ref is safe.
+      ...(options.path ? ["--", options.path] : []),
     ]);
     if (!out) return [];
     const raws = out.split("\n").filter(Boolean).map(parseCommitLine);
