@@ -209,9 +209,15 @@ export async function updateRepo(
   return req(`/repos/${repoName}`, { method: "PATCH", token, body: JSON.stringify(patch) });
 }
 
-/** Permanently delete the caller's own repository (DB rows + git storage). */
-export async function deleteRepo(token: string, repoName: string): Promise<void> {
-  return req(`/repos/${repoName}`, { method: "DELETE", token });
+/**
+ * Permanently delete a repository (DB rows + git storage), addressed by owning
+ * handle and name like {@link getRepo}. The owner has to be part of the address:
+ * a bare name resolves against the *caller's* namespace server-side, so deleting
+ * from someone else's repo page would otherwise hit the caller's same-named repo.
+ * Resolves only on the server's 204 — any other status throws.
+ */
+export async function deleteRepo(token: string, handle: string, repoName: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}`, { method: "DELETE", token });
 }
 
 // ─── composition ─────────────────────────────────────────────────────────────

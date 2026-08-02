@@ -175,8 +175,6 @@ export function DropdownMenu({
       {open && (
         <div
           ref={panelRef}
-          id={menuId}
-          role="menu"
           onKeyDown={onPanelKeyDown}
           onClick={onPanelClick}
           className={cx(
@@ -204,8 +202,17 @@ export function DropdownMenu({
               />
             </div>
           )}
-          {/* Searchable lists can get long — cap and scroll them; plain menus keep their natural height. */}
-          <div className={searchable ? "max-h-80 overflow-y-auto" : undefined}>
+          {/*
+            `role="menu"` belongs to the row list, not the popup shell: a menu may
+            only own menuitem-role children, so the search box has to sit outside it
+            or screen readers mis-announce it. Searchable lists can get long — cap
+            and scroll them; plain menus keep their natural height.
+          */}
+          <div
+            id={menuId}
+            role="menu"
+            className={searchable ? "max-h-80 overflow-y-auto" : undefined}
+          >
             {typeof children === "function" ? children(query) : children}
           </div>
         </div>

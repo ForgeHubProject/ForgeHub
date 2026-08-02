@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  ApiError,
   avatarSrc,
   deleteAvatar,
   getContributions,
@@ -11,7 +10,6 @@ import {
   updateMyProfile,
   uploadAvatar,
 } from "../api";
-import { NotFoundPage } from "./NotFoundPage";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { ContributionHeatmap } from "../components/ContributionHeatmap";
@@ -179,7 +177,6 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   const [repos, setRepos] = useState<Repo[]>([]);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
@@ -193,7 +190,6 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   useEffect(() => {
     if (!handle) return;
     setLoading(true);
-    setNotFound(false);
     setError(null);
     setFilter("");
     setReadme(null);
@@ -203,12 +199,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
         setProfile(prof);
         setRepos(repoData.repos);
       })
-      .catch((e) => {
-        // Unknown handle → the shared 404 page (issue #109); a genuine load
-        // failure keeps the inline error.
-        if (e instanceof ApiError && e.status === 404) setNotFound(true);
-        else setError(e instanceof Error ? e.message : "Failed to load profile");
-      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load profile"))
       .finally(() => setLoading(false));
   }, [token, handle]);
 
@@ -279,10 +270,6 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
       (r) => r.name.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q),
     );
   }, [filter, repos]);
-
-  // Unknown handle → the shared 404 page (issue #109); the greedy /:handle
-  // route shadows the router's catch-all, so this is where it lands.
-  if (notFound) return <NotFoundPage />;
 
   return (
     <div className="flex min-h-screen flex-col bg-fh-canvas">

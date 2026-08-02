@@ -1542,7 +1542,9 @@ function DeployKeysSection({ token, handle, repoName, isOwner }: {
 
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
-function DangerSection({ token, repoName, fullName }: { token: string; repoName: string; fullName: string }) {
+function DangerSection({ token, handle, repoName, fullName, isOwner }: {
+  token: string; handle: string; repoName: string; fullName: string; isOwner: boolean;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -1553,10 +1555,12 @@ function DangerSection({ token, repoName, fullName }: { token: string; repoName:
   function close() { setConfirming(false); setTyped(""); }
 
   async function requestDelete() {
-    if (!matches || deleting) return;
+    if (!matches || deleting || !isOwner) return;
     setDeleting(true);
     try {
-      await deleteRepo(token, repoName);
+      // Addressed by owner + name, so the repo deleted is the one named below;
+      // the toast fires only after the server confirms it (deleteRepo throws otherwise).
+      await deleteRepo(token, handle, repoName);
       toast(`Deleted ${fullName}`, { tone: "success" });
       navigate("/");
     } catch (err) {
@@ -1568,6 +1572,11 @@ function DangerSection({ token, repoName, fullName }: { token: string; repoName:
   return (
     <div>
       <SectionHeader title="Danger zone" description="Irreversible and destructive actions." />
+      {!isOwner ? (
+        <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          Only the repository owner can delete this repository.
+        </p>
+      ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
           <div className="min-w-0">
@@ -1581,6 +1590,7 @@ function DangerSection({ token, repoName, fullName }: { token: string; repoName:
           </Button>
         </div>
       </div>
+      )}
 
       <Dialog
         open={confirming}
@@ -1681,7 +1691,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
         {section === "deploy-keys" && <DeployKeysSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
-        {section === "danger" && <DangerSection token={token} repoName={repoName} fullName={fullName} />}
+        {section === "danger" && <DangerSection token={token} handle={handle} repoName={repoName} fullName={fullName} isOwner={isOwner} />}
       </div>
     </div>
   );

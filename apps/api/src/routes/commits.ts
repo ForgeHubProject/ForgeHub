@@ -27,7 +27,9 @@ export async function commitRoutes(app: FastifyInstance) {
     const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(perPageQ ?? "20", 10) || 20));
     // Optional per-path history (issue #109): only commits touching this file/dir.
-    const path = pathQ?.trim() || undefined;
+    // Taken verbatim, like the tree/blob handlers below — a pathspec means the
+    // same thing on every route here. An absent or empty `?path=` is no filter.
+    const path = pathQ || undefined;
 
     const commits = await listCommits(repo.storageKey, ref, { page, perPage, path });
     return { commits, branch: ref, path: path ?? null, page, perPage };
