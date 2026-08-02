@@ -1065,6 +1065,83 @@ export async function listBlobSizes(storageKey: string, ref: string): Promise<Bl
   }
 }
 
+/**
+ * Paths whose content differs between two commits (`git diff --name-only`).
+ * Drives the viewed-file reset on a head push (issue #119): a rename without -M
+ * lists both the old and new path, so both sides drop their viewed state. Empty
+ * on any error (unresolvable shas after a force-push GC, etc.).
+ */
+export async function listChangedPaths(
+  storageKey: string,
+  oldSha: string,
+  newSha: string,
+): Promise<string[]> {
+  try {
+    const out = await git(storageKey, ["diff", "--name-only", oldSha, newSha]);
+    return out.split("\n").map((p) => p.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export type CommitFileResult =
+  | { ok: true; sha: string }
+  | { ok: false; conflict: true };
+
+/**
+ * Commit a full replacement of one file onto the tip of `branch` and push,
+ * authored as `author` — the write behind "Apply suggestion" (issue #119).
+ * When `expectedHeadSha` is given the push is abandoned if the branch tip moved
+ * since the caller computed the new content (compare-and-swap against a
+ * concurrent push), returning a conflict instead of clobbering the newer tip.
+ */
+export async function commitFileToBranch(
+  storageKey: string,
+  branch: string,
+  filePath: string,
+  content: string,
+  message: string,
+  author: CommitAuthor,
+  expectedHeadSha?: string | null,
+): Promise<CommitFileResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-suggest-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", branch], { cwd: tmpDir, maxBuffer: MAX });
+
+    if (expectedHeadSha) {
+      const { stdout: tip } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      if (tip.trim() !== expectedHeadSha) return { ok: false, conflict: true };
+    }
+
+    const full = path.join(tmpDir, filePath);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, content, "utf8");
+    await execFile("git", ["add", "--", filePath], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", [...identityArgs(author), "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      // Nothing staged — the replacement matches the current content.
+      return { ok: false, conflict: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", branch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
+    } catch {
+      // A concurrent push moved the tip between clone and push.
+      return { ok: false, conflict: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 /** Paths changed between two branch tips (merge-base..from, plus to-only). */
 export async function listFilesDifferingBetweenBranches(
   storageKey: string,

@@ -52,9 +52,17 @@ export const createRepoBodySchema = z.object({
   owner: handleSchema.optional(),
 });
 
+/** A pull-request merge method (issue #119). */
+export const mergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
+
 export const updateRepoBodySchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   visibility: repoVisibilitySchema.optional(),
+  // Merge policy (issue #119): the allowed-method set must stay non-empty, and
+  // the default must land inside it (cross-field rule checked in the route,
+  // since either field may arrive alone).
+  allowedMergeMethods: z.array(mergeMethodSchema).nonempty().optional(),
+  defaultMergeMethod: mergeMethodSchema.optional(),
 });
 
 export const renameRepoBodySchema = z.object({
