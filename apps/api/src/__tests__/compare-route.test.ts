@@ -36,6 +36,7 @@ import type { FastifyInstance } from "fastify";
 import type { Entity } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { officialWasmDiff } from "../fhr/official-handlers.js";
+import { gltfSceneHandler } from "../handlers/gltf-scene/handler.js";
 import { __setManifestForTests, __resetManifest } from "../fhr/manifest.js";
 import { createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
 import { createTestServer } from "./helpers/server.js";
@@ -250,6 +251,38 @@ describe("GET /repos/:handle/:name/compare — official wasm fast path", () => {
     expect(body.changes[0].kind).toBe("modified");
     expect(body.changes[0].children.some((c: { path: string }) => c.path === "name")).toBe(true);
     expect(prisma.diffCache.create).not.toHaveBeenCalled();
+  });
+
+  it("503s when the manifest is unreachable — never substitutes the built-in engine (#74)", async () => {
+    // A cold-start manifest fetch failure is NOT "this extension has no official
+    // handler": we cannot tell which engine is authoritative, so answering with
+    // the built-in blob engine would be exactly the substitution /filediff was
+    // changed to refuse in slice 1.
+    const builtInDiff = vi.spyOn(gltfSceneHandler, "diff");
+    __resetManifest();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("manifest unreachable")));
+    try {
+      const res = await get("base=snap-base&target=snap-target");
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toContain("Official FHR handler unavailable");
+      expect(builtInDiff).not.toHaveBeenCalled();
+      expect(officialWasmDiff).not.toHaveBeenCalled();
+      // Nothing may enter the shared DiffCache namespace on this path.
+      expect(prisma.diffCache.create).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      builtInDiff.mockRestore();
+    }
+  });
+
+  it("caches only under the id of the engine that actually produced the diff", async () => {
+    // The wasm result carries its own handler id; the cache row must be keyed by
+    // that, never by whatever id engine *selection* happened to settle on.
+    vi.mocked(officialWasmDiff).mockResolvedValue({ ...WASM_DIFF, handlerId: "gltf-scene@wasm" });
+    await get("base=snap-base&target=snap-target");
+    expect(prisma.diffCache.create).toHaveBeenCalledTimes(1);
+    const arg = vi.mocked(prisma.diffCache.create).mock.calls[0]![0] as { data: { handlerId: string } };
+    expect(arg.data.handlerId).toBe("gltf-scene@wasm");
   });
 
   it("still serves plain-text (non-FHR format) via the built-in catch-all fast path", async () => {
