@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { ApiError, getPublicProfile } from "./api";
+import { FeedPage } from "./pages/FeedPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NewOrgPage } from "./pages/NewOrgPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -111,6 +112,16 @@ function AppRoutes() {
               }
               onLogout={handleLogout}
             />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/feed"
+        element={
+          authed ? (
+            <FeedPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
             <Navigate to="/login" replace />
           )
