@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   officialFormats,
   handlerWasmUrl,
+  handlerBuild,
   rendererUrl,
   rendererIds,
   parseManifest,
@@ -59,6 +60,17 @@ describe("parseManifest", () => {
     // native binary keys are not renderer/wasm outputs — no spurious entries
     expect([...m.rendererUrls.keys()]).toEqual(["gltf-scene"]);
   });
+
+  it("projects the per-handler content-hash build from the [formats] entries", () => {
+    const m = parseManifest(FIXTURE);
+    expect(m.builds.get("gltf-scene")).toBe("e520cc6");
+  });
+
+  it("leaves the build map empty for entries without a build stamp", () => {
+    const m = parseManifest('[formats]\n".gltf" = { handler = "gltf-scene" }\n');
+    expect(m.formats.get(".gltf")).toBe("gltf-scene");
+    expect(m.builds.has("gltf-scene")).toBe(false);
+  });
 });
 
 describe("manifest accessors (stubbed fetch)", () => {
@@ -74,6 +86,12 @@ describe("manifest accessors (stubbed fetch)", () => {
     stubFetchOk();
     expect(await handlerWasmUrl("nope")).toBeNull();
     expect(await rendererUrl("nope")).toBeNull();
+    expect(await handlerBuild("nope")).toBeNull();
+  });
+
+  it("resolves the current build for a declared handler", async () => {
+    stubFetchOk();
+    expect(await handlerBuild("gltf-scene")).toBe("e520cc6");
   });
 
   it("caches within the TTL: a single upstream fetch serves many calls", async () => {

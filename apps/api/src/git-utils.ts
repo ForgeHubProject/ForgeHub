@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { loadActiveFormats } from "./forge-formats.js";
+import { loadHandlerPins } from "./forge-handlers.js";
 import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 
 const execFile = promisify(execFileCb);
@@ -162,6 +163,27 @@ const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forg
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
 export async function activeFormatsAtCommit(storageKey: string, commitIsh: string): Promise<Set<string>> {
   return loadActiveFormats(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+// The repo's handler-build pins (.forge/handlers) at a commit, for surfacing
+// build skew between a client compute tier and the server's official build.
+export async function handlerPinsAtCommit(storageKey: string, commitIsh: string): Promise<Map<string, string | null>> {
+  return loadHandlerPins(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+/**
+ * Size in bytes of a file's blob at a commit, or null when absent. Answered by
+ * `git cat-file -s` without materializing the blob, so a client can be told the
+ * honest download cost of browser-side compute before it fetches anything.
+ */
+export async function blobSizeAtCommit(storageKey: string, commitIsh: string, filePath: string): Promise<number | null> {
+  try {
+    const out = await git(storageKey, ["cat-file", "-s", `${commitIsh}:${filePath}`]);
+    const n = Number(out);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {
