@@ -64,6 +64,42 @@ export async function getFileSemanticDiff(
 }
 
 /**
+ * Result of GET /repos/:h/:n/filediff-meta — everything the compute-tier UI
+ * needs WITHOUT the server computing a diff (issue #66 P4): blob SHAs + sizes
+ * (honest Tier-B download costs, the Tier-L forge command), whether a wasm
+ * build exists (Tier-B capability detection), and the manifest's current build
+ * vs. the repo's `.forge/handlers` pin (surfacing build skew loudly).
+ */
+export type FileDiffMeta = {
+  handlerId: string;
+  path: string;
+  baseSha: string | null;
+  headSha: string;
+  /** Exact blob byte counts — what Tier B would download. Null when absent. */
+  baseSize: number | null;
+  headSize: number | null;
+  wasmAvailable: boolean;
+  /** The build the server executes (manifest-stamped), null if unstamped. */
+  officialBuild: string | null;
+  /** The repo's `.forge/handlers` pin for this handler, null when unpinned. */
+  pinnedBuild: string | null;
+};
+
+/** Compute-tier metadata for one file at a commit (no diff is computed). */
+export async function getFileDiffMeta(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+): Promise<FileDiffMeta> {
+  return req(
+    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    { token: token ?? undefined },
+  );
+}
+
+/**
  * The public FHR format manifest mirrored by the API: maps a lowercase extension
  * WITH its leading dot (e.g. ".gltf") to the handler id that serves it. No auth
  * required. May 503 while the API has never fetched a manifest — callers degrade
