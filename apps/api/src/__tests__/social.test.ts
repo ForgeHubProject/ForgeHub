@@ -273,20 +273,47 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
     vi.mocked(prisma.repo.findFirst).mockResolvedValue({
       ...PUBLIC_REPO, collaborators: [{ userId: "collab-1" }, { userId: "collab-2" }],
     } as never);
-    // collab-1 has a row (PARTICIPATING) — only collab-2 and the owner are implicit.
-    vi.mocked(prisma.watch.findMany).mockResolvedValue([
-      { userId: "collab-1", level: "PARTICIPATING" },
-      { userId: "w-1", level: "ALL" },
-      { userId: "w-2", level: "ALL" },
-      { userId: "w-3", level: "ALL" },
-      { userId: "w-4", level: "ALL" },
-    ] as never);
+    // 4 explicit ALL rows, counted by the aggregate…
+    vi.mocked(prisma.watch.count).mockResolvedValue(4 as never);
+    // …and of the members, only collab-1 has a row — collab-2 and the owner are implicit.
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([{ userId: "collab-1" }] as never);
 
     const res = await app.inject({
       method: "GET", url: "/repos/alice/pub/social",
       headers: { authorization: ownerToken },
     });
     expect(res.json().watcherCount).toBe(6);
+  });
+
+  // Regression (adversarial review, round 3): the read-access intersection was
+  // implemented by pulling EVERY watch row for the repo into Node — no take, no
+  // aggregate — on `GET /repos/:h/:n/social`, which every repo page view hits.
+  // On a PUBLIC repo (where the watcher set is largest) `canRead` is
+  // unconditionally true, so the whole scan bought nothing over the COUNT it
+  // replaced. The count must come from an aggregate, and any row read on this
+  // path must be bounded by the owner+collaborator set.
+  it("GET /social counts a public repo's watchers with an aggregate, never a full row scan", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({
+      ...PUBLIC_REPO, collaborators: [{ userId: "collab-1" }],
+    } as never);
+    // 20 000 subscribers. A full-scan implementation would have to materialize
+    // all of them; the aggregate just reports the number.
+    vi.mocked(prisma.watch.count).mockResolvedValue(20_000 as never);
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([]);
+
+    const res = await app.inject({
+      method: "GET", url: "/repos/alice/pub/social",
+      headers: { authorization: strangerToken },
+    });
+    // 20 000 explicit ALL rows + the row-less owner and collab-1.
+    expect(res.json().watcherCount).toBe(20_002);
+    expect(prisma.watch.count).toHaveBeenCalledWith({ where: { repoId: "repo-pub", level: "ALL" } });
+    // Every row read this path performs is bounded by an explicit id list.
+    const rowReads = vi.mocked(prisma.watch.findMany).mock.calls as Array<[{ where: { userId?: { in?: string[] } } }]>;
+    expect(rowReads.length).toBeGreaterThan(0);
+    for (const [args] of rowReads) {
+      expect(args.where.userId?.in).toEqual(["owner-1", "collab-1"]);
+    }
   });
 
   // Regression (adversarial review): the count was taken over raw Watch rows
@@ -692,12 +719,24 @@ describe("GET /feed", () => {
   });
 
   // A flat mock always hands back every row, so it can never expose a per-source
-  // window that is one row too small. This stand-in honours the cursor `where`
-  // and `take` the way the real query does, over both the `lt`/`OR` tuple form
-  // and the plain `lte` form.
+  // window that is one row too small. This stand-in honours the cursor `where`,
+  // the `take`, AND — critically — the `orderBy` the way a real database does.
+  //
+  // A database orders by exactly the keys the query names and NO further: rows
+  // that tie on every named key come back in whatever order the storage engine
+  // finds them. Confirmed against a real SQLite database — 5 issues sharing one
+  // timestamp, physically stored i5,i1,i4,i2,i3, queried with
+  // `orderBy: { createdAt: 'desc' }, take: 3`, come back i5,i1,i4: physical
+  // order, not id order. So `rows` is treated as PHYSICAL order here, and the
+  // id tiebreak is applied only when the query actually asks for `id: 'asc'`.
+  // (An earlier revision of this stand-in always sorted ties by id ascending.
+  // That handed the route an ordering guarantee production never requested, and
+  // made the multi-page walks below pass no matter what `orderBy` the route
+  // used — the tests could not fail.)
   type IssueRow = { id: string; repoId: string; number: number; title: string; createdAt: Date; author: { handle: string } };
   type Bound = { lt?: Date; lte?: Date };
   type Clause = { createdAt?: Date | Bound; id?: { gt?: string } };
+  type OrderKey = { createdAt?: "asc" | "desc"; id?: "asc" | "desc" };
 
   function honourCursor(rows: IssueRow[]) {
     const matches = (c: Clause, r: IssueRow): boolean => {
@@ -711,14 +750,28 @@ describe("GET /feed", () => {
       if (c.id?.gt !== undefined && !(r.id > c.id.gt)) return false;
       return true;
     };
-    return (args: { where: Clause & { OR?: Clause[] }; take: number }) => {
-      const clauses = args.where.OR ?? [args.where];
-      const hits = rows
-        .filter((r) => clauses.some((c) => matches(c, r)))
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return (args: { where: Clause & { OR?: Clause[] }; take: number; orderBy?: OrderKey | OrderKey[] }) => {
+      const keys = args.orderBy === undefined ? [] : Array.isArray(args.orderBy) ? args.orderBy : [args.orderBy];
+      const cmp = (a: IssueRow, b: IssueRow): number => {
+        for (const k of keys) {
+          if (k.createdAt) {
+            const d = a.createdAt.getTime() - b.createdAt.getTime();
+            if (d !== 0) return k.createdAt === "desc" ? -d : d;
+          }
+          if (k.id) {
+            const d = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+            if (d !== 0) return k.id === "desc" ? -d : d;
+          }
+        }
+        // Tied on every key the query named: leave them in physical order.
+        // Array#sort is stable, so `rows` order survives.
+        return 0;
+      };
+      const hits = rows.filter((r) => clausesOf(args.where).some((c) => matches(c, r))).sort(cmp);
       return Promise.resolve(hits.slice(0, args.take));
     };
   }
+  const clausesOf = (where: Clause & { OR?: Clause[] }): Clause[] => where.OR ?? [where];
 
   /** Drain the feed page by page, returning every item id in delivery order. */
   async function walkFeed(perPage: number): Promise<string[]> {
@@ -761,23 +814,67 @@ describe("GET /feed", () => {
     expect(await walkFeed(3)).toEqual([...rows].reverse().map((r) => `issue-${r.id}`));
   });
 
-  // Same walk with the whole source sharing one timestamp: the page boundary
-  // lands mid-tie, so the id half of the (createdAt, id) comparison is what has
-  // to carry pagination forward.
-  it("walks a feed whose entries all share one timestamp", async () => {
-    const rows: IssueRow[] = Array.from({ length: 7 }, (_, n) => ({
-      id: `i${n}`, repoId: "repo-pub", number: n + 1, title: `Issue ${n + 1}`,
-      createdAt: NOW, author: { handle: "alice" },
-    }));
+  /** Point every feed source at one public repo, with `issue` served by `rows`. */
+  function feedOverIssues(rows: IssueRow[]) {
     vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
     vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
     vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
     vi.mocked(prisma.release.findMany).mockResolvedValue([]);
     vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
     vi.mocked(prisma.issue.findMany).mockImplementation(honourCursor(rows) as never);
+  }
 
-    // Ties break on id ASC, so the delivery order is i0…i6.
-    expect(await walkFeed(2)).toEqual(rows.map((r) => `issue-${r.id}`));
+  // Regression (adversarial review, round 3): every source query ordered by
+  // `createdAt` DESC alone while the cursor advanced with `id: { gt: … }`. A
+  // database asked for that ordering is free to return a same-timestamp group in
+  // any order — SQLite returns physical order — so `take: perPage + 1` sliced an
+  // ARBITRARY subset out of the tie group, and the cursor then excluded every
+  // tied row whose id sorted at-or-below the one served last, INCLUDING rows the
+  // window never returned. Those rows were unreachable on every subsequent page.
+  //
+  // The physical order below (i5,i1,i4,i2,i3) is the one observed on a real
+  // SQLite database. Before the fix this walk served i1, i4, i5 and stranded i2
+  // and i3 forever.
+  it("walks a feed whose entries all share one timestamp, whatever order the rows arrive in", async () => {
+    const physical = ["i5", "i1", "i4", "i2", "i3"];
+    const rows: IssueRow[] = physical.map((id, n) => ({
+      id, repoId: "repo-pub", number: n + 1, title: `Issue ${id}`,
+      createdAt: NOW, author: { handle: "alice" },
+    }));
+    feedOverIssues(rows);
+
+    // The whole group ties on createdAt, so the id tiebreak the query now asks
+    // for is the only thing carrying pagination forward: every row exactly once,
+    // in id order — not merely the ones the first window happened to catch.
+    expect(await walkFeed(2)).toEqual(["i1", "i2", "i3", "i4", "i5"].map((id) => `issue-${id}`));
+  });
+
+  // The same defect with the tie at the TAIL of a mostly-distinct stream, which
+  // is what it looks like in production: 24 distinct timestamps then 3 rows
+  // sharing one instant, at a per_page that puts the page boundary inside the
+  // tie. Before the fix this served 26 of the 27 entries — `t1` was lost forever
+  // because the window took `t2`,`t3` and the cursor then advanced past `t2`.
+  it("does not strand a tied entry when a page boundary lands inside a tail tie", async () => {
+    const distinct: IssueRow[] = Array.from({ length: 24 }, (_, n) => ({
+      id: `d${String(n).padStart(2, "0")}`, repoId: "repo-pub", number: n + 1, title: `Issue d${n}`,
+      createdAt: new Date(Date.UTC(2026, 0, 15, 10, 30 - n)), author: { handle: "alice" },
+    }));
+    const tailAt = new Date(Date.UTC(2026, 0, 15, 10, 5));
+    // Physical order inside the tie group is t2, t3, t1 — the id that sorts
+    // FIRST is the one the window would have missed.
+    const tail: IssueRow[] = ["t2", "t3", "t1"].map((id, n) => ({
+      id, repoId: "repo-pub", number: 100 + n, title: `Issue ${id}`,
+      createdAt: tailAt, author: { handle: "alice" },
+    }));
+    feedOverIssues([...distinct, ...tail]);
+
+    const served = await walkFeed(25);
+    expect(served).toHaveLength(27);
+    expect(new Set(served).size).toBe(27);
+    expect(served).toEqual([
+      ...distinct.map((r) => `issue-${r.id}`),
+      "issue-t1", "issue-t2", "issue-t3",
+    ]);
   });
 
   it("ignores a malformed cursor instead of erroring", async () => {
