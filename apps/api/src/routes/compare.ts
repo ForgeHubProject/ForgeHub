@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import {
@@ -8,6 +9,7 @@ import {
 import type { StructuredDiff, DiffChange } from "../handlers/types.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { activeFormatsAtCommit, resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
+import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 
@@ -53,47 +55,71 @@ export async function compareRoutes(app: FastifyInstance) {
 
       const storageKey = repo.storageKey;
 
-      // Handler resolution is scoped to the repo's opt-in formats at the
-      // target commit. If the format has since been disabled, the fast path
-      // is skipped and the snapshot-based fallback below still serves the
-      // already-ingested data.
-      const handler =
-        storageKey && targetSnap.gitCommitSha
-          ? firstHandlerForPathAndFormats(
-              baseSnap.sourceFile,
-              await activeFormatsAtCommit(storageKey, targetSnap.gitCommitSha),
-            )
-          : undefined;
-
       // ── Fast path: blob-level diff with cache ─────────────────────────────────
-      if (handler && storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
-        const [baseBlobSha, headBlobSha] = await Promise.all([
-          resolveBlobSha(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
-          resolveBlobSha(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
-        ]);
+      // Engine selection (#74 slice 2): when the FHR manifest maps this file's
+      // extension to an official handler, the official wasm build is the ONLY
+      // engine on this path — the built-in registry is not consulted for it.
+      // The registry still serves formats FHR does not publish (the plain-text
+      // catch-all). Resolution is scoped to the repo's opt-in formats at the
+      // target commit; if the format has since been disabled, the fast path is
+      // skipped and the snapshot-based fallback below still serves the
+      // already-ingested data.
+      if (storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
+        const activeExts = await activeFormatsAtCommit(storageKey, targetSnap.gitCommitSha);
+        const ext = extname(baseSnap.sourceFile).toLowerCase();
 
-        if (baseBlobSha && headBlobSha) {
-          const cached = await prisma.diffCache.findUnique({
-            where: { handlerId_baseBlobSha_headBlobSha: { handlerId: handler.id, baseBlobSha, headBlobSha } },
-          });
+        let officialId: string | null = null;
+        if (activeExts.has(ext)) {
+          try {
+            officialId = await officialHandlerId(ext);
+          } catch {
+            officialId = null; // manifest unreachable — snapshot fallback below still serves
+          }
+        }
+        const localHandler = officialId
+          ? undefined
+          : firstHandlerForPathAndFormats(baseSnap.sourceFile, activeExts);
+        const engineId = officialId ?? localHandler?.id;
 
-          const [baseBuffer, headBuffer] = await Promise.all([
-            readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
-            readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
+        if (engineId) {
+          const [baseBlobSha, headBlobSha] = await Promise.all([
+            resolveBlobSha(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
+            resolveBlobSha(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
           ]);
 
-          if (baseBuffer && headBuffer) {
-            let diff: StructuredDiff;
-            if (cached) {
-              diff = JSON.parse(cached.result) as StructuredDiff;
-            } else {
-              diff = await handler.diff(baseBuffer, headBuffer);
-              prisma.diffCache.create({
-                data: { handlerId: handler.id, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
-              }).catch(() => undefined);
-            }
+          if (baseBlobSha && headBlobSha) {
+            const cached = await prisma.diffCache.findUnique({
+              where: { handlerId_baseBlobSha_headBlobSha: { handlerId: engineId, baseBlobSha, headBlobSha } },
+            });
 
-            return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
+            const [baseBuffer, headBuffer] = await Promise.all([
+              readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
+              readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
+            ]);
+
+            if (baseBuffer && headBuffer) {
+              let diff: StructuredDiff | undefined;
+              if (cached) {
+                diff = JSON.parse(cached.result) as StructuredDiff;
+              } else if (officialId) {
+                // Official wasm engine. Null means it can't run right now
+                // (release unreachable, oversized or rejected input) — fall
+                // through to the snapshot fallback rather than substituting a
+                // different engine's answer (#74).
+                diff = (await officialWasmDiff(baseSnap.sourceFile, activeExts, baseBuffer, headBuffer))?.diff;
+              } else if (localHandler) {
+                diff = await localHandler.diff(baseBuffer, headBuffer);
+              }
+
+              if (diff) {
+                if (!cached) {
+                  prisma.diffCache.create({
+                    data: { handlerId: engineId, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+                  }).catch(() => undefined);
+                }
+                return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
+              }
+            }
           }
         }
       }
