@@ -5,6 +5,7 @@ import { ingestCommitRange } from "./ingest.js";
 import { emitHeadPushedForPush } from "./timeline-service.js";
 import { triggerWorkflowsForPrSync } from "./ci/trigger.js";
 import { emitPushEvents } from "./push-events.js";
+import { resetViewedFilesForPush } from "./pull-file-views.js";
 import { installPreReceiveHook } from "./git-hooks.js";
 import { syncProtectionConfig } from "./branch-protection.js";
 import { syncProtectedTagsConfig } from "./protected-tags.js";
@@ -101,6 +102,11 @@ export async function runPostReceiveEffects(
       emitPushEvents(repoId, storageKey, actorId, changed);
       void triggerWorkflowsForPrSync(repoId, storageKey, changed).catch((err: unknown) =>
         app.log.error({ err }, "post-push CI (pull_request) failed"),
+      );
+      // Viewed-file bookkeeping (issue #119): a changed file on a moved PR head
+      // drops back to unviewed for every reviewer.
+      void resetViewedFilesForPush(repoId, storageKey, changed).catch((err: unknown) =>
+        app.log.error({ err }, "post-push viewed-file reset failed"),
       );
     }
   } catch {
