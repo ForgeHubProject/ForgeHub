@@ -4,6 +4,10 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("../prisma.js", () => ({
   prisma: {
+    // Fire-time identity re-check: the arming user must still exist.
+    user: {
+      findUnique: vi.fn(),
+    },
     pullRequest: {
       findFirst: vi.fn(),
       findMany: vi.fn().mockResolvedValue([]),
@@ -70,8 +74,19 @@ function armedPR(overrides = {}) {
   };
 }
 
+/** The repo as `maybeAutoMergePr` loads it: storage + access grants + merge policy. */
 function repoRow(overrides = {}) {
-  return { id: "repo-am-1", storageKey: "alice/my-repo.git", ...overrides };
+  return {
+    id: "repo-am-1",
+    storageKey: "alice/my-repo.git",
+    visibility: "PUBLIC" as const,
+    // The armer owns the repo, so the fire-time write check passes by default.
+    ownerId: "user-armer",
+    collaborators: [],
+    allowedMergeMethods: null,
+    defaultMergeMethod: null,
+    ...overrides,
+  };
 }
 
 /** A submitted review row against the current head, as computeReviewSummary reads it. */
@@ -94,6 +109,7 @@ beforeEach(() => {
   vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR() as never);
   vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([] as never);
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(repoRow() as never);
+  vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "user-armer" } as never);
   vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
   vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
   vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
@@ -251,6 +267,60 @@ describe("maybeAutoMergePr", () => {
     const firstResult = await first;
     expect(firstResult).toEqual({ fired: true, sha: "auto0001" });
     expect(vi.mocked(executePullMerge)).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: the method is validated when arming, but the owner can narrow
+  // `allowedMergeMethods` afterwards — the firing path has to re-check.
+  it("does NOT fire when the armed method is no longer allowed by the repo policy", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      repoRow({ allowedMergeMethods: "merge", defaultMergeMethod: "merge" }) as never,
+    );
+    const result = await maybeAutoMergePr("pr-am-1"); // armed with "squash"
+    expect(result.fired).toBe(false);
+    expect("reason" in result && result.reason).toMatch(/no longer allowed/i);
+    expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
+    // Intent kept — widening the policy again should resume it.
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("still fires when the armed method is inside a narrowed policy", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      repoRow({ allowedMergeMethods: "squash,rebase", defaultMergeMethod: "squash" }) as never,
+    );
+    expect(await maybeAutoMergePr("pr-am-1")).toEqual({ fired: true, sha: "auto0001" });
+  });
+
+  // Regression: the schema documents "a missing user is a disarm"; the firing
+  // path used to merge anyway, as a ghost `ForgeHub <merge@forgehub.io>` author.
+  it("DISARMS instead of merging when the arming user no longer exists", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null as never);
+    const result = await maybeAutoMergePr("pr-am-1");
+    expect(result.fired).toBe(false);
+    expect("reason" in result && result.reason).toMatch(/no longer exists/i);
+    expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { autoMergeMethod: null, autoMergeById: null } }),
+    );
+  });
+
+  // Regression: write access can be revoked between arming and firing.
+  it("does NOT fire when the arming user's write access was revoked", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      repoRow({ ownerId: "someone-else", collaborators: [{ userId: "user-armer", role: "READER" }] }) as never,
+    );
+    const result = await maybeAutoMergePr("pr-am-1");
+    expect(result.fired).toBe(false);
+    expect("reason" in result && result.reason).toMatch(/write access/i);
+    expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
+    // Stays armed — restoring access should resume the intent.
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("fires for an arming user who holds write access as a WRITER collaborator", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      repoRow({ ownerId: "someone-else", collaborators: [{ userId: "user-armer", role: "WRITER" }] }) as never,
+    );
+    expect(await maybeAutoMergePr("pr-am-1")).toEqual({ fired: true, sha: "auto0001" });
   });
 
   it("stays armed (no throw) when the merge conflicts", async () => {

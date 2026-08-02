@@ -91,7 +91,13 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
 
   await prisma.pullRequest.update({
     where: { id: pr.id },
-    data: { state: "MERGED", mergedAt: new Date(), mergeMethod, mergeCommitSha: result.sha },
+    data: {
+      state: "MERGED", mergedAt: new Date(), mergeMethod, mergeCommitSha: result.sha,
+      // The armed intent is spent — clear it so a merged PR never reports
+      // auto-merge as still pending (issue #119). Closing disarms for the same
+      // reason; a merge is the other terminal state.
+      autoMergeMethod: null, autoMergeById: null,
+    },
   });
 
   await recordEvent({

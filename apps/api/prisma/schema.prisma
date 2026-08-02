@@ -253,7 +253,9 @@ model PullRequest {
   // and the CI check summary are both green (src/auto-merge.ts, hooked into review
   // submission and CI run completion). `autoMergeById` is a plain column, not a
   // relation (the Issue.lockedById pattern), so deleting the arming user never
-  // touches the PR; the firing path treats a missing user as a disarm.
+  // touches the PR; the firing path treats a missing user as a disarm. Both
+  // columns are cleared when the PR reaches a terminal state (merged or closed),
+  // so an armed intent only ever exists on an OPEN pull request.
   autoMergeMethod String?
   autoMergeById   String?
 

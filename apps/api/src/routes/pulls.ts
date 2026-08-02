@@ -18,11 +18,18 @@ import { executePullMerge, resolveActorIdentity } from "../pull-merge.js";
 import { maybeAutoMergePr } from "../auto-merge.js";
 import { isMergeMethod, repoMergePolicy } from "../merge-policy.js";
 
-/** The auto-merge fields of a PR payload: null until armed. */
+/**
+ * The auto-merge fields of a PR payload: null until armed, and null again once
+ * the PR leaves OPEN — auto-merge can only fire on an open PR, so reporting an
+ * armed intent on a merged/closed one would be stale (a merge and a close both
+ * clear the columns; the state check also covers rows written before that).
+ */
 async function autoMergePayload(pr: {
+  state?: string;
   autoMergeMethod?: string | null;
   autoMergeById?: string | null;
 }): Promise<{ method: string; by: string } | null> {
+  if (pr.state !== undefined && pr.state !== "OPEN") return null;
   if (!pr.autoMergeMethod || !pr.autoMergeById) return null;
   const user = await prisma.user.findUnique({
     where: { id: pr.autoMergeById },
