@@ -1,13 +1,13 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
-  DesignVersion, DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment,
+  DesignVersion, DiffChange, DiffResult, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult, Release,
-  ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  ReleaseAsset, Repo, RepoSocial, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
-  TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -1609,6 +1609,68 @@ export async function markNotificationRead(token: string, id: string): Promise<v
 
 export async function deleteNotification(token: string, id: string): Promise<void> {
   return req(`/notifications/${id}`, { method: "DELETE", token });
+}
+
+// ─── stars + watching + feed (issue #88) ─────────────────────────────────────────
+
+/** Viewer star/watch state + grouped star count for the repo header. */
+export async function getRepoSocial(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<RepoSocial> {
+  return req(`/repos/${handle}/${repoName}/social`, { token: token ?? undefined });
+}
+
+export async function starRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ starred: boolean; starCount: number }> {
+  return req(`/repos/${handle}/${repoName}/star`, { method: "PUT", token });
+}
+
+export async function unstarRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ starred: boolean; starCount: number }> {
+  return req(`/repos/${handle}/${repoName}/star`, { method: "DELETE", token });
+}
+
+/** Repos a user starred (newest star first), filtered to what the viewer may read. */
+export async function listStarredRepos(
+  token: string | null,
+  handle: string,
+): Promise<{ repos: Array<Repo & { starredAt: string }> }> {
+  return req(`/users/${handle}/starred`, { token: token ?? undefined });
+}
+
+export async function setWatchLevel(
+  token: string,
+  handle: string,
+  repoName: string,
+  level: WatchLevel,
+): Promise<{ watchLevel: WatchLevel }> {
+  return req(`/repos/${handle}/${repoName}/watch`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ level }),
+  });
+}
+
+/** Drop the explicit choice; the response carries the fallback level. */
+export async function unwatchRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ watchLevel: WatchLevel }> {
+  return req(`/repos/${handle}/${repoName}/watch`, { method: "DELETE", token });
+}
+
+/** Recent activity across watched + starred repos, newest first. */
+export async function getFeed(token: string, page = 1, perPage = 25): Promise<FeedPage> {
+  return req(`/feed?page=${page}&per_page=${perPage}`, { token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────
