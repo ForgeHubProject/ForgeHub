@@ -196,9 +196,36 @@ export async function socialRoutes(app: FastifyInstance) {
    * then intersected with LIVE read access. That last step is not optional: a
    * Watch row is a subscription, never a grant, so a stale ALL row on a private
    * repo would otherwise inflate the count with someone the fan-out will never
-   * reach. One query, no denormalized counter (matching `starCount`).
+   * reach. No denormalized counter (matching `starCount`).
+   *
+   * The read is bounded, and that matters: this sits on the repo-page hot path
+   * (`GET /repos/:h/:n/social`, fetched on every repo view). On a PUBLIC repo —
+   * precisely where the watcher set is largest — `canRead` is unconditionally
+   * true, so the access intersection cannot subtract anyone and there is nothing
+   * to materialize: an aggregate counts the explicit ALL rows and a second read
+   * bounded by the (small) owner+collaborator set finds which members still need
+   * their implicit ALL added. Only a PRIVATE repo has to look at rows, and there
+   * the subscriber set is bounded by the grantee set anyway.
    */
   async function watcherCount(repo: RepoAccessInput & { id: string }): Promise<number> {
+    const memberIds = [...new Set([repo.ownerId, ...repo.collaborators.map((c) => c.userId)])];
+
+    if (repo.visibility === "PUBLIC") {
+      const [explicitAll, memberRows] = await Promise.all([
+        prisma.watch.count({ where: { repoId: repo.id, level: "ALL" } }),
+        memberIds.length > 0
+          ? prisma.watch.findMany({
+              where: { repoId: repo.id, userId: { in: memberIds } },
+              select: { userId: true },
+            })
+          : Promise.resolve([] as Array<{ userId: string }>),
+      ]);
+      const hasRow = new Set(memberRows.map((r) => r.userId));
+      // Disjoint by construction: a member with a row is never implicit, and an
+      // ALL row is counted once by the aggregate.
+      return explicitAll + memberIds.filter((uid) => !hasRow.has(uid)).length;
+    }
+
     const watches = await prisma.watch.findMany({
       where: { repoId: repo.id },
       select: { userId: true, level: true },
@@ -209,7 +236,7 @@ export async function socialRoutes(app: FastifyInstance) {
     for (const w of watches) {
       if (w.level === "ALL") watchers.add(w.userId);
     }
-    for (const uid of [repo.ownerId, ...repo.collaborators.map((c) => c.userId)]) {
+    for (const uid of memberIds) {
       if (!levelByUser.has(uid)) watchers.add(uid);
     }
     return [...watchers].filter((uid) => canRead(repo, uid)).length;
@@ -320,30 +347,42 @@ export async function socialRoutes(app: FastifyInstance) {
     // One row beyond the page is enough to answer hasMore, per source — but
     // only because `feedCursorWhere` is STRICTLY after the cursor, so all
     // `perPage + 1` rows a source returns are rows this page may still serve.
+    //
+    // Every source orders by the FULL merge key, `(createdAt DESC, id ASC)` —
+    // not `createdAt` alone. A bare `createdAt DESC` leaves rows sharing one
+    // timestamp in whatever order the storage engine hands back (SQLite returns
+    // them in physical order), so a `take: perPage + 1` window would slice an
+    // ARBITRARY subset out of a tie group while the cursor still advances with
+    // `id: { gt: … }` — permanently stranding every tied row whose id sorts
+    // at-or-below the one served last, including rows the window never
+    // returned. Asking for the id tiebreak makes the window genuinely the top
+    // `perPage + 1` rows in merge order, and makes the `id` bound
+    // index-alignable rather than a filter over an arbitrary slice.
+    const feedOrder = [{ createdAt: "desc" as const }, { id: "asc" as const }];
     const window = perPage + 1;
     const authorSel = { select: { handle: true } } as const;
     const [issues, pulls, releases, events] = await Promise.all([
       prisma.issue.findMany({
         where: { repoId: { in: repoIds }, ...feedCursorWhere(cursor, "issue") },
-        orderBy: { createdAt: "desc" },
+        orderBy: feedOrder,
         take: window,
         include: { author: authorSel },
       }),
       prisma.pullRequest.findMany({
         where: { repoId: { in: repoIds }, ...feedCursorWhere(cursor, "pr") },
-        orderBy: { createdAt: "desc" },
+        orderBy: feedOrder,
         take: window,
         include: { author: authorSel },
       }),
       prisma.release.findMany({
         where: { repoId: { in: repoIds }, isDraft: false, ...feedCursorWhere(cursor, "release") },
-        orderBy: { createdAt: "desc" },
+        orderBy: feedOrder,
         take: window,
         include: { author: authorSel },
       }),
       prisma.timelineEvent.findMany({
         where: { repoId: { in: repoIds }, kind: { in: [...FEED_TIMELINE_KINDS] }, ...feedCursorWhere(cursor, "event") },
-        orderBy: { createdAt: "desc" },
+        orderBy: feedOrder,
         take: window,
       }),
     ]);
