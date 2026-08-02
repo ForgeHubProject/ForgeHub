@@ -59,8 +59,8 @@ export async function compareRoutes(app: FastifyInstance) {
       // Engine selection (#74 slice 2): when the FHR manifest maps this file's
       // extension to an official handler, the official wasm build is the ONLY
       // engine on this path — the built-in registry is not consulted for it.
-      // The registry still serves formats FHR does not publish (the plain-text
-      // catch-all). Resolution is scoped to the repo's opt-in formats at the
+      // The registry still serves the plain-text catch-all, the one format FHR
+      // does not publish. Resolution is scoped to the repo's opt-in formats at the
       // target commit; if the format has since been disabled, the fast path is
       // skipped and the snapshot-based fallback below still serves the
       // already-ingested data.
@@ -84,7 +84,7 @@ export async function compareRoutes(app: FastifyInstance) {
         }
         const localHandler = officialId
           ? undefined
-          : firstHandlerForPathAndFormats(baseSnap.sourceFile, activeExts);
+          : registryFallbackFor(baseSnap.sourceFile, activeExts);
         const engineId = officialId ?? localHandler?.id;
 
         if (engineId) {
@@ -105,11 +105,10 @@ export async function compareRoutes(app: FastifyInstance) {
 
             if (baseBuffer && headBuffer) {
               let diff: StructuredDiff | undefined;
-              // The id of the engine that actually produced `diff`. Cache rows
-              // are keyed by this, never by the selection-time `engineId` — a
-              // result must only ever be filed under the engine that computed
-              // it, so a substituted or failed answer can't land in another
-              // engine's namespace (#74).
+              // The id of the engine that actually produced `diff`, checked
+              // against the selection-time `engineId` before anything is
+              // cached (see the write below). A result that was not produced
+              // on this request (or not produced at all) is never written.
               let producedBy: string | undefined;
               if (cached) {
                 diff = JSON.parse(cached.result) as StructuredDiff;
@@ -127,10 +126,25 @@ export async function compareRoutes(app: FastifyInstance) {
               }
 
               if (diff) {
+                // Rows are written under the same key the lookup above reads,
+                // and only when the engine that ran reports that id — so a
+                // result is never filed under another engine's namespace, and
+                // never under a key no reader looks up. The two agree by
+                // construction today (officialWasmDiff re-derives its id from
+                // the same officialHandlerId call); a divergence would be an
+                // FHR contract change, so log it instead of silently missing
+                // the cache on every request from then on (#74).
                 if (!cached && producedBy) {
-                  prisma.diffCache.create({
-                    data: { handlerId: producedBy, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
-                  }).catch(() => undefined);
+                  if (producedBy === engineId) {
+                    prisma.diffCache.create({
+                      data: { handlerId: engineId, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+                    }).catch(() => undefined);
+                  } else {
+                    request.log.warn(
+                      { selectedEngineId: engineId, producedBy },
+                      "diff cache write skipped: engine id disagrees with selection",
+                    );
+                  }
                 }
                 return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
               }
@@ -187,6 +201,24 @@ export async function compareRoutes(app: FastifyInstance) {
       });
     },
   );
+}
+
+/**
+ * The built-in engine allowed to serve the blob fast path: the plain-text
+ * catch-all and nothing else (#74).
+ *
+ * `firstHandlerForPathAndFormats` resolves any registered handler, so a repo
+ * that opted `.gltf` in would get the built-in gltf-scene engine whenever the
+ * manifest fails to map the extension — not only during an outage (that throws
+ * and 503s above) but whenever a reachable manifest simply has no entry for it:
+ * a partially-updated, re-keyed, forked or self-hosted registry. That is the
+ * substitution this slice removes, and its output would be written into the very
+ * DiffCache namespace the wasm path reads back. /filediff refuses the same file
+ * with a 404; here the fast path is skipped and the snapshot fallback serves.
+ */
+function registryFallbackFor(sourceFile: string, activeExts: Set<string>) {
+  const handler = firstHandlerForPathAndFormats(sourceFile, activeExts);
+  return handler?.id === PLAIN_TEXT_HANDLER_ID ? handler : undefined;
 }
 
 function buildTextResponse(base: string, target: string, baseBody: string, targetBody: string) {

@@ -53,6 +53,18 @@ const MANIFEST = `
 "wasm" = "https://cdn.test/fhr/forge-handler-gltf-scene.wasm"
 `;
 
+// A manifest that is perfectly reachable but does not map ".gltf" — a
+// partially-updated, re-keyed, forked or self-hosted (FHR_MANIFEST_URL)
+// registry. officialHandlerId returns null here (no throw), so this is a
+// distinct trigger from the manifest-outage case above.
+const MANIFEST_WITHOUT_GLTF = `
+[formats]
+".foo" = { handler = "foo-thing", build = "e520cc6" }
+
+[assets.handlers."foo-thing"]
+"wasm" = "https://cdn.test/fhr/forge-handler-foo-thing.wasm"
+`;
+
 // A deterministic StructuredDiff the mocked wasm engine returns. The label is
 // distinct from anything the built-in engine would emit, so a response carrying
 // it proves which engine ran.
@@ -275,14 +287,75 @@ describe("GET /repos/:handle/:name/compare — official wasm fast path", () => {
     }
   });
 
-  it("caches only under the id of the engine that actually produced the diff", async () => {
-    // The wasm result carries its own handler id; the cache row must be keyed by
-    // that, never by whatever id engine *selection* happened to settle on.
+  it("never substitutes the built-in blob engine when the manifest does not map the extension (#74)", async () => {
+    // The manifest is reachable and simply has no entry for ".gltf", so
+    // officialHandlerId returns null rather than throwing. That must not hand
+    // the blob to the built-in gltf-scene handler, whose output would land in
+    // the very DiffCache namespace the wasm path reads back.
+    const builtInDiff = vi.spyOn(gltfSceneHandler, "diff");
+    __setManifestForTests(MANIFEST_WITHOUT_GLTF);
+    try {
+      const res = await get("base=snap-base&target=snap-target");
+      expect(res.statusCode).toBe(200);
+      expect(builtInDiff).not.toHaveBeenCalled();
+      expect(prisma.diffCache.create).not.toHaveBeenCalled();
+      // Served by the snapshot fallback over ingested Entity rows (the name
+      // change), not by a substitute blob engine.
+      const body = res.json();
+      expect(body.changes).toHaveLength(1);
+      expect(body.changes[0].children.some((c: { path: string }) => c.path === "name")).toBe(true);
+    } finally {
+      builtInDiff.mockRestore();
+    }
+  });
+
+  it("agrees with /filediff about a file the manifest does not map", async () => {
+    // Same repo, same commit, same file: /filediff refuses it outright and
+    // compare must not answer it with the built-in blob engine either. Compare
+    // still serves its pre-existing snapshot fallback — what the two endpoints
+    // agree on is the engine, and that nothing enters the shared DiffCache.
+    const builtInDiff = vi.spyOn(gltfSceneHandler, "diff");
+    __setManifestForTests(MANIFEST_WITHOUT_GLTF);
+    try {
+      const fileDiff = await app.inject({
+        method: "GET",
+        url: `/repos/alice/scene/filediff?path=model.gltf&sha=${headSha}`,
+      });
+      expect(fileDiff.statusCode).toBe(404);
+      expect(fileDiff.json().error).toBe("No semantic handler for this file");
+
+      const compare = await get("base=snap-base&target=snap-target");
+      expect(compare.statusCode).toBe(200);
+      expect(compare.json().format).toBe("gltf-scene");
+
+      expect(builtInDiff).not.toHaveBeenCalled();
+      expect(officialWasmDiff).not.toHaveBeenCalled();
+      expect(prisma.diffCache.create).not.toHaveBeenCalled();
+    } finally {
+      builtInDiff.mockRestore();
+    }
+  });
+
+  it("keeps the DiffCache read key and write key identical", async () => {
+    // The row a request writes must be findable by the lookup the next request
+    // performs. Selection settles on "gltf-scene"; an engine that reports a
+    // different id must not produce a row under a key no reader looks up (a
+    // permanent miss that re-runs the wasm on every request, silently).
     vi.mocked(officialWasmDiff).mockResolvedValue({ ...WASM_DIFF, handlerId: "gltf-scene@wasm" });
+    await get("base=snap-base&target=snap-target");
+    const readKey = (vi.mocked(prisma.diffCache.findUnique).mock.calls[0]![0] as {
+      where: { handlerId_baseBlobSha_headBlobSha: { handlerId: string } };
+    }).where.handlerId_baseBlobSha_headBlobSha.handlerId;
+    for (const call of vi.mocked(prisma.diffCache.create).mock.calls) {
+      expect((call[0] as { data: { handlerId: string } }).data.handlerId).toBe(readKey);
+    }
+  });
+
+  it("caches under the engine id when it agrees with selection", async () => {
     await get("base=snap-base&target=snap-target");
     expect(prisma.diffCache.create).toHaveBeenCalledTimes(1);
     const arg = vi.mocked(prisma.diffCache.create).mock.calls[0]![0] as { data: { handlerId: string } };
-    expect(arg.data.handlerId).toBe("gltf-scene@wasm");
+    expect(arg.data.handlerId).toBe("gltf-scene");
   });
 
   it("still serves plain-text (non-FHR format) via the built-in catch-all fast path", async () => {
