@@ -73,7 +73,13 @@ export async function compareRoutes(app: FastifyInstance) {
           try {
             officialId = await officialHandlerId(ext);
           } catch {
-            officialId = null; // manifest unreachable — snapshot fallback below still serves
+            // Manifest unreachable with no cached copy. This is NOT "no official
+            // handler for this extension" — we cannot tell which engine is
+            // authoritative, so we may neither consult the built-in registry nor
+            // name a cache key. Refuse, exactly as /filediff does (#74 slice 1);
+            // silently answering with the built-in blob engine is the
+            // substitution this slice exists to remove.
+            return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
           }
         }
         const localHandler = officialId
@@ -99,6 +105,12 @@ export async function compareRoutes(app: FastifyInstance) {
 
             if (baseBuffer && headBuffer) {
               let diff: StructuredDiff | undefined;
+              // The id of the engine that actually produced `diff`. Cache rows
+              // are keyed by this, never by the selection-time `engineId` — a
+              // result must only ever be filed under the engine that computed
+              // it, so a substituted or failed answer can't land in another
+              // engine's namespace (#74).
+              let producedBy: string | undefined;
               if (cached) {
                 diff = JSON.parse(cached.result) as StructuredDiff;
               } else if (officialId) {
@@ -106,15 +118,18 @@ export async function compareRoutes(app: FastifyInstance) {
                 // (release unreachable, oversized or rejected input) — fall
                 // through to the snapshot fallback rather than substituting a
                 // different engine's answer (#74).
-                diff = (await officialWasmDiff(baseSnap.sourceFile, activeExts, baseBuffer, headBuffer))?.diff;
+                const official = await officialWasmDiff(baseSnap.sourceFile, activeExts, baseBuffer, headBuffer);
+                diff = official?.diff;
+                producedBy = official?.handlerId;
               } else if (localHandler) {
                 diff = await localHandler.diff(baseBuffer, headBuffer);
+                producedBy = localHandler.id;
               }
 
               if (diff) {
-                if (!cached) {
+                if (!cached && producedBy) {
                   prisma.diffCache.create({
-                    data: { handlerId: engineId, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+                    data: { handlerId: producedBy, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
                   }).catch(() => undefined);
                 }
                 return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
