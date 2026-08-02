@@ -5,7 +5,7 @@ import { notifyUser } from "../notifications-service.js";
 import { syncBodyReferences } from "../references-service.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 import { recordEvent, emitHeadPushedForPush } from "../timeline-service.js";
-import { commitFileToBranch, readFileAtBranch, resolveBranchSha } from "../git-utils.js";
+import { commitFileToBranch, readFileAtBranchExact, resolveBranchSha } from "../git-utils.js";
 import { isReviewStale } from "../review-summary.js";
 import { maybeAutoMergePr } from "../auto-merge.js";
 import { applySuggestionToContent } from "../suggestions.js";
@@ -917,8 +917,15 @@ export async function prCommentRoutes(app: FastifyInstance) {
 
       const comment = await prisma.pullRequestReviewComment.findFirst({
         where: { id: commentId, pullRequestId: ctx.pr.id },
+        include: { review: { select: { state: true } } },
       });
       if (!comment) return reply.status(404).send({ error: "Comment not found" });
+      // A PENDING review is a private draft: its suggestions do not exist for
+      // anyone else yet, so they must not be applicable server-side either (the
+      // web UI hides them, which is presentation, not a gate).
+      if (comment.review?.state === "PENDING") {
+        return reply.status(409).send({ error: "This suggestion is part of a pending review — submit the review first" });
+      }
       if (comment.suggestion == null) return reply.status(400).send({ error: "This comment carries no suggestion" });
       if (comment.suggestionAppliedAt != null) {
         return reply.status(409).send({ error: "This suggestion was already applied" });
@@ -930,10 +937,30 @@ export async function prCommentRoutes(app: FastifyInstance) {
       }
 
       const storageKey = ctx.repo.storageKey;
+
+      // Branch protection (#85) on the HEAD branch. The commit below goes to the
+      // bare repo with FORGEHUB_INTERNAL_PUSH=1, which bypasses the pre-receive
+      // hook — so the rule the hook would have enforced has to be enforced here,
+      // exactly as the merge endpoints enforce their own protection rules.
+      // `requirePullRequest` is the flag that blocks direct pushes to a branch;
+      // an apply IS a direct push, and (unlike a merge) nothing else sanctions it.
+      const headRule = await prisma.protectedBranch.findFirst({
+        where: { repoId: ctx.repo.id, branch: ctx.pr.fromBranch },
+      });
+      if (headRule?.requirePullRequest) {
+        return reply.status(409).send({
+          error: `Branch protection: "${ctx.pr.fromBranch}" is protected — direct pushes are blocked, so a suggestion cannot be applied to it.`,
+          protection: true,
+        });
+      }
+
       const headSha = await resolveBranchSha(storageKey, ctx.pr.fromBranch);
       if (!headSha) return reply.status(409).send({ error: `Branch '${ctx.pr.fromBranch}' not found` });
 
-      const content = await readFileAtBranch(storageKey, ctx.pr.fromBranch, comment.filePath);
+      // Byte-exact read: the trimming `readFileAtBranch` inherits from `git()`
+      // would strip the file's trailing newline / leading blank line AND shift
+      // the anchored line number before the splice (issue #119).
+      const content = await readFileAtBranchExact(storageKey, ctx.pr.fromBranch, comment.filePath);
       if (content === null) {
         return reply.status(409).send({ error: `'${comment.filePath}' no longer exists on '${ctx.pr.fromBranch}'` });
       }

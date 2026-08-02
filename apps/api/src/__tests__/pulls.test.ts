@@ -367,6 +367,25 @@ describe("GET /repos/:handle/:name/pulls/:number", () => {
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
     expect(res.json().mergeable).toBeDefined();
   });
+
+  it("reports the armed auto-merge intent on an OPEN PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ autoMergeMethod: "squash", autoMergeById: OWNER_ID }) as never,
+    );
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ handle: "merger" } as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.json().autoMerge).toEqual({ method: "squash", by: "merger" });
+  });
+
+  // Regression (issue #119): a terminal PR must never advertise a pending
+  // auto-merge, even if a row written before the columns were cleared survives.
+  it("reports autoMerge as null on a merged PR that still carries the columns", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", autoMergeMethod: "squash", autoMergeById: OWNER_ID }) as never,
+    );
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.json().autoMerge).toBeNull();
+  });
 });
 
 describe("PATCH /repos/:handle/:name/pulls/:number", () => {
@@ -472,6 +491,24 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
     expect(res.json().merged).toBe(true);
     expect(res.json().sha).toBe("deadbeef");
     expect(res.json().method).toBe("merge");
+  });
+
+  // Regression (issue #119): the armed intent is spent once the PR merges —
+  // leaving it set made `GET /pulls/:number` report auto-merge as still armed.
+  it("clears the armed auto-merge intent when the PR merges", async () => {
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+
+    await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "MERGED", autoMergeMethod: null, autoMergeById: null }),
+      }),
+    );
   });
 
   it("defaults to the merge method (performMerge) when none is supplied", async () => {

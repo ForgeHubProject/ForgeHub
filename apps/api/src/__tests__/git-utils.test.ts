@@ -10,6 +10,7 @@ import {
   deleteBranch,
   resolveBranchSha,
   readFileAtBranch,
+  readFileAtBranchExact,
   listFilesDifferingBetweenBranches,
   listTags,
   createTag,
@@ -162,6 +163,28 @@ describe("readFileAtBranch", () => {
     const content = await readFileAtBranch(repo.storageKey, def, "no-such-file.txt");
     expect(content).toBeNull();
   });
+});
+
+describe("readFileAtBranchExact", () => {
+  // Regression (issue #119): `readFileAtBranch` goes through `git()`, which
+  // trims stdout — a read-modify-write caller (applying a suggestion) would
+  // otherwise commit away the file's trailing newline and leading whitespace,
+  // AND splice against shifted line numbers.
+  const WHITESPACED = "\n  indented first\nsecond line\nthird\n\n";
+
+  it("round-trips leading and trailing whitespace byte-for-byte", async () => {
+    const r = await createTestRepo("exact/read.git");
+    try {
+      await makeCommit(r.workDir, { "ws.txt": WHITESPACED }, "ws");
+      const def = await defaultBranch(r.storageKey);
+      expect(await readFileAtBranchExact(r.storageKey, def, "ws.txt")).toBe(WHITESPACED);
+      // The trimming helper is what the apply path must NOT use.
+      expect(await readFileAtBranch(r.storageKey, def, "ws.txt")).toBe("indented first\nsecond line\nthird");
+      expect(await readFileAtBranchExact(r.storageKey, def, "no-such-file.txt")).toBeNull();
+    } finally {
+      await r.cleanup();
+    }
+  }, 30_000);
 });
 
 // ─── Merge scenarios ──────────────────────────────────────────────────────────

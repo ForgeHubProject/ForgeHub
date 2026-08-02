@@ -529,7 +529,14 @@ export async function resolveBranchSha(storageKey: string, branch: string): Prom
   } catch { return null; }
 }
 
-/** Read a UTF-8 file at the tip of a branch (null if missing). */
+/**
+ * Read a UTF-8 file at the tip of a branch (null if missing).
+ *
+ * Goes through {@link git}, so the content comes back TRIMMED — fine for the
+ * display/detection callers (README rendering, license detection, file views),
+ * but NOT for anything that writes the result back. Use
+ * {@link readFileAtBranchExact} on any read-modify-write path.
+ */
 export async function readFileAtBranch(
   storageKey: string,
   branch: string,
@@ -537,6 +544,32 @@ export async function readFileAtBranch(
 ): Promise<string | null> {
   try {
     return await git(storageKey, ["show", `${branch}:${filePath}`]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Byte-exact read of a UTF-8 file at the tip of a branch (null if missing).
+ *
+ * Deliberately bypasses {@link git}, whose `stdout.trim()` is load-bearing for
+ * its many parsing callers (SHAs, ref lists, `--name-only` output) but silently
+ * eats a file's leading whitespace and trailing newline. A read-modify-write
+ * path (applying a suggestion, issue #119) must round-trip those bytes: losing
+ * them both damages the file and shifts every 1-based line number the caller
+ * splices against.
+ */
+export async function readFileAtBranchExact(
+  storageKey: string,
+  branch: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const cwd = bareRepoPathFromKey(storageKey);
+    const { stdout } = await execFile("git", ["show", `${branch}:${filePath}`], {
+      cwd, maxBuffer: MAX, encoding: "buffer",
+    });
+    return stdout.toString("utf8");
   } catch {
     return null;
   }

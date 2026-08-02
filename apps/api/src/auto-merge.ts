@@ -4,7 +4,8 @@ import { computeReviewSummary } from "./review-summary.js";
 import { evaluateMergeProtection } from "./branch-protection.js";
 import { summarizeCheckRuns, type CheckSummary } from "./ci/summary.js";
 import { executePullMerge } from "./pull-merge.js";
-import { isMergeMethod } from "./merge-policy.js";
+import { isMergeMethod, repoMergePolicy } from "./merge-policy.js";
+import { canWrite, repoAccessInclude } from "./repo-access.js";
 
 /**
  * Auto-merge (issue #119). A PR with `autoMergeMethod`/`autoMergeById` set is
@@ -25,6 +26,11 @@ import { isMergeMethod } from "./merge-policy.js";
  * gate — auto-merge never overrides it), and a green check summary for the
  * head SHA (no failing, no pending; no runs at all counts as green, mirroring
  * the protection contract's "absent checks must not block").
+ *
+ * Everything the ARM endpoint validated is re-validated at fire time, because an
+ * armed PR can sit for days: the method is re-checked against the repo's merge
+ * policy, and the arming user must still exist (a missing one disarms) and still
+ * hold write access.
  */
 
 /** Minimal logger surface — the CI-runner call site has no Fastify logger. */
@@ -103,9 +109,43 @@ export async function maybeAutoMergePr(prId: string, log?: LogLike): Promise<Aut
       return { fired: false, reason: "not armed" };
     }
 
-    const repo = await prisma.repo.findFirst({ where: { id: pr.repoId } });
+    const repo = await prisma.repo.findFirst({
+      where: { id: pr.repoId },
+      include: repoAccessInclude,
+    });
     if (!repo?.storageKey) return { fired: false, reason: "no git storage" };
     const storageKey = repo.storageKey;
+
+    // The armed method is validated at ARM time against the repo policy, but the
+    // owner can narrow the policy afterwards. Re-check at fire time so a method
+    // the repo no longer allows can never merge behind the policy's back. The
+    // intent is kept (not disarmed) — widening the policy again should just work.
+    const policy = repoMergePolicy(repo);
+    if (!policy.allowedMethods.includes(pr.autoMergeMethod)) {
+      return { fired: false, reason: `merge method '${pr.autoMergeMethod}' is no longer allowed by the repository policy` };
+    }
+
+    // The arming user is the identity the merge is performed AS. A user that no
+    // longer exists is a DISARM (the contract the schema documents): otherwise
+    // `resolveActorIdentity` would fall back to a ghost "ForgeHub" author and
+    // merge on a deleted account's behalf.
+    const armer = await prisma.user.findUnique({
+      where: { id: pr.autoMergeById },
+      select: { id: true },
+    });
+    if (!armer) {
+      await prisma.pullRequest.update({
+        where: { id: pr.id },
+        data: { autoMergeMethod: null, autoMergeById: null },
+      });
+      return { fired: false, reason: "arming user no longer exists — auto-merge disarmed" };
+    }
+    // Write access can be revoked after arming. Refuse to fire (but stay armed —
+    // restoring access should resume the intent), mirroring the writer gate the
+    // arm endpoint applied.
+    if (!canWrite(repo, pr.autoMergeById)) {
+      return { fired: false, reason: "arming user no longer has write access" };
+    }
 
     let headSha: string | null = null;
     try { headSha = await resolveBranchSha(storageKey, pr.fromBranch); } catch { headSha = null; }
