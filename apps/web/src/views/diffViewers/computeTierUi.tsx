@@ -43,31 +43,63 @@ export function useComputeTier(ext: string): [ComputeTier, (t: ComputeTier, opts
 // One meta fetch per blob pair, shared by the header pill and the viewer body
 // so switching tiers never re-asks the server. A rejection is not cached, so a
 // later mount retries.
-const metaCache = new Map<string, Promise<FileDiffMeta>>();
+//
+// The key carries the auth token: the answer (blob SHAs and exact sizes) is
+// principal-specific, and a logout/login inside one SPA session must not replay
+// the previous user's. Entries expire, because the ref a caller passes may be a
+// BRANCH — a PR file view passes the head branch, which moves under us — and
+// the map is bounded, because a long browsing session touches unboundedly many
+// files.
+const META_TTL_MS = 60_000;
+const META_CACHE_MAX = 200;
 
-function fetchMetaOnce(
+type MetaEntry = { promise: Promise<FileDiffMeta>; at: number };
+const metaCache = new Map<string, MetaEntry>();
+
+/** Test hook: drop cached metadata between cases. */
+export function __resetFileDiffMetaCache(): void {
+  metaCache.clear();
+}
+
+export function fetchFileDiffMetaOnce(
   token: string | null,
   handle: string,
   repoName: string,
   path: string,
   sha: string,
 ): Promise<FileDiffMeta> {
-  const key = `${handle}/${repoName}|${sha}|${path}`;
-  let p = metaCache.get(key);
-  if (!p) {
-    p = getFileDiffMeta(token, handle, repoName, path, sha);
-    p.catch(() => metaCache.delete(key));
-    metaCache.set(key, p);
+  const key = `${token ?? ""}|${handle}/${repoName}|${sha}|${path}`;
+  const hit = metaCache.get(key);
+  if (hit && Date.now() - hit.at < META_TTL_MS) return hit.promise;
+
+  const promise = getFileDiffMeta(token, handle, repoName, path, sha);
+  promise.catch(() => {
+    // Don't strand a rejection in the cache — but only drop it if it's still
+    // the entry we put there.
+    if (metaCache.get(key)?.promise === promise) metaCache.delete(key);
+  });
+  metaCache.delete(key); // re-insert, so this counts as the newest write
+  metaCache.set(key, { promise, at: Date.now() });
+  // Map iteration is insertion-ordered, so the first key is the oldest write.
+  while (metaCache.size > META_CACHE_MAX) {
+    const oldest = metaCache.keys().next().value;
+    if (oldest === undefined) break;
+    metaCache.delete(oldest);
   }
-  return p;
+  return promise;
 }
 
 /**
  * Compute-tier metadata for a file at a commit (cached; no diff is computed
  * server-side). Null while loading — and stays null on failure, which reads as
  * "capability unknown": the pill still renders, Tier B just stays disabled.
- * Pass `enabled: false` from callsites that render non-semantic files too, so
- * only files with a semantic gate ever ask.
+ *
+ * `enabled` is what keeps this LAZY, and callers must treat it as such. The
+ * request is ~6 git subprocess spawns; a commit or PR touching N semantic
+ * assets — the exact case 3D formats exist for — would otherwise fire N of them
+ * concurrently on page load, for collapsed rows nobody opened, purely to fill a
+ * dropdown. Derive the flag from `needsFileDiffMeta` rather than passing `true`
+ * — it encodes the whole policy, and its default is "don't ask".
  */
 export function useFileDiffMeta(
   token: string | null,
@@ -82,7 +114,7 @@ export function useFileDiffMeta(
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    fetchMetaOnce(token, handle, repoName, path, sha)
+    fetchFileDiffMetaOnce(token, handle, repoName, path, sha)
       .then((m) => {
         if (!cancelled) setMeta(m);
       })
@@ -110,15 +142,21 @@ const TIER_DESCRIPTIONS: Record<ComputeTier, string> = {
  * disabled with the reason (and its honest download cost shown) straight from
  * the shared meta; while meta is unknown it stays disabled rather than
  * over-promising.
+ *
+ * `onActivate` fires the moment the pill is pointed at or focused — the signal
+ * the row uses to start fetching that meta. Nothing is requested for a pill
+ * nobody touches.
  */
 export function ComputeTierPill({
   tier,
   onChange,
   meta,
+  onActivate,
 }: {
   tier: ComputeTier;
   onChange: (t: ComputeTier, opts?: { allFormats?: boolean }) => void;
   meta: FileDiffMeta | null;
+  onActivate?: () => void;
 }) {
   const assessment: TierBAssessment = meta
     ? assessBrowserTier(meta)
@@ -134,6 +172,11 @@ export function ComputeTierPill({
           <button
             type="button"
             aria-label={`Rendered on ${TIER_LABELS[tier].label} — switch compute tier`}
+            // Hover/focus prefetches so the menu is rarely opened on an unknown
+            // capability; pointerdown covers touch, which never hovers.
+            onPointerEnter={onActivate}
+            onPointerDown={onActivate}
+            onFocus={onActivate}
             className={cx(
               "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-sans text-fh-xs leading-none",
               "cursor-pointer transition-colors",

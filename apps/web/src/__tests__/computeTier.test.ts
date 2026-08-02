@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  TIER_B_MAX_COMBINED_BYTES,
+  TIER_B_MAX_BLOB_BYTES,
+  abbreviateRev,
   assessBrowserTier,
   browserDownloadLabel,
   browserWasmSupported,
@@ -12,6 +13,7 @@ import {
   getTierPreference,
   isComputeTier,
   listTierPreferences,
+  needsFileDiffMeta,
   resolveTierPreference,
   setGlobalTierPreference,
   setTierPreference,
@@ -38,8 +40,8 @@ const meta = (over: Partial<FileDiffMeta> = {}): FileDiffMeta => ({
   path: "scene/model.gltf",
   baseSha: "a".repeat(40),
   headSha: "b".repeat(40),
-  baseSize: 84 * 1024 * 1024,
-  headSize: 84 * 1024 * 1024,
+  baseSize: 2 * 1024 * 1024,
+  headSize: 2 * 1024 * 1024,
   wasmAvailable: true,
   officialBuild: "e520cc6",
   pinnedBuild: null,
@@ -131,7 +133,7 @@ describe("sticky preferences (per-format + global)", () => {
 describe("assessBrowserTier (capability detection)", () => {
   it("is available with wasm support, a published build, and blobs under the ceiling", () => {
     const a = assessBrowserTier(meta(), true);
-    expect(a).toEqual({ available: true, downloadBytes: 2 * 84 * 1024 * 1024 });
+    expect(a).toEqual({ available: true, downloadBytes: 4 * 1024 * 1024 });
   });
 
   it("is unavailable without WebAssembly support", () => {
@@ -146,11 +148,26 @@ describe("assessBrowserTier (capability detection)", () => {
     if (!a.available) expect(a.reason).toContain("gltf-scene");
   });
 
-  it("is unavailable above the combined blob-size ceiling", () => {
-    const half = Math.ceil(TIER_B_MAX_COMBINED_BYTES / 2) + 1;
-    const a = assessBrowserTier(meta({ baseSize: half, headSize: half }), true);
+  // Regression (#66 P4 review): the ceiling is PER BLOB and matches the
+  // server's MAX_WASM_BYTES — the browser runs the same synchronous wasm call
+  // on its main thread, with no worker to kill, so it may not accept an input
+  // the server refuses. A pair that only breaches when summed is still fine.
+  it("is unavailable above the per-blob ceiling", () => {
+    const a = assessBrowserTier(meta({ headSize: TIER_B_MAX_BLOB_BYTES + 1 }), true);
     expect(a.available).toBe(false);
     if (!a.available) expect(a.reason).toContain("too large");
+  });
+
+  it("matches the server's per-blob wasm ceiling exactly", () => {
+    expect(TIER_B_MAX_BLOB_BYTES).toBe(8 * 1024 * 1024);
+  });
+
+  it("allows a pair whose combined size exceeds one blob's ceiling", () => {
+    const each = TIER_B_MAX_BLOB_BYTES - 1;
+    expect(assessBrowserTier(meta({ baseSize: each, headSize: each }), true)).toEqual({
+      available: true,
+      downloadBytes: 2 * each,
+    });
   });
 
   it("counts a missing blob (added/deleted file) as zero bytes", () => {
@@ -158,11 +175,51 @@ describe("assessBrowserTier (capability detection)", () => {
     expect(a).toEqual({ available: true, downloadBytes: 1000 });
   });
 
+  // Regression (#66 P4 review): two null sizes used to read as a free download
+  // of nothing and let the compute proceed. It is an unknown, not a zero.
+  it("withholds Tier B when neither blob has a known size", () => {
+    const a = assessBrowserTier(meta({ baseSize: null, headSize: null }), true);
+    expect(a.available).toBe(false);
+    if (!a.available) expect(a.reason).toContain("unknown");
+  });
+
   it("browserWasmSupported probes the given scope", () => {
     expect(browserWasmSupported({})).toBe(false);
     expect(browserWasmSupported({ WebAssembly: { instantiate: () => {} } })).toBe(true);
     // this test environment (node) genuinely has wasm
     expect(browserWasmSupported()).toBe(true);
+  });
+});
+
+// Regression (#66 P4 review): filediff-meta was requested at row level for
+// every semantic file in a commit/PR, collapsed ones included — ~6 git spawns
+// each, all concurrent, to populate a dropdown most viewers never open.
+describe("needsFileDiffMeta (laziness)", () => {
+  it("asks for nothing for an untouched semantic row — the default", () => {
+    expect(needsFileDiffMeta({ semantic: true })).toBe(false);
+  });
+
+  it("a PR of N untouched semantic assets asks zero times", () => {
+    const rows = Array.from({ length: 25 }, () => ({ semantic: true }));
+    expect(rows.filter(needsFileDiffMeta)).toHaveLength(0);
+  });
+
+  it("asks once the pill is engaged", () => {
+    expect(needsFileDiffMeta({ semantic: true, pillEngaged: true })).toBe(true);
+  });
+
+  it("asks when a client tier is actually rendering — it is built from meta", () => {
+    expect(needsFileDiffMeta({ semantic: true, clientTierActive: true })).toBe(true);
+  });
+
+  it("asks when Tier S drags long enough for the nudge to offer alternatives", () => {
+    expect(needsFileDiffMeta({ semantic: true, serverSlow: true })).toBe(true);
+  });
+
+  it("never asks for a file with no semantic handler, whatever else is true", () => {
+    expect(
+      needsFileDiffMeta({ semantic: false, pillEngaged: true, clientTierActive: true, serverSlow: true }),
+    ).toBe(false);
   });
 });
 
@@ -175,7 +232,8 @@ describe("honest cost disclosure", () => {
   });
 
   it('reads "2 × 84 MB" when both blobs round to the same size', () => {
-    expect(browserDownloadLabel(meta())).toBe("downloads 2 × 84 MB");
+    const size = 84 * 1024 * 1024;
+    expect(browserDownloadLabel(meta({ baseSize: size, headSize: size }))).toBe("downloads 2 × 84 MB");
   });
 
   it("lists both sizes when they differ", () => {
@@ -184,8 +242,17 @@ describe("honest cost disclosure", () => {
   });
 
   it("shows the single blob for an added/deleted file", () => {
-    expect(browserDownloadLabel(meta({ baseSize: null }))).toBe("downloads 84 MB");
-    expect(browserDownloadLabel(meta({ baseSize: null, headSize: null }))).toBe("downloads nothing");
+    expect(browserDownloadLabel(meta({ baseSize: null, headSize: 84 * 1024 * 1024 }))).toBe(
+      "downloads 84 MB",
+    );
+  });
+
+  // Defensive only: assessBrowserTier now refuses a both-null pair, so the
+  // consent screen can no longer offer to download "nothing" and then download.
+  it("never reaches the consent screen with no known sizes at all", () => {
+    const both = meta({ baseSize: null, headSize: null });
+    expect(browserDownloadLabel(both)).toBe("downloads nothing");
+    expect(assessBrowserTier(both, true).available).toBe(false);
   });
 });
 
@@ -225,5 +292,26 @@ describe("forgeDiffCommand (Tier L hand-off)", () => {
     expect(forgeDiffCommand("my scene/model.gltf", null, "b".repeat(40))).toBe(
       'forge diff --web "my scene/model.gltf"',
     );
+  });
+
+  // Regression (#66 P4 review): the PR file view hands down the head BRANCH,
+  // and slicing 12 characters off "claude/hub-66-p4-compute-tiers" produced
+  // "claude/hub-6" — a command that either errors in forge or, worse, resolves
+  // to something else. Only a real SHA has an unambiguous-prefix property.
+  it("never truncates a revision that is not a full SHA", () => {
+    expect(forgeDiffCommand("model.gltf", "a".repeat(40), "claude/hub-66-p4-compute-tiers")).toBe(
+      `forge diff --web model.gltf ${"a".repeat(12)}..claude/hub-66-p4-compute-tiers`,
+    );
+    expect(forgeDiffCommand("model.gltf", "main", "feature/x")).toBe(
+      "forge diff --web model.gltf main..feature/x",
+    );
+  });
+
+  it("abbreviateRev shortens only 40-hex SHAs", () => {
+    expect(abbreviateRev("c".repeat(40))).toBe("c".repeat(12));
+    expect(abbreviateRev("main")).toBe("main");
+    expect(abbreviateRev("v1.2.3")).toBe("v1.2.3");
+    // A short SHA is already unambiguous-ish and is not ours to re-cut.
+    expect(abbreviateRev("c68a22e")).toBe("c68a22e");
   });
 });

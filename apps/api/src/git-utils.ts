@@ -172,18 +172,22 @@ export async function handlerPinsAtCommit(storageKey: string, commitIsh: string)
 }
 
 /**
- * Size in bytes of a file's blob at a commit, or null when absent. Answered by
- * `git cat-file -s` without materializing the blob, so a client can be told the
- * honest download cost of browser-side compute before it fetches anything.
+ * Size in bytes of a file's blob at a commit, or null when the path is not in
+ * that commit's tree. Answered without materializing the blob, so a client can
+ * be told the honest download cost of browser-side compute before it fetches
+ * anything.
+ *
+ * `ls-tree -l` rather than `cat-file -s` on purpose: it exits 0 with no output
+ * for an absent path, so "the blob isn't there" (an added/deleted/renamed file
+ * — legitimately zero bytes to download) stays distinguishable from a git
+ * failure, which throws. "Cost unknown" must never be reported as "free".
  */
 export async function blobSizeAtCommit(storageKey: string, commitIsh: string, filePath: string): Promise<number | null> {
-  try {
-    const out = await git(storageKey, ["cat-file", "-s", `${commitIsh}:${filePath}`]);
-    const n = Number(out);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
+  const out = await git(storageKey, ["ls-tree", "-l", commitIsh, "--", filePath]);
+  // "<mode> blob <sha> <size>\t<path>" — trees and submodules carry "-" and are
+  // not blobs to download either way.
+  const m = /^\S+ blob \S+ +(\d+)\t/.exec(out);
+  return m ? Number(m[1]) : null;
 }
 
 function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {

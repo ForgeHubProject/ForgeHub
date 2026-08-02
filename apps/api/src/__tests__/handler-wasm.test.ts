@@ -2,10 +2,10 @@
  * Handler-wasm proxy tests (Tier B, issue #66 P4). Where each wasm build lives
  * comes from the FHR manifest (stubbed via the test hook, so the manifest never
  * hits the network); the upstream *wasm* fetch is stubbed too. We assert the
- * build is re-served as application/wasm (so the browser's streaming
- * instantiation MIME check passes), that a bare id and the full release
- * filename both resolve to the manifest URL, and that bad ids / unknown
- * handlers are handled without touching upstream.
+ * build is re-served same-origin as application/wasm, that a bare id and the
+ * full release filename both resolve to the manifest URL, that bad ids /
+ * unknown handlers are handled without touching upstream, and that the cache
+ * an unauthenticated caller can write to stays bounded.
  */
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 
@@ -99,5 +99,27 @@ describe("GET /handlers/:asset", () => {
     await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
     await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: the cache is keyed by unauthenticated caller input and holds
+  // whole wasm binaries, so it must be bounded rather than grow forever.
+  it("bounds the cache — unknown ids evict rather than accumulate", async () => {
+    const fetchMock = stubUpstream();
+    await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Enough distinct ids to push the real build past the bound.
+    for (let i = 0; i < 20; i++) {
+      const res = await app.inject({ method: "GET", url: `/handlers/filler${i}` });
+      expect(res.statusCode).toBe(404);
+    }
+    // Evicted, so this re-fetches instead of being served from a cache that
+    // never gave the entry up.
+    await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an over-long handler id before it can become a cache key", async () => {
+    const res = await app.inject({ method: "GET", url: `/handlers/${"a".repeat(80)}` });
+    expect(res.statusCode).toBe(400);
   });
 });
