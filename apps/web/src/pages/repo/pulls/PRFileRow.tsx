@@ -4,6 +4,7 @@ import { getPRFileDiff } from "../../../api";
 import type { FileDiff, PRFileEntry } from "../../../types";
 import type { RepoRef } from "../../../lib/autolink";
 import { resolveFileDiffViewer, extensionForFilename } from "../../../views/fileDiffViewerRegistry";
+import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../../views/diffViewers/computeTierUi";
 import { useSemanticExtensions } from "../../../lib/fhrFormats";
 import { Badge, Skeleton, cx } from "../../../ui";
 import { ChevronRightIcon } from "./prShared";
@@ -51,7 +52,12 @@ export function PRFileRow({
   const filename = file.path.split("/").pop() ?? file.path;
   const semanticExtensions = useSemanticExtensions();
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
-  const isSemantic = semanticExtensions?.has(extensionForFilename(filename)) ?? false;
+  const ext = extensionForFilename(filename);
+  const isSemantic = semanticExtensions?.has(ext) ?? false;
+  // Compute-tier chrome, semantic files only: the header pill owns the tier,
+  // the viewer renders it; both share one cached metadata fetch (#66 P4).
+  const [tier, changeTier] = useComputeTier(ext);
+  const meta = useFileDiffMeta(token, base, file.path, headRef, isSemantic);
 
   async function loadDiff() {
     if (loaded || diffLoading) return;
@@ -110,6 +116,7 @@ export function PRFileRow({
           {displayPath}
         </Link>
         <div className="flex items-center gap-2 shrink-0 text-fh-xs font-mono">
+          {isSemantic && <ComputeTierPill tier={tier} onChange={changeTier} meta={meta} />}
           {threads.length > 0 && (
             <Badge tone={openThreadCount > 0 ? "accent" : "neutral"} pill={false} className="font-sans gap-1">
               <CommentIcon size={11} />
@@ -147,7 +154,14 @@ export function PRFileRow({
           />
         ) : diff ? (
           <div className="bg-fh-surface">
-            <Viewer file={diff} repoBase={base} headRef={headRef} token={token} />
+            <Viewer
+              file={diff}
+              repoBase={base}
+              headRef={headRef}
+              token={token}
+              computeTier={isSemantic ? tier : undefined}
+              onComputeTierChange={changeTier}
+            />
             {threads.length > 0 && (
               <div className="px-4 py-3 border-t border-fh-border">
                 <FileThreadList threads={threads} repo={repoRef} review={review} />
