@@ -4,7 +4,7 @@ import type {
   DesignVersion, DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
-  ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult, Release,
+  ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState, RefCompareResult, Release,
   ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
   TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
@@ -927,6 +927,42 @@ export async function transferIssue(
 ): Promise<{ id: string; number: number; repo: string; handle: string; name: string; url: string }> {
   return req(`/repos/${handle}/${repoName}/issues/${number}/transfer`, {
     method: "POST", token, body: JSON.stringify({ targetRepo }),
+  });
+}
+
+// ─── emoji reactions (#90) — generic over issues, PRs and comments ─────────────
+
+/** Wire subjectType values for the generic reactions endpoint. */
+export type ReactionSubjectType = "issue" | "pull_request" | "issue_comment" | "pr_comment" | "pr_review_comment";
+
+/** The toggled subject's fresh rollup, for reconciling an optimistic update. */
+export type ReactionToggleResult = ReactionState & { subjectType: ReactionSubjectType; subjectId: string };
+
+/** Idempotent add of the caller's reaction. */
+export async function addReaction(
+  token: string,
+  handle: string,
+  repoName: string,
+  subjectType: ReactionSubjectType,
+  subjectId: string,
+  emoji: ReactionEmoji,
+): Promise<ReactionToggleResult> {
+  return req(`/repos/${handle}/${repoName}/reactions`, {
+    method: "PUT", token, body: JSON.stringify({ subjectType, subjectId, emoji }),
+  });
+}
+
+/** Remove the caller's own reaction (no-op if it was never added). */
+export async function removeReaction(
+  token: string,
+  handle: string,
+  repoName: string,
+  subjectType: ReactionSubjectType,
+  subjectId: string,
+  emoji: ReactionEmoji,
+): Promise<ReactionToggleResult> {
+  return req(`/repos/${handle}/${repoName}/reactions`, {
+    method: "DELETE", token, body: JSON.stringify({ subjectType, subjectId, emoji }),
   });
 }
 
