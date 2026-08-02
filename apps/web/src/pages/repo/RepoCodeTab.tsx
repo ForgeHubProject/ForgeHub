@@ -264,6 +264,7 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
       <DropdownMenu
         align="start"
         width={280}
+        searchPlaceholder="Find a branch…"
         trigger={
           <Button
             variant="default"
@@ -276,24 +277,35 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
           </Button>
         }
       >
-        <DropdownLabel>Switch branches</DropdownLabel>
-        {branches.map((b) => (
-          <DropdownItem
-            key={b.name}
-            leadingIcon={b.name === currentRef ? <Icons.CheckIcon size={14} /> : <span className="w-3.5 inline-block" />}
-            trailing={b.isDefault ? <Badge tone="neutral" pill={false} className="text-fh-xs">default</Badge> : undefined}
-            onSelect={() => onRefChange(b.name)}
-          >
-            <span className={b.name === currentRef ? "font-semibold" : undefined}>{b.name}</span>
-          </DropdownItem>
-        ))}
-        <DropdownSeparator />
-        <DropdownItem leadingIcon={<BranchGlyph />} onSelect={openDialog}>
-          New branch…
-        </DropdownItem>
-        <DropdownItem leadingIcon={<span className="w-3.5 inline-block" />} onSelect={() => navigate(`${base}/branches`)}>
-          View all branches
-        </DropdownItem>
+        {(query) => {
+          const q = query.trim().toLowerCase();
+          const matches = q ? branches.filter((b) => b.name.toLowerCase().includes(q)) : branches;
+          return (
+            <>
+              <DropdownLabel>Switch branches</DropdownLabel>
+              {matches.length === 0 && (
+                <p className="px-3 py-1.5 text-fh-sm text-fh-fg-muted">No matching branches</p>
+              )}
+              {matches.map((b) => (
+                <DropdownItem
+                  key={b.name}
+                  leadingIcon={b.name === currentRef ? <Icons.CheckIcon size={14} /> : <span className="w-3.5 inline-block" />}
+                  trailing={b.isDefault ? <Badge tone="neutral" pill={false} className="text-fh-xs">default</Badge> : undefined}
+                  onSelect={() => onRefChange(b.name)}
+                >
+                  <span className={b.name === currentRef ? "font-semibold" : undefined}>{b.name}</span>
+                </DropdownItem>
+              ))}
+              <DropdownSeparator />
+              <DropdownItem leadingIcon={<BranchGlyph />} onSelect={openDialog}>
+                New branch…
+              </DropdownItem>
+              <DropdownItem leadingIcon={<span className="w-3.5 inline-block" />} onSelect={() => navigate(`${base}/branches`)}>
+                View all branches
+              </DropdownItem>
+            </>
+          );
+        }}
       </DropdownMenu>
 
       <Dialog
@@ -404,12 +416,12 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
     setLoading(true);
     setError(null);
 
-    // NOTE: the commits endpoint only filters by branch (path is ignored server-side),
-    // so we surface the branch-HEAD commit once in the header bar rather than fabricate a
-    // per-file "last commit" column that would repeat the same commit on every row.
+    // The header bar shows the most recent commit touching the directory being
+    // viewed (the commits endpoint filters by path server-side, issue #109) —
+    // one honest "last commit" line rather than a fabricated per-file column.
     Promise.all([
       listTree(token, handle, repoName, currentRef, currentPath || undefined),
-      listCommits(token, handle, repoName, currentRef, currentPath || undefined, 1),
+      listCommits(token, handle, repoName, currentRef, { path: currentPath || undefined, perPage: 1 }),
     ])
       .then(([treeData, commitData]) => {
         if (cancelled) return;

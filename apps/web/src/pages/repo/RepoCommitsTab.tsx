@@ -389,7 +389,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
     setLoading(true);
     setError(null);
     setStatuses({});
-    listCommits(token, handle, repoName, defaultBranch, undefined, 50)
+    listCommits(token, handle, repoName, defaultBranch, { perPage: 50 })
       .then((d) => {
         setCommits(d.commits);
         // Batch-fetch CI status for the visible shas (best-effort; empty when no CI).
