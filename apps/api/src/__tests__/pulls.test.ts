@@ -8,6 +8,7 @@ vi.mock("../prisma.js", () => ({
       create: vi.fn(),
       findUnique: vi.fn().mockResolvedValue({ handle: "merger", displayName: "Merl Merger", email: "merl@forgehub.io" }),
       findUniqueOrThrow: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
     },
     repo: {
       create: vi.fn(),
@@ -38,6 +39,13 @@ vi.mock("../prisma.js", () => ({
     },
     pullRequestReviewComment: {
       findMany: vi.fn().mockResolvedValue([]),
+    },
+    // Requested reviewers (#82) — default to "no requests".
+    pullRequestReviewerRequest: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(null),
+      upsert: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     // Branch protection (#85) — default to "not protected" so the merge/detail
     // paths behave as before unless a test opts in.
@@ -125,6 +133,7 @@ vi.mock("bcryptjs", () => ({
 
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
+import { notifyUser } from "../notifications-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
@@ -160,6 +169,7 @@ function makePR(overrides = {}) {
     fromBranch: "feature",
     toBranch: "main",
     state: "OPEN" as const,
+    isDraft: false,
     mergedAt: null,
     authorId: AUTHOR_ID,
     createdAt: new Date(),
@@ -1000,5 +1010,373 @@ describe("PAT scope enforcement on PR write endpoints (wave-B MAJOR-2)", () => {
       headers: { authorization: ownerToken },
     });
     expect(viaSession.statusCode).toBe(200);
+  });
+});
+
+// ─── Draft PRs (issue #82) ─────────────────────────────────────────────────────
+
+describe("draft pull requests (issue #82)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let authorToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+    authorToken = await authHeader(app, AUTHOR_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    const { branchExists } = await import("../git-utils.js");
+    vi.mocked(branchExists).mockResolvedValue(true);
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ isDraft: true }) as never);
+    vi.mocked(prisma.pullRequest.count).mockResolvedValue(0 as never);
+    vi.mocked(prisma.pullRequest.update).mockReset().mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
+  });
+
+  it("POST /pulls with draft:true creates a draft and echoes isDraft", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(null as never); // no duplicate
+    vi.mocked(prisma.pullRequest.create).mockReset().mockResolvedValue(makePR({ isDraft: true }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls",
+      headers: { authorization: authorToken },
+      payload: { title: "WIP", fromBranch: "feature", draft: true },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().isDraft).toBe(true);
+    expect(vi.mocked(prisma.pullRequest.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ isDraft: true }) }),
+    );
+  });
+
+  it("POST /pulls without draft defaults to isDraft false", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequest.create).mockReset().mockResolvedValue(makePR() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls",
+      headers: { authorization: authorToken },
+      payload: { title: "Ready", fromBranch: "feature" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().isDraft).toBe(false);
+    expect(vi.mocked(prisma.pullRequest.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ isDraft: false }) }),
+    );
+  });
+
+  it("GET detail and list expose isDraft", async () => {
+    const detail = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().isDraft).toBe(true);
+
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([makePR({ isDraft: true })] as never);
+    const list = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls" });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().pulls[0].isDraft).toBe(true);
+  });
+
+  it("409 (draft) from /merge while isDraft — merge is never attempted", async () => {
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear();
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().draft).toBe(true);
+    expect(res.json().error).toMatch(/draft/i);
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+  });
+
+  it("409 (draft) from /merge-resolve while isDraft", async () => {
+    const { resolvePullRequestMerge } = await import("../merge/resolve-pull.js");
+    vi.mocked(resolvePullRequestMerge).mockClear();
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge-resolve",
+      headers: { authorization: ownerToken },
+      payload: { strategy: "ours" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().draft).toBe(true);
+    expect(vi.mocked(resolvePullRequestMerge)).not.toHaveBeenCalled();
+  });
+
+  it("POST /ready lets the author leave draft", async () => {
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ isDraft: false }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().isDraft).toBe(false);
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { isDraft: false } }),
+    );
+  });
+
+  it("POST /ready lets the repo owner leave draft", async () => {
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ isDraft: false }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("403 when a stranger calls /ready", async () => {
+    const strangerToken = await authHeader(app, "stranger");
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: strangerToken },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("409 when /ready is called on a non-draft PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ isDraft: false }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/not a draft/i);
+  });
+
+  it("409 when /ready is called on a closed PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ isDraft: true, state: "CLOSED" }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+});
+
+// ─── Requested reviewers (issue #82) ───────────────────────────────────────────
+
+describe("requested reviewers (issue #82)", () => {
+  const REVIEWER_ID = "user-reviewer-pr";
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let authorToken: string;
+
+  // Repo owned by OWNER_ID with the reviewer as a READER collaborator.
+  const repoWithReviewer = () =>
+    makeRepo({ collaborators: [{ userId: REVIEWER_ID, role: "READER" }] });
+
+  const activeRequestRow = (overrides = {}) => ({
+    id: "req-1", pullRequestId: "pr-1", userId: REVIEWER_ID, requestedById: OWNER_ID,
+    createdAt: new Date(), fulfilledAt: null, dismissedAt: null,
+    user: { handle: "reviewer" }, requestedBy: { handle: "alice" },
+    ...overrides,
+  });
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+    authorToken = await authHeader(app, AUTHOR_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(notifyUser).mockClear();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(repoWithReviewer() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: REVIEWER_ID, handle: "reviewer" }] as never);
+    vi.mocked(prisma.pullRequestReviewerRequest.findUnique).mockReset().mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestReviewerRequest.upsert).mockReset().mockResolvedValue(activeRequestRow() as never);
+    vi.mocked(prisma.pullRequestReviewerRequest.updateMany).mockReset().mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.pullRequestReviewerRequest.findMany).mockReset().mockResolvedValue([activeRequestRow()] as never);
+  });
+
+  it("POST requests a review from a collaborator and fires REVIEW_REQUESTED", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().requestedReviewers).toEqual([
+      expect.objectContaining({ handle: "reviewer", state: "requested", requestedBy: "alice" }),
+    ]);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.upsert)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ pullRequestId: "pr-1", userId: REVIEWER_ID, requestedById: OWNER_ID }),
+      }),
+    );
+    expect(vi.mocked(notifyUser)).toHaveBeenCalledWith(
+      REVIEWER_ID,
+      expect.objectContaining({ reason: "REVIEW_REQUESTED", subjectId: "pr-1", actorId: OWNER_ID }),
+    );
+  });
+
+  it("POST from the PR author is allowed (author picks their reviewers)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: authorToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("403 when a non-writer stranger tries to request reviewers", async () => {
+    const strangerToken = await authHeader(app, "stranger");
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: strangerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.upsert)).not.toHaveBeenCalled();
+  });
+
+  it("422 rejects a self-request", async () => {
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: OWNER_ID, handle: "alice" }] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["alice"] },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/yourself/i);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.upsert)).not.toHaveBeenCalled();
+  });
+
+  it("422 rejects requesting the PR author", async () => {
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: AUTHOR_ID, handle: "dev" }] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["dev"] },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/author/i);
+  });
+
+  it("422 rejects a user who is neither owner nor collaborator", async () => {
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "user-outsider", handle: "outsider" }] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["outsider"] },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/owner or a collaborator/i);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.upsert)).not.toHaveBeenCalled();
+  });
+
+  it("404 for an unknown handle", async () => {
+    vi.mocked(prisma.user.findMany).mockResolvedValue([] as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["ghost"] },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toMatch(/ghost/);
+  });
+
+  it("400 when handles is missing or empty", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("409 when the PR is not open", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ state: "CLOSED" }) as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("re-requesting a fulfilled request revives it and re-notifies", async () => {
+    vi.mocked(prisma.pullRequestReviewerRequest.findUnique).mockResolvedValue(
+      activeRequestRow({ fulfilledAt: new Date() }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.upsert)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ fulfilledAt: null, dismissedAt: null }),
+      }),
+    );
+    expect(vi.mocked(notifyUser)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-requesting an already-pending request is a quiet no-op (no duplicate notify)", async () => {
+    vi.mocked(prisma.pullRequestReviewerRequest.findUnique).mockResolvedValue(activeRequestRow() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(notifyUser)).not.toHaveBeenCalled();
+  });
+
+  it("DELETE dismisses an active request", async () => {
+    vi.mocked(prisma.pullRequestReviewerRequest.findMany).mockResolvedValue([] as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo/pulls/1/requested-reviewers",
+      headers: { authorization: ownerToken },
+      payload: { handles: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().requestedReviewers).toEqual([]);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.updateMany)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ pullRequestId: "pr-1", userId: { in: [REVIEWER_ID] }, dismissedAt: null }),
+        data: { dismissedAt: expect.any(Date) },
+      }),
+    );
+  });
+
+  it("GET detail surfaces request state (requested / reviewed)", async () => {
+    vi.mocked(prisma.pullRequestReviewerRequest.findMany).mockResolvedValue([
+      activeRequestRow(),
+      activeRequestRow({ id: "req-2", userId: "user-r2", fulfilledAt: new Date(), user: { handle: "done" } }),
+    ] as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().requestedReviewers).toEqual([
+      expect.objectContaining({ handle: "reviewer", state: "requested" }),
+      expect.objectContaining({ handle: "done", state: "reviewed" }),
+    ]);
   });
 });
