@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Avatar, Button, cx, LabelChip, TextInput } from "../../../ui";
+import { Avatar, Button, cx, DropdownMenu, LabelChip, TextInput } from "../../../ui";
 import { CheckIcon, XIcon } from "../../../ui/icons";
 import type { Label, Milestone, MilestoneRef } from "../../../types";
 import type { RepoMember } from "../../../api";
-import { LabelOptionRow, MemberOptionRow, Popover, SidebarHeader } from "./pickers";
+import { LabelOptionRow, MemberOptionRow, Popover, SidebarGearTrigger, SidebarHeader } from "./pickers";
 import { MilestoneIcon } from "./icons";
 
 /** Format a milestone due date as GitHub does: "Due by Sep 1, 2026". */
@@ -64,24 +64,38 @@ export function SidebarLabels({
 
   return (
     <section className="pb-4 mb-4 border-b border-fh-border-muted">
-      {canEdit ? (
-        <Popover
-          align="start"
-          trigger={(_open, toggle) => <SidebarHeader title="Labels" onEdit={toggle} />}
-        >
-          {allLabels.length === 0 ? (
-            <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">
-              No labels yet. Create them in Settings.
-            </p>
-          ) : (
-            allLabels.map((l) => (
-              <LabelOptionRow key={l.id} label={l} checked={selectedIds.has(l.id)} onToggle={() => onToggle(l)} />
-            ))
-          )}
-        </Popover>
-      ) : (
-        <SidebarHeader title="Labels" />
-      )}
+      <SidebarHeader
+        title="Labels"
+        action={
+          canEdit ? (
+            <DropdownMenu
+              align="end"
+              width={264}
+              stayOpen
+              searchPlaceholder="Filter labels…"
+              trigger={<SidebarGearTrigger label="Edit labels" />}
+            >
+              {(query) => {
+                const q = query.trim().toLowerCase();
+                const matches = q ? allLabels.filter((l) => l.name.toLowerCase().includes(q)) : allLabels;
+                if (allLabels.length === 0) {
+                  return (
+                    <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">
+                      No labels yet. Create them in Settings.
+                    </p>
+                  );
+                }
+                if (matches.length === 0) {
+                  return <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No matching labels</p>;
+                }
+                return matches.map((l) => (
+                  <LabelOptionRow key={l.id} label={l} checked={selectedIds.has(l.id)} onToggle={() => onToggle(l)} />
+                ));
+              }}
+            </DropdownMenu>
+          ) : undefined
+        }
+      />
       <div className="mt-2">{chips}</div>
     </section>
   );
@@ -114,27 +128,43 @@ export function SidebarAssignee({
 
   return (
     <section className="pb-4 mb-4 border-b border-fh-border-muted">
-      {canEdit ? (
-        <Popover
-          align="start"
-          trigger={(_open, toggle) => <SidebarHeader title="Assignee" onEdit={toggle} />}
-        >
-          {members.length === 0 ? (
-            <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No members to assign.</p>
-          ) : (
-            members.map((m) => (
-              <MemberOptionRow
-                key={m.id}
-                member={m}
-                checked={selectedHandle === m.handle}
-                onToggle={() => onSelect(selectedHandle === m.handle ? null : m.handle)}
-              />
-            ))
-          )}
-        </Popover>
-      ) : (
-        <SidebarHeader title="Assignee" />
-      )}
+      <SidebarHeader
+        title="Assignee"
+        action={
+          canEdit ? (
+            <DropdownMenu
+              align="end"
+              width={264}
+              stayOpen
+              searchPlaceholder="Filter members…"
+              trigger={<SidebarGearTrigger label="Edit assignee" />}
+            >
+              {(query) => {
+                const q = query.trim().toLowerCase();
+                const matches = q
+                  ? members.filter(
+                      (m) => m.handle.toLowerCase().includes(q) || (m.displayName ?? "").toLowerCase().includes(q),
+                    )
+                  : members;
+                if (members.length === 0) {
+                  return <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No members to assign.</p>;
+                }
+                if (matches.length === 0) {
+                  return <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No matching members</p>;
+                }
+                return matches.map((m) => (
+                  <MemberOptionRow
+                    key={m.id}
+                    member={m}
+                    checked={selectedHandle === m.handle}
+                    onToggle={() => onSelect(selectedHandle === m.handle ? null : m.handle)}
+                  />
+                ));
+              }}
+            </DropdownMenu>
+          ) : undefined
+        }
+      />
       <div className="mt-2">{applied}</div>
     </section>
   );

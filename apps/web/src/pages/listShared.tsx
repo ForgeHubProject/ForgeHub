@@ -152,7 +152,7 @@ export function RepoRow({ to, name, description, visibility, updatedAt, topics, 
             {name}
           </Link>
           {visibility && (
-            <Badge tone={visibility === "public" ? "neutral" : "warning"}>
+            <Badge variant="outline" tone={visibility === "public" ? "neutral" : "warning"}>
               {visibility === "public" ? "Public" : "Private"}
             </Badge>
           )}
