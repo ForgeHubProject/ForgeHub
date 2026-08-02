@@ -32,6 +32,7 @@ import { orgRoutes } from "./routes/orgs.js";
 import { repoRoutes } from "./routes/repos.js";
 import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
+import { socialRoutes } from "./routes/social.js";
 import { topicRoutes } from "./routes/topics.js";
 import { compositionRoutes } from "./routes/composition.js";
 import { tagRoutes } from "./routes/tags.js";
@@ -47,6 +48,7 @@ import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 import { sessionActive } from "./session-service.js";
+import { backfillImplicitWatches } from "./watch-service.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -168,6 +170,7 @@ export async function buildServer() {
   await app.register(labelRoutes);
   await app.register(milestoneRoutes);
   await app.register(notificationRoutes);
+  await app.register(socialRoutes);
   await app.register(timelineRoutes);
   await app.register(searchRoutes);
   await app.register(topicRoutes);
@@ -200,11 +203,17 @@ export async function buildServer() {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env["PORT"] ?? 3001);
   buildServer()
-    .then((app) =>
-      app.listen({ port, host: "0.0.0.0" }).then(() => {
+    .then(async (app) => {
+      // Materialize implicit owner/collaborator watches for rows that predate
+      // the Watch table (issue #88). Idempotent, so re-running every boot is
+      // safe; lives HERE (not in buildServer) so test servers never touch it.
+      await backfillImplicitWatches().catch((err) => {
+        app.log.warn({ err }, "implicit-watch backfill failed");
+      });
+      return app.listen({ port, host: "0.0.0.0" }).then(() => {
         app.log.info(`Listening on http://localhost:${port}`);
-      }),
-    )
+      });
+    })
     .catch((err) => {
       console.error(err);
       process.exit(1);
