@@ -5,7 +5,7 @@
  * git plumbing. Prisma is mocked to control repo visibility and auth.
  */
 
-import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 // ─── Prisma mock (hoisted) ────────────────────────────────────────────────────
 // Only mock what resolveRepo and auth routes touch; git-utils is NOT mocked.
@@ -36,8 +36,13 @@ vi.mock("../prisma.js", () => ({
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { listCommits, getCommit, listTree, defaultBranch, PATH_HISTORY_SCAN_LIMIT } from "../git-utils.js";
-import { createDeepHistoryRepo, createMergeHistoryRepo, createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { listCommits, getCommit, listTree, defaultBranch } from "../git-utils.js";
+import {
+  bareRepoPathFromKey, createDeepHistoryRepo, createMergeHistoryRepo, createMergedAwayRepo,
+  createTestRepo, makeCommit, checkoutBranch, type TestRepo,
+} from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 
 // ─── Repo + server setup ──────────────────────────────────────────────────────
@@ -163,132 +168,138 @@ describe("listCommits()", () => {
   });
 });
 
-// ─── git-utils: per-path history is walk-bounded ──────────────────────────────
+// ─── git-utils: per-path history is git's own history simplification ──────────
 //
-// `/repos/:h/:r/commits` is unauthenticated for public repos, so a path filter
-// must not let one request walk the whole DAG. A linear history a little deeper
-// than the scan limit makes the boundary observable.
+// `RepoCodeTab` issues `{ path, perPage: 1 }` and reads element 0 as the
+// directory's header commit — author, subject, short SHA, relative time, and the
+// CI badge keyed off that SHA — so the only correct answer is the commit
+// `git log -1 <ref> -- <path>` names. A linear chain cannot check that: every
+// candidate rule agrees on a chain. These cases run on merge topologies, where
+// the rules come apart, and take git itself as the oracle.
 
-describe("listCommits() per-path scan bound", () => {
-  const DEPTH = PATH_HISTORY_SCAN_LIMIT + 50;
-  let deepKey: string;
+const execFile = promisify(execFileCb);
+const gitSays = async (bare: string, args: string[]): Promise<string> => {
+  const { stdout } = await execFile("git", ["-C", bare, ...args]);
+  return stdout.trim();
+};
+
+describe("listCommits() per-path history follows git's TREESAME parent", () => {
+  let key: string;
+  let bare: string;
 
   beforeAll(async () => {
-    deepKey = await createDeepHistoryRepo("test/deep-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+    // src/app.ts edited on main, edited again on a side branch, merged keeping
+    // ours — so the side edit touches the path but its content is not in the
+    // tree, and it is dated *newer* than the edit that did land.
+    key = await createMergedAwayRepo("test/merged-away.git", "main", "src/app.ts");
+    bare = bareRepoPathFromKey(key);
   }, 30_000);
 
-  it("stops a path-filtered walk at the scan limit", async () => {
-    // Only the oldest commit touches ancient.txt, PATH_HISTORY_SCAN_LIMIT+49
-    // commits back — reaching it means having scanned the entire history.
-    const commits = await listCommits(deepKey, "main", { path: "ancient.txt" });
-    expect(commits).toEqual([]);
+  it("names the commit whose change is in the tree, not the one merged away", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "src/app.ts"]);
+    const [head] = await listCommits(key, "main", { path: "src/app.ts", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("REAL main edit");
   });
 
-  it("stops a deep-skip path-filtered walk at the scan limit", async () => {
-    // churn.txt matches every commit but the oldest, so skipping past the whole
-    // window is what forces the walk beyond it.
-    const commits = await listCommits(deepKey, "main", {
-      path: "churn.txt", perPage: 1, page: PATH_HISTORY_SCAN_LIMIT + 1,
-    });
-    expect(commits).toEqual([]);
+  it("does the same for a directory — the code tab's actual call shape", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "src"]);
+    const [head] = await listCommits(key, "main", { path: "src", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("REAL main edit");
   });
 
-  it("still serves paths that live inside the scan window", async () => {
-    const commits = await listCommits(deepKey, "main", { path: "churn.txt", perPage: 1 });
-    expect(commits).toHaveLength(1);
-  });
-
-  it("leaves unfiltered reads reaching past the scan limit", async () => {
-    // No pathspec, so git already stops after skip+perPage commits — the bound
-    // is for path reads only and must not truncate ordinary pagination.
-    const commits = await listCommits(deepKey, "main", { perPage: 1, page: DEPTH });
-    expect(commits).toHaveLength(1);
-    expect(commits[0]!.subject).toBe("c0");
+  it("keeps the merged-away commit out of the whole page, not just the head", async () => {
+    const expected = (await gitSays(bare, ["log", "main", "--format=%s", "--", "src/app.ts"])).split("\n");
+    const subjects = (await listCommits(key, "main", { path: "src/app.ts", perPage: 20 })).map((c) => c.subject);
+    expect(subjects).toEqual(expected);
+    expect(subjects).not.toContain("DISCARDED side edit");
   });
 });
 
-// ─── git-utils: the scan bound is a POSITION cap, not an ancestry exclusion ────
+// ─── git-utils: history simplification reaches through a merge's 2nd parent ───
 //
-// The cases above run on a strictly linear chain — the one topology where
-// `<ref> ^<boundary>` (prune the boundary and its ancestors) happens to equal
-// "the newest N commits", so they cannot tell a position cap from an ancestry
-// exclusion. Anyone who can push a public repo can create a second lineage, and
-// on this unauthenticated route that is all it takes to walk past an ancestry
-// exclusion: `^X` prunes one lineage, and everything past the cap that is not an
-// ancestor of X stays walkable. These cases run the same bound against a real
-// merge DAG.
+// The other half of following TREESAME parents: when the path's content came in
+// from the *second* parent, git crosses into that lineage rather than staying on
+// the mainline. Any scheme that only considers a window of the newest commits,
+// or only the first-parent line, reports nothing here.
 
-describe("listCommits() per-path scan bound on a merge DAG", () => {
-  // Two lineages of this depth plus one merge. Each lineage alone is longer than
-  // the limit, so the boundary a walk-position probe would pick always lands
-  // inside the newer lineage and can never be an ancestor of the older one.
-  const PER_LINEAGE = PATH_HISTORY_SCAN_LIMIT + 250;
+describe("listCommits() per-path history crosses a merge's second parent", () => {
+  const PER_LINEAGE = 150;
   let mergeKey: string;
+  let bare: string;
 
   beforeAll(async () => {
     mergeKey = await createMergeHistoryRepo(
       "test/merge-history.git", "main", PER_LINEAGE, "rare.txt", "churn.txt",
     );
+    bare = bareRepoPathFromKey(mergeKey);
   }, 60_000);
 
-  it("does not reach a path only the second lineage touches", async () => {
-    // rare.txt is touched solely by the root of the older lineage, far past the
-    // scan limit by walk position but outside the ancestry of any commit in the
-    // newer lineage. An ancestry exclusion leaves it fully reachable; a position
-    // cap does not.
-    const commits = await listCommits(mergeKey, "main", { path: "rare.txt" });
-    expect(commits).toEqual([]);
+  it("finds a path only the older lineage touches", async () => {
+    // rare.txt is written solely by the root of the second lineage — the oldest
+    // commit in the repo, reachable only across the merge.
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "rare.txt"]);
+    const [head] = await listCommits(mergeKey, "main", { path: "rare.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("b0");
   });
 
-  it("does not reach a path the whole second lineage churns", async () => {
-    // b-churn.txt is rewritten by every non-root commit of the older lineage —
-    // thousands of matches, none of them inside the newest-N window. Neither the
-    // first page nor a deeper one may reach them.
-    expect(await listCommits(mergeKey, "main", { path: "b-churn.txt", perPage: 1 })).toEqual([]);
-    expect(await listCommits(mergeKey, "main", { path: "b-churn.txt", perPage: 1, page: 2 })).toEqual([]);
-  });
-
-  it("still serves a path that lives inside the scan window", async () => {
-    const commits = await listCommits(mergeKey, "main", { path: "churn.txt", perPage: 1 });
-    expect(commits).toHaveLength(1);
-    expect(commits[0]!.subject).toBe(`a${PER_LINEAGE - 1}`);
-  });
-
-  it("leaves unfiltered reads reaching past the scan limit on a merge DAG", async () => {
-    const total = PER_LINEAGE * 2 + 1;
-    const commits = await listCommits(mergeKey, "main", { perPage: 1, page: total });
-    expect(commits).toHaveLength(1);
-    expect(commits[0]!.subject).toBe("b0");
+  it("names the newest commit for a path the mainline churns", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "churn.txt"]);
+    const [head] = await listCommits(mergeKey, "main", { path: "churn.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe(`a${PER_LINEAGE - 1}`);
   });
 });
 
-// ─── git-utils: the cheap first window still widens to the full limit ─────────
+// ─── git-utils: the per-path bound is wall-clock, not commit count ────────────
 //
-// Enumerating the newest N commits costs an N-commit walk, so the common read
-// (the newest commit touching the directory on screen) starts on a small window
-// rather than paying for the whole limit on every navigation. Correctness must
-// not depend on the answer being in that window: anything inside the full scan
-// limit still has to be found.
+// `/repos/:h/:r/commits` is unauthenticated for public repos, so one request
+// must not be able to walk a whole DAG unattended. The bound is a timeout on the
+// git process: it can cut a read short, but it can never make a read name a
+// different commit than git does. A commit-count cap can, which is why there
+// isn't one — a long-dormant path is still answered correctly, however deep.
 
-describe("listCommits() per-path scan window widening", () => {
-  // Comfortably past the fast first window, comfortably inside the scan limit.
-  const DEPTH = 900;
-  let midKey: string;
+describe("listCommits() per-path bound", () => {
+  const DEPTH = 2050;
+  let deepKey: string;
+  let bare: string;
 
   beforeAll(async () => {
-    midKey = await createDeepHistoryRepo("test/mid-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+    deepKey = await createDeepHistoryRepo("test/deep-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+    bare = bareRepoPathFromKey(deepKey);
   }, 30_000);
 
-  it("finds a path older than the first window but inside the scan limit", async () => {
-    const commits = await listCommits(midKey, "main", { path: "ancient.txt" });
-    expect(commits.map((c) => c.subject)).toEqual(["c0"]);
+  afterEach(() => {
+    delete process.env["PATH_HISTORY_TIMEOUT_MS"];
   });
 
-  it("fills a full page from beyond the first window", async () => {
-    // churn.txt matches every commit but the oldest; a page starting past the
-    // first window can only be served from the widened one.
-    const commits = await listCommits(midKey, "main", { path: "churn.txt", perPage: 5, page: 100 });
-    expect(commits.map((c) => c.subject)).toEqual(["c404", "c403", "c402", "c401", "c400"]);
+  it("finds a path touched only by the oldest of thousands of commits", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "ancient.txt"]);
+    const [head] = await listCommits(deepKey, "main", { path: "ancient.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("c0");
+  });
+
+  it("serves a deep page of a path with thousands of matches", async () => {
+    const expected = await gitSays(bare, ["log", "--skip=1999", "-n", "1", "main", "--format=%s", "--", "churn.txt"]);
+    const commits = await listCommits(deepKey, "main", { path: "churn.txt", perPage: 1, page: 2000 });
+    expect(commits.map((c) => c.subject)).toEqual([expected]);
+    expect(expected).toBe("c50");
+  });
+
+  it("returns an empty page when the walk exceeds the timeout", async () => {
+    process.env["PATH_HISTORY_TIMEOUT_MS"] = "1";
+    expect(await listCommits(deepKey, "main", { path: "ancient.txt", perPage: 1 })).toEqual([]);
+  });
+
+  it("leaves unfiltered pagination alone at the same timeout", async () => {
+    // The bound exists for path reads; an unfiltered page already costs only
+    // skip + perPage commits and must not be cut short.
+    process.env["PATH_HISTORY_TIMEOUT_MS"] = "1";
+    const commits = await listCommits(deepKey, "main", { perPage: 1, page: DEPTH });
+    expect(commits.map((c) => c.subject)).toEqual(["c0"]);
   });
 });
 

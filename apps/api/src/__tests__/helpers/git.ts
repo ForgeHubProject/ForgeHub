@@ -121,23 +121,60 @@ async function fastImport(bareRepoPath: string, stream: string): Promise<void> {
 }
 
 /**
- * Like {@link createDeepHistoryRepo} but with a **merge topology**, which is the
- * shape a linear chain cannot exercise: two independent lineages of
- * `perLineage` commits each, joined by one merge commit at the tip.
+ * A **merged-away** topology: `file` is edited on the mainline, edited again on
+ * a side branch, and the two are joined by a merge resolved in favour of the
+ * mainline — so the side edit is a real commit touching the path whose content
+ * never landed in the tree.
  *
- * This is the difference between a *position* cap and an *ancestry* exclusion.
- * `git log <ref> ^<boundary>` prunes the boundary and its ancestors — a single
- * lineage — so on a linear chain it happens to equal "the newest N commits",
- * and only on a merge DAG do the two come apart. The second lineage is dated
- * strictly older than the first, so `rev-list` orders the whole of lineage A
- * ahead of it and a boundary picked by walk position always lands inside A,
- * leaving every commit of B outside the ancestry of that boundary and therefore
- * still walkable.
+ * This is the shape that tells "the commit git names for this path" apart from
+ * "some commit that touched this path". git's history simplification follows a
+ * parent the merge is TREESAME to and prunes the rest, so `git log <ref> --
+ * <file>` names the mainline edit and never the side edit. The side edit is
+ * dated **newer** than the mainline edit on purpose: any rule that ranks
+ * candidates by date or by `rev-list` position instead of following TREESAME
+ * parents puts the discarded commit first, which is exactly where the code tab
+ * reads its header commit from.
+ *
+ * Subjects: `base`, `REAL main edit`, `DISCARDED side edit`, `merge keeping ours`.
+ * Returns the storage key.
+ */
+export async function createMergedAwayRepo(
+  key: string,
+  branch: string,
+  file: string,
+): Promise<string> {
+  const { createBareRepo } = await import("../../git-storage.js");
+  const bareRepoPath = await createBareRepo(key);
+
+  const who = "committer ForgeHub Test <test@forgehub.io>";
+  const inline = (body: string) => `M 100644 inline ${file}\ndata ${body.length}\n${body}\n`;
+  const commit = (ref: string, mark: number, when: number, message: string, rest: string) =>
+    `commit refs/heads/${ref}\nmark :${mark}\n${who} ${when} +0000\n` +
+    `data ${message.length}\n${message}\n${rest}\n`;
+
+  let stream = "";
+  stream += commit("_base", 1, 1700000000, "base", inline("base"));
+  stream += commit(branch, 2, 1700000100, "REAL main edit", `from :1\n` + inline("main"));
+  // Branched off `base`, and dated after the mainline edit.
+  stream += commit("_side", 3, 1700000200, "DISCARDED side edit", `from :1\n` + inline("side"));
+  // No file op: a fast-import merge starts from its first parent's tree, so the
+  // merge keeps the mainline content and discards the side edit.
+  stream += commit(branch, 4, 1700000300, "merge keeping ours", `from :2\nmerge :3\n`);
+
+  await fastImport(bareRepoPath, stream);
+  return key;
+}
+
+/**
+ * Like {@link createDeepHistoryRepo} but with a **merge topology**: two
+ * independent lineages of `perLineage` commits each, joined by one merge commit
+ * at the tip. The second lineage is dated strictly older than the first.
  *
  * `rareFile` is touched only by the **root of the second lineage** — the oldest
- * commit in the repo, and deliberately not an ancestor of the boundary.
- * `churnFile` is rewritten by every commit of the first lineage. The merge
- * carries both sides' content so ordinary path filtering can reach through it.
+ * commit in the repo, reachable from the tip only by following the merge's
+ * second parent. `churnFile` is rewritten by every commit of the first lineage.
+ * The merge carries both sides' content, so `git log <tip> -- <rareFile>` has to
+ * cross the merge into the older lineage to name a commit at all.
  *
  * Returns the storage key.
  */
