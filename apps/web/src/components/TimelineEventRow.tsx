@@ -73,9 +73,28 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
       return { icon: <OpenMark />, tone: "text-fh-success-fg", body: <>reopened this</> };
     case "merged": {
       const sha = short(d.sha);
+      const auto = d.auto === true;
       return {
         icon: <MergeMark />, tone: "text-fh-purple-fg",
-        body: <>merged this{sha && <> · <span className="font-mono text-fh-xs text-fh-fg-subtle">{sha}</span></>}</>,
+        body: <>{auto ? "auto-merged this" : "merged this"}{sha && <> · <span className="font-mono text-fh-xs text-fh-fg-subtle">{sha}</span></>}</>,
+      };
+    }
+    // PR power features (issue #119)
+    case "auto_merge_enabled": {
+      const method = str(d.method);
+      return {
+        icon: <MergeMark />, tone: "text-fh-fg-subtle",
+        body: <>enabled auto-merge{method && <> ({method})</>}</>,
+      };
+    }
+    case "auto_merge_disabled":
+      return { icon: <MergeMark />, tone: "text-fh-fg-subtle", body: <>disabled auto-merge</> };
+    case "suggestion_applied": {
+      const file = str(d.filePath);
+      const sha = short(d.sha);
+      return {
+        icon: <MergeMark />, tone: "text-fh-fg-subtle",
+        body: <>applied a suggestion{file && <> to <span className="font-mono text-fh-xs">{file}</span></>}{sha && <> · <span className="font-mono text-fh-xs text-fh-fg-subtle">{sha}</span></>}</>,
       };
     }
     case "referenced": {

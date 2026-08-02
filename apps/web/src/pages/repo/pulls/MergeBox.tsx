@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, closePull, mergePull, resolveMergePr, revertPull } from "../../../api";
+import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, mergePull, resolveMergePr, revertPull } from "../../../api";
 import type { PullRequest } from "../../../types";
 import { Button, ConfirmDialog, DropdownMenu, Icons, RelativeTime, cx } from "../../../ui";
 import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, PRStateIcon } from "./prShared";
 import {
-  MERGE_METHOD_OPTIONS,
+  allowedMergeOptions,
   mergeMethodOption,
-  readMergeMethod,
+  resolveInitialMethod,
   writeMergeMethod,
   isConflictError,
   type MergeMethod,
@@ -62,12 +62,19 @@ export function MergeBox({
   const [closing, setClosing] = useState(false);
   const [resolving, setResolving] = useState<null | "ours" | "theirs">(null);
   const [reverting, setReverting] = useState(false);
+  const [autoMergeBusy, setAutoMergeBusy] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
   const [confirmMergeMethod, setConfirmMergeMethod] = useState<MergeMethod | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [method, setMethod] = useState<MergeMethod>(() => readMergeMethod(handle, repoName, browserStorage()));
+  const [method, setMethod] = useState<MergeMethod>(() =>
+    resolveInitialMethod(handle, repoName, pr.mergePolicy, browserStorage()),
+  );
 
-  const busy = merging || closing || resolving !== null;
+  // Owner merge policy (issue #119): only the allowed methods appear.
+  const methodOptions = allowedMergeOptions(pr.mergePolicy);
+  const autoMerge = pr.autoMerge ?? null;
+
+  const busy = merging || closing || resolving !== null || autoMergeBusy;
   const hasConflict = pr.mergeable === false;
 
   const summary = pr.reviewSummary;
@@ -132,6 +139,38 @@ export function MergeBox({
       setError(err instanceof Error ? err.message : "Failed to close pull request");
     } finally {
       setClosing(false);
+    }
+  }
+
+  /** Arm auto-merge with the currently selected method (issue #119). */
+  async function doEnableAutoMerge() {
+    setAutoMergeBusy(true);
+    setError(null);
+    try {
+      const res = await enableAutoMerge(token, handle, repoName, pr.number, method);
+      if (res.merged) {
+        // Every gate was already green — the PR merged on the spot.
+        onUpdate({ ...pr, state: "merged", mergeMethod: method, mergedAt: new Date().toISOString(), autoMerge: null });
+      } else {
+        onUpdate({ ...pr, autoMerge: res.autoMerge });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to enable auto-merge");
+    } finally {
+      setAutoMergeBusy(false);
+    }
+  }
+
+  async function doCancelAutoMerge() {
+    setAutoMergeBusy(true);
+    setError(null);
+    try {
+      await cancelAutoMerge(token, handle, repoName, pr.number);
+      onUpdate({ ...pr, autoMerge: null });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel auto-merge");
+    } finally {
+      setAutoMergeBusy(false);
     }
   }
 
@@ -256,6 +295,30 @@ export function MergeBox({
       {/* Branch protection rules (issue #85) */}
       <ProtectionPanel protection={protection} />
 
+      {/* Armed auto-merge (issue #119) */}
+      {autoMerge && (
+        <div className="flex items-center gap-2 flex-wrap px-4 py-2 border-b border-fh-border bg-fh-accent-muted/30 text-fh-sm">
+          <GitMergeIcon size={14} className="shrink-0 text-fh-accent-fg" />
+          <span className="text-fh-fg">
+            <span className="font-semibold">Auto-merge enabled</span> by{" "}
+            <span className="font-semibold">{autoMerge.by}</span>{" "}
+            <span className="text-fh-fg-muted">
+              ({mergeMethodOption(autoMerge.method).menuLabel.toLowerCase()}) — merges when reviews and checks go green
+            </span>
+          </span>
+          <Button
+            variant="default"
+            size="sm"
+            className="ml-auto"
+            loading={autoMergeBusy}
+            disabled={busy && !autoMergeBusy}
+            onClick={doCancelAutoMerge}
+          >
+            Cancel auto-merge
+          </Button>
+        </div>
+      )}
+
       <div className="px-4 py-3">
         {error && (
           <p className="mb-3 text-fh-sm text-fh-danger-fg flex items-start gap-1.5">
@@ -307,7 +370,7 @@ export function MergeBox({
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {/* GitHub-style split button: primary action + method picker. */}
             <div className="inline-flex">
               <Button
@@ -315,48 +378,58 @@ export function MergeBox({
                 leadingIcon={<GitMergeIcon size={15} />}
                 loading={merging}
                 disabled={mergeBlocked}
-                className="rounded-r-none"
+                className={methodOptions.length > 1 ? "rounded-r-none" : undefined}
                 onClick={() => requestMerge(method)}
               >
                 {activeOption.buttonLabel}
               </Button>
-              <DropdownMenu
-                align="start"
-                width={340}
-                trigger={
-                  <Button
-                    variant={needsOverride ? "danger" : "primary"}
-                    disabled={mergeBlocked}
-                    aria-label="Choose a merge method"
-                    className="rounded-l-none border-l border-fh-on-emphasis/25 px-2"
-                  >
-                    <Icons.ChevronDownIcon size={14} />
-                  </Button>
-                }
-              >
-                {MERGE_METHOD_OPTIONS.map((o) => (
-                  <button
-                    key={o.method}
-                    type="button"
-                    role="menuitem"
-                    tabIndex={-1}
-                    onClick={() => selectMethod(o.method)}
-                    className={cx(
-                      "w-full flex items-start gap-2 px-3 py-2 text-left bg-transparent border-none cursor-pointer",
-                      "outline-none hover:bg-fh-accent-muted focus:bg-fh-accent-muted",
-                    )}
-                  >
-                    <span className="mt-0.5 w-3.5 shrink-0 text-fh-accent-fg">
-                      {o.method === method ? <Icons.CheckIcon size={14} /> : null}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-fh-sm font-semibold text-fh-fg">{o.menuLabel}</span>
-                      <span className="block text-fh-xs text-fh-fg-muted">{o.description}</span>
-                    </span>
-                  </button>
-                ))}
-              </DropdownMenu>
+              {/* Single allowed method ⇒ no picker to show (issue #119). */}
+              {methodOptions.length > 1 && (
+                <DropdownMenu
+                  align="start"
+                  width={340}
+                  trigger={
+                    <Button
+                      variant={needsOverride ? "danger" : "primary"}
+                      disabled={mergeBlocked}
+                      aria-label="Choose a merge method"
+                      className="rounded-l-none border-l border-fh-on-emphasis/25 px-2"
+                    >
+                      <Icons.ChevronDownIcon size={14} />
+                    </Button>
+                  }
+                >
+                  {methodOptions.map((o) => (
+                    <button
+                      key={o.method}
+                      type="button"
+                      role="menuitem"
+                      tabIndex={-1}
+                      onClick={() => selectMethod(o.method)}
+                      className={cx(
+                        "w-full flex items-start gap-2 px-3 py-2 text-left bg-transparent border-none cursor-pointer",
+                        "outline-none hover:bg-fh-accent-muted focus:bg-fh-accent-muted",
+                      )}
+                    >
+                      <span className="mt-0.5 w-3.5 shrink-0 text-fh-accent-fg">
+                        {o.method === method ? <Icons.CheckIcon size={14} /> : null}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-fh-sm font-semibold text-fh-fg">{o.menuLabel}</span>
+                        <span className="block text-fh-xs text-fh-fg-muted">{o.description}</span>
+                      </span>
+                    </button>
+                  ))}
+                </DropdownMenu>
+              )}
             </div>
+            {/* Arm auto-merge (issue #119) — most useful exactly while a gate
+                (protection / checks) still blocks the direct merge button. */}
+            {!autoMerge && (
+              <Button variant="default" loading={autoMergeBusy} disabled={busy && !autoMergeBusy} onClick={doEnableAutoMerge}>
+                Enable auto-merge
+              </Button>
+            )}
             <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy} onClick={doClose}>
               Close pull request
             </Button>
