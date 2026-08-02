@@ -433,7 +433,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
         setReadme(treeData.readme);
         const head = commitData.commits[0] ?? null;
         setLatestCommit(head);
-        // CI status for the branch-HEAD commit (best-effort; 404 → no checks).
+        // CI status for that commit (best-effort; 404 → no checks).
         setHeadStatus(null);
         if (head) {
           getCheckSummary(token, handle, repoName, head.sha)

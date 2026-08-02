@@ -20,9 +20,9 @@ import type { User } from "./types";
 /**
  * `/:handle` is shared by users and orgs (issue #114): the handle space is
  * unified. Probe the user endpoint first — a 404 means the handle belongs to an
- * org, so render the org profile instead. Each concrete page fetches its own data
- * (and renders the shared `NotFoundPage` when the entity is missing, issue #109),
- * so this only needs to pick which to mount.
+ * org, so render the org profile instead — which is also where a handle belonging
+ * to nobody lands, and where the shared `NotFoundPage` is rendered (issue #109).
+ * Each concrete page fetches its own data, so this only needs to pick which to mount.
  */
 function ProfileRoute({ token, user, onLogout, onUserChange }: { token: string; user: User; onLogout: () => void; onUserChange: (u: User) => void }) {
   const { handle } = useParams<{ handle: string }>();

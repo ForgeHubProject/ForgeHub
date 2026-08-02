@@ -36,8 +36,8 @@ vi.mock("../prisma.js", () => ({
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { listCommits, getCommit, listTree, defaultBranch } from "../git-utils.js";
-import { createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
+import { listCommits, getCommit, listTree, defaultBranch, PATH_HISTORY_SCAN_LIMIT } from "../git-utils.js";
+import { createDeepHistoryRepo, createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 
 // ─── Repo + server setup ──────────────────────────────────────────────────────
@@ -160,6 +160,50 @@ describe("listCommits()", () => {
   it("returns empty array for a path no commit touches", async () => {
     const commits = await listCommits(repo.storageKey, defBranch, { path: "no/such/file.txt" });
     expect(commits).toEqual([]);
+  });
+});
+
+// ─── git-utils: per-path history is walk-bounded ──────────────────────────────
+//
+// `/repos/:h/:r/commits` is unauthenticated for public repos, so a path filter
+// must not let one request walk the whole DAG. A linear history a little deeper
+// than the scan limit makes the boundary observable.
+
+describe("listCommits() per-path scan bound", () => {
+  const DEPTH = PATH_HISTORY_SCAN_LIMIT + 50;
+  let deepKey: string;
+
+  beforeAll(async () => {
+    deepKey = await createDeepHistoryRepo("test/deep-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+  }, 30_000);
+
+  it("stops a path-filtered walk at the scan limit", async () => {
+    // Only the oldest commit touches ancient.txt, PATH_HISTORY_SCAN_LIMIT+49
+    // commits back — reaching it means having scanned the entire history.
+    const commits = await listCommits(deepKey, "main", { path: "ancient.txt" });
+    expect(commits).toEqual([]);
+  });
+
+  it("stops a deep-skip path-filtered walk at the scan limit", async () => {
+    // churn.txt matches every commit but the oldest, so skipping past the whole
+    // window is what forces the walk beyond it.
+    const commits = await listCommits(deepKey, "main", {
+      path: "churn.txt", perPage: 1, page: PATH_HISTORY_SCAN_LIMIT + 1,
+    });
+    expect(commits).toEqual([]);
+  });
+
+  it("still serves paths that live inside the scan window", async () => {
+    const commits = await listCommits(deepKey, "main", { path: "churn.txt", perPage: 1 });
+    expect(commits).toHaveLength(1);
+  });
+
+  it("leaves unfiltered reads reaching past the scan limit", async () => {
+    // No pathspec, so git already stops after skip+perPage commits — the bound
+    // is for path reads only and must not truncate ordinary pagination.
+    const commits = await listCommits(deepKey, "main", { perPage: 1, page: DEPTH });
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.subject).toBe("c0");
   });
 });
 

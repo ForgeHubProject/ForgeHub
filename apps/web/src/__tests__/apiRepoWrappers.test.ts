@@ -55,12 +55,21 @@ describe("updateRepo", () => {
 });
 
 describe("deleteRepo", () => {
-  it("DELETEs the owner-scoped repo route", async () => {
+  it("DELETEs the repo addressed by owning handle and name", async () => {
+    // The owner must be part of the address: a bare name resolves against the
+    // CALLER's namespace server-side, so deleting while viewing someone else's
+    // repo would hit the caller's same-named repo instead.
     const mock = stubFetch(204);
-    await deleteRepo("tok", "demo");
+    await deleteRepo("tok", "bob", "demo");
     const [url, init] = mock.mock.calls[0]!;
-    expect(String(url)).toMatch(/\/repos\/demo$/);
+    expect(String(url)).toMatch(/\/repos\/bob\/demo$/);
     expect(init.method).toBe("DELETE");
     expect(init.headers.Authorization).toBe("Bearer tok");
+  });
+
+  it("rejects rather than resolving when the server refuses", async () => {
+    // The success toast is gated on this promise, so a refusal must not resolve.
+    stubFetch(404, { error: "Repository not found" });
+    await expect(deleteRepo("tok", "bob", "demo")).rejects.toThrow("Repository not found");
   });
 });

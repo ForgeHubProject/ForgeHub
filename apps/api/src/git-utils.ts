@@ -695,6 +695,29 @@ async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promis
   }));
 }
 
+/**
+ * How far back a per-path history read may walk. Without a pathspec `git log`
+ * stops after `skip + perPage` commits, so a page costs what it returns. With
+ * one it keeps walking until it has found that many *matching* commits, so a
+ * rare or unknown path would scan the whole DAG — on a route that is
+ * unauthenticated for public repos. Bounding the revision range keeps a
+ * path-filtered page as cheap as an unfiltered one at the same depth.
+ */
+export const PATH_HISTORY_SCAN_LIMIT = 2000;
+
+/**
+ * The `^<sha>` exclusion that caps a path-filtered walk at
+ * {@link PATH_HISTORY_SCAN_LIMIT} commits, or `[]` when history is shorter.
+ * `rev-list --skip=N --max-count=1` carries no pathspec, so git stops as soon
+ * as it has walked N+1 commits.
+ */
+async function pathHistoryBound(storageKey: string, ref: string): Promise<string[]> {
+  const boundary = await git(storageKey, [
+    "rev-list", `--skip=${PATH_HISTORY_SCAN_LIMIT}`, "--max-count=1", ref,
+  ]);
+  return boundary ? [`^${boundary}`] : [];
+}
+
 export async function listCommits(
   storageKey: string,
   ref: string,
@@ -704,9 +727,10 @@ export async function listCommits(
   const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
   const skip = (page - 1) * perPage;
   try {
+    const bound = options.path ? await pathHistoryBound(storageKey, ref) : [];
     // \x1f (unit separator) won't appear in git metadata fields
     const out = await git(storageKey, [
-      "log", ref,
+      "log", ref, ...bound,
       `--skip=${skip}`, `-n`, String(perPage),
       `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
       // Per-path history: only commits touching this file or directory. The

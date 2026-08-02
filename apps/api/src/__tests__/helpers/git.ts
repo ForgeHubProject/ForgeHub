@@ -1,7 +1,7 @@
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "../../git-storage.js";
 
@@ -74,6 +74,46 @@ export async function makeCommit(
   await execFile("git", ["-C", workDir, "push", "origin", "HEAD"]);
   const { stdout } = await execFile("git", ["-C", workDir, "rev-parse", "HEAD"]);
   return stdout.trim();
+}
+
+/**
+ * Create an extra bare repo under the current storage root and stream a linear
+ * history of `count` commits into it with `git fast-import` — one process for
+ * the whole chain, so a multi-thousand-commit history costs a fraction of a
+ * second instead of one `git commit` per revision. The oldest commit is the
+ * only one touching `oldestFile`; every newer one rewrites `churnFile`.
+ * Returns the storage key.
+ */
+export async function createDeepHistoryRepo(
+  key: string,
+  branch: string,
+  count: number,
+  oldestFile: string,
+  churnFile: string,
+): Promise<string> {
+  const { createBareRepo } = await import("../../git-storage.js");
+  const bareRepoPath = await createBareRepo(key);
+
+  let stream = "";
+  for (let i = 0; i < count; i++) {
+    const message = `c${i}`;
+    const body = String(i);
+    stream += `commit refs/heads/${branch}\nmark :${i + 1}\n`;
+    stream += `committer ForgeHub Test <test@forgehub.io> ${1700000000 + i} +0000\n`;
+    stream += `data ${message.length}\n${message}\n`;
+    if (i > 0) stream += `from :${i}\n`;
+    stream += `M 100644 inline ${i === 0 ? oldestFile : churnFile}\ndata ${body.length}\n${body}\n\n`;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", ["fast-import", "--quiet"], { cwd: bareRepoPath });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`git fast-import exited ${code}`))));
+    child.stdin.on("error", reject);
+    child.stdin.end(stream);
+  });
+
+  return key;
 }
 
 /** Push current branch to origin without additional commits. */
