@@ -11,6 +11,8 @@ vi.mock("../prisma.js", () => ({
     notification: { findUnique: vi.fn(), upsert: vi.fn().mockResolvedValue(undefined) },
     user: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue(undefined) },
     repo: { findUnique: vi.fn() },
+    // No watch row ⇒ notifyUser's IGNORE-mute check (issue #88) passes through.
+    watch: { findUnique: vi.fn().mockResolvedValue(null) },
     issue: { findUnique: vi.fn() },
     pullRequest: { findUnique: vi.fn() },
     release: { findUnique: vi.fn() },

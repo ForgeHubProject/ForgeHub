@@ -19,6 +19,8 @@ vi.mock("../prisma.js", () => ({
     protectedBranch: { findFirst: vi.fn().mockResolvedValue(null) },
     notification: { upsert: vi.fn(), findUnique: vi.fn() },
     crossReference: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
+    // No watch row ⇒ notifyUser's IGNORE-mute check (issue #88) passes through.
+    watch: { findUnique: vi.fn().mockResolvedValue(null) },
     timelineEvent: { create: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn(),
   },

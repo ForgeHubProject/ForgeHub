@@ -34,7 +34,13 @@ async function notify(userId: string, p: EventParams): Promise<void> {
   }
 }
 
-// Fan out to repo owner + all collaborators, excluding the actor.
+// Fan out to the repo's watchers (issue #88), excluding the actor. The set is
+// data-driven: every explicit Watch row at level ALL subscribes its user, and an
+// owner/collaborator WITHOUT a row is treated as an implicit ALL watcher — the
+// rows are materialized on repo create / collaborator add (plus a startup
+// backfill), but a missed write must never silently unsubscribe them. A row at
+// PARTICIPATING or IGNORE keeps its user out of this fan-out; PARTICIPATING
+// users still receive the direct reasons via notifyUser below.
 export async function notifySubscribers(p: EventParams): Promise<void> {
   const repo = await prisma.repo.findUnique({
     where: { id: p.repoId },
@@ -42,16 +48,33 @@ export async function notifySubscribers(p: EventParams): Promise<void> {
   });
   if (!repo) return;
 
-  const subscribers = [repo.ownerId, ...repo.collaborators.map((c) => c.userId)];
-  await Promise.all(
-    subscribers
-      .filter((uid) => uid !== p.actorId)
-      .map((uid) => notify(uid, p)),
-  );
+  const watches = await prisma.watch.findMany({
+    where: { repoId: p.repoId },
+    select: { userId: true, level: true },
+  });
+  const levelByUser = new Map(watches.map((w) => [w.userId, w.level]));
+
+  const subscribers = new Set<string>();
+  for (const w of watches) {
+    if (w.level === "ALL") subscribers.add(w.userId);
+  }
+  for (const uid of [repo.ownerId, ...repo.collaborators.map((c) => c.userId)]) {
+    if (!levelByUser.has(uid)) subscribers.add(uid);
+  }
+  subscribers.delete(p.actorId);
+
+  await Promise.all([...subscribers].map((uid) => notify(uid, p)));
 }
 
-// Notify a single specific user, skipping self-notification.
+// Notify a single specific user (mentioned / assigned / review-requested /
+// thread-comment), skipping self-notification. An IGNORE watch actually mutes:
+// it suppresses even these direct reasons (issue #88).
 export async function notifyUser(userId: string, p: EventParams): Promise<void> {
   if (userId === p.actorId) return;
+  const watch = await prisma.watch.findUnique({
+    where: { userId_repoId: { userId, repoId: p.repoId } },
+    select: { level: true },
+  });
+  if (watch?.level === "IGNORE") return;
   await notify(userId, p);
 }
