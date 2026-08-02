@@ -204,8 +204,19 @@ export async function socialRoutes(app: FastifyInstance) {
    * true, so the access intersection cannot subtract anyone and there is nothing
    * to materialize: an aggregate counts the explicit ALL rows and a second read
    * bounded by the (small) owner+collaborator set finds which members still need
-   * their implicit ALL added. Only a PRIVATE repo has to look at rows, and there
-   * the subscriber set is bounded by the grantee set anyway.
+   * their implicit ALL added.
+   *
+   * A PRIVATE repo does read rows, and its row set is bounded by NOTHING on its
+   * own: a Watch row is a subscription, never a grant, so rows survive every
+   * access path with no cleanup hook — an org membership change, a team-grant
+   * removal, or a visibility flip (`PATCH /repos/:name` writes `visibility` and
+   * prunes no rows, so a public repo's entire subscriber set stays behind when
+   * it goes private). The bound is imposed here instead: the read is restricted
+   * to the GRANTEE set — owner + collaborators + org OWNERs + members of teams
+   * granted this repo, all already loaded by `repoAccessInclude` — because on a
+   * private repo `canRead` is true for exactly those users, and the intersection
+   * below discards every other row anyway. Same reasoning as the PUBLIC branch,
+   * and it changes no result.
    */
   async function watcherCount(repo: RepoAccessInput & { id: string }): Promise<number> {
     const memberIds = [...new Set([repo.ownerId, ...repo.collaborators.map((c) => c.userId)])];
@@ -213,12 +224,10 @@ export async function socialRoutes(app: FastifyInstance) {
     if (repo.visibility === "PUBLIC") {
       const [explicitAll, memberRows] = await Promise.all([
         prisma.watch.count({ where: { repoId: repo.id, level: "ALL" } }),
-        memberIds.length > 0
-          ? prisma.watch.findMany({
-              where: { repoId: repo.id, userId: { in: memberIds } },
-              select: { userId: true },
-            })
-          : Promise.resolve([] as Array<{ userId: string }>),
+        prisma.watch.findMany({
+          where: { repoId: repo.id, userId: { in: memberIds } },
+          select: { userId: true },
+        }),
       ]);
       const hasRow = new Set(memberRows.map((r) => r.userId));
       // Disjoint by construction: a member with a row is never implicit, and an
@@ -226,8 +235,16 @@ export async function socialRoutes(app: FastifyInstance) {
       return explicitAll + memberIds.filter((uid) => !hasRow.has(uid)).length;
     }
 
+    // Every user `canRead` admits on a PRIVATE repo, and no other.
+    const granteeIds = [
+      ...new Set([
+        ...memberIds,
+        ...(repo.org?.memberships ?? []).filter((m) => m.role === "OWNER").map((m) => m.userId),
+        ...(repo.teamAccess ?? []).flatMap((a) => a.team.memberships.map((m) => m.userId)),
+      ]),
+    ];
     const watches = await prisma.watch.findMany({
-      where: { repoId: repo.id },
+      where: { repoId: repo.id, userId: { in: granteeIds } },
       select: { userId: true, level: true },
     });
     const levelByUser = new Map(watches.map((w) => [w.userId, w.level]));
