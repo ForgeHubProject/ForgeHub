@@ -2,6 +2,7 @@ import { prisma } from "./prisma.js";
 import { parseReferences } from "./references.js";
 import { recordEvent, type ConversationSubjectType } from "./timeline-service.js";
 import { notifyUser } from "./notifications-service.js";
+import { type RepoAccessInput } from "./repo-access.js";
 
 export type CrossRefSourceType =
   | "ISSUE"
@@ -10,12 +11,13 @@ export type CrossRefSourceType =
   | "PR_COMMENT"
   | "PR_REVIEW_COMMENT";
 
-type RepoForRefs = {
-  id: string;
-  visibility: "PUBLIC" | "PRIVATE";
-  ownerId: string;
-  collaborators: Array<{ userId: string }>;
-};
+/**
+ * The caller's repo, carrying the access-relevant relations (`repoAccessInclude`)
+ * so the mention loop can hand it straight to `notifyUser` rather than making it
+ * re-load the same row — including every org membership and team member set —
+ * once per @handle.
+ */
+type RepoForRefs = RepoAccessInput & { id: string };
 
 function canUserRead(repo: RepoForRefs, userId: string): boolean {
   if (repo.visibility === "PUBLIC") return true;
@@ -148,14 +150,20 @@ export async function syncBodyReferences(p: SyncParams): Promise<void> {
     const user = await prisma.user.findUnique({ where: { handle }, select: { id: true } });
     if (!user || user.id === p.actorId) continue;
     if (!canUserRead(p.repo, user.id)) continue;
-    await notifyUser(user.id, {
-      actorId: p.actorId,
-      repoId: p.repo.id,
-      subjectType: p.container.subjectType,
-      subjectId: p.container.id,
-      subjectTitle: p.container.title,
-      reason: "MENTIONED",
-    });
+    // The repo we already hold is the access row `notifyUser` would otherwise
+    // load for itself, once per mention.
+    await notifyUser(
+      user.id,
+      {
+        actorId: p.actorId,
+        repoId: p.repo.id,
+        subjectType: p.container.subjectType,
+        subjectId: p.container.id,
+        subjectTitle: p.container.title,
+        reason: "MENTIONED",
+      },
+      p.repo,
+    );
   }
 }
 

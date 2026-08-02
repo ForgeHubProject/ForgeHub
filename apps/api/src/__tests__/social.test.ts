@@ -273,15 +273,40 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
     vi.mocked(prisma.repo.findFirst).mockResolvedValue({
       ...PUBLIC_REPO, collaborators: [{ userId: "collab-1" }, { userId: "collab-2" }],
     } as never);
-    vi.mocked(prisma.watch.count).mockResolvedValue(4 as never);
-    // collab-1 has a row (any level) — only collab-2 and the owner are implicit.
-    vi.mocked(prisma.watch.findMany).mockResolvedValue([{ userId: "collab-1" }] as never);
+    // collab-1 has a row (PARTICIPATING) — only collab-2 and the owner are implicit.
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([
+      { userId: "collab-1", level: "PARTICIPATING" },
+      { userId: "w-1", level: "ALL" },
+      { userId: "w-2", level: "ALL" },
+      { userId: "w-3", level: "ALL" },
+      { userId: "w-4", level: "ALL" },
+    ] as never);
 
     const res = await app.inject({
       method: "GET", url: "/repos/alice/pub/social",
       headers: { authorization: ownerToken },
     });
     expect(res.json().watcherCount).toBe(6);
+  });
+
+  // Regression (adversarial review): the count was taken over raw Watch rows
+  // without the read-access filter its own doc comment promised, so a stale ALL
+  // row on a PRIVATE repo inflated a number that claims to mirror the fan-out.
+  it("GET /social does not count a watcher who cannot read a PRIVATE repo", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({
+      ...PRIVATE_REPO, ownerId: "owner-1", collaborators: [{ userId: "collab-1" }],
+    } as never);
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([
+      { userId: "collab-1", level: "ALL" },
+      { userId: "ex-collab", level: "ALL" }, // access revoked, row outlived it
+    ] as never);
+
+    const res = await app.inject({
+      method: "GET", url: "/repos/bob/priv/social",
+      headers: { authorization: ownerToken },
+    });
+    // owner-1 + collab-1 — ex-collab is subscribed but unreachable.
+    expect(res.json().watcherCount).toBe(2);
   });
 });
 
@@ -614,12 +639,17 @@ describe("GET /feed", () => {
     expect(page2.json().hasMore).toBe(false);
     expect(page2.json().nextCursor).toBeNull();
 
-    // Every source query is bounded by the cursor, not re-read from the top.
+    // Every source query is bounded by the cursor, not re-read from the top —
+    // and STRICTLY after it, so none of the window is spent re-fetching the
+    // cursor row (the id branch covers the cursor's own same-timestamp group).
     const secondIssueQuery = vi.mocked(prisma.issue.findMany).mock.calls[1]![0] as {
-      where: { createdAt?: { lte: Date } }; take: number;
+      where: { OR?: Array<Record<string, unknown>> }; take: number;
     };
     expect(secondIssueQuery.take).toBe(3);
-    expect(secondIssueQuery.where.createdAt?.lte).toEqual(new Date("2026-01-15T09:00:00.000Z"));
+    expect(secondIssueQuery.where.OR).toEqual([
+      { createdAt: { lt: new Date("2026-01-15T09:00:00.000Z") } },
+      { createdAt: new Date("2026-01-15T09:00:00.000Z"), id: { gt: "i1" } },
+    ]);
   });
 
   // Regression (adversarial review): offset pagination over a live stream let
@@ -659,6 +689,95 @@ describe("GET /feed", () => {
     });
     // Offset pagination would have re-served issue-b here.
     expect(page2.json().items.map((i: { id: string }) => i.id)).toEqual(["issue-c"]);
+  });
+
+  // A flat mock always hands back every row, so it can never expose a per-source
+  // window that is one row too small. This stand-in honours the cursor `where`
+  // and `take` the way the real query does, over both the `lt`/`OR` tuple form
+  // and the plain `lte` form.
+  type IssueRow = { id: string; repoId: string; number: number; title: string; createdAt: Date; author: { handle: string } };
+  type Bound = { lt?: Date; lte?: Date };
+  type Clause = { createdAt?: Date | Bound; id?: { gt?: string } };
+
+  function honourCursor(rows: IssueRow[]) {
+    const matches = (c: Clause, r: IssueRow): boolean => {
+      const at = c.createdAt;
+      if (at instanceof Date) {
+        if (r.createdAt.getTime() !== at.getTime()) return false;
+      } else if (at) {
+        if (at.lt && r.createdAt.getTime() >= at.lt.getTime()) return false;
+        if (at.lte && r.createdAt.getTime() > at.lte.getTime()) return false;
+      }
+      if (c.id?.gt !== undefined && !(r.id > c.id.gt)) return false;
+      return true;
+    };
+    return (args: { where: Clause & { OR?: Clause[] }; take: number }) => {
+      const clauses = args.where.OR ?? [args.where];
+      const hits = rows
+        .filter((r) => clauses.some((c) => matches(c, r)))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return Promise.resolve(hits.slice(0, args.take));
+    };
+  }
+
+  /** Drain the feed page by page, returning every item id in delivery order. */
+  async function walkFeed(perPage: number): Promise<string[]> {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let guard = 0; guard < 50; guard++) {
+      const url = cursor
+        ? `/feed?per_page=${perPage}&cursor=${encodeURIComponent(cursor)}`
+        : `/feed?per_page=${perPage}`;
+      const res = await app.inject({ method: "GET", url, headers: { authorization: strangerToken } });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { items: Array<{ id: string }>; nextCursor: string | null };
+      seen.push(...body.items.map((i) => i.id));
+      cursor = body.nextCursor;
+      if (!cursor) return seen;
+    }
+    throw new Error("feed never terminated");
+  }
+
+  // Regression (adversarial review): the cursor filtered with `lte` while every
+  // source was capped at `perPage + 1`, so the source that produced the cursor
+  // re-fetched the cursor row itself and could only ever contribute `perPage`
+  // FRESH rows. `hasMore` then evaluated `perPage > perPage` — false — on every
+  // deep page, load-more vanished, and the tail of the feed became permanently
+  // unreachable. Only a walk to exhaustion catches it; pages 1 and 2 look fine.
+  it("walks a multi-page feed to exhaustion, serving every entry exactly once", async () => {
+    const rows: IssueRow[] = Array.from({ length: 10 }, (_, n) => ({
+      id: `i${n}`, repoId: "repo-pub", number: n + 1, title: `Issue ${n + 1}`,
+      createdAt: new Date(Date.UTC(2026, 0, 15, 10, n)),
+      author: { handle: "alice" },
+    }));
+    vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.release.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.issue.findMany).mockImplementation(honourCursor(rows) as never);
+
+    // Newest first, every row exactly once — nothing repeated, nothing stranded.
+    expect(await walkFeed(3)).toEqual([...rows].reverse().map((r) => `issue-${r.id}`));
+  });
+
+  // Same walk with the whole source sharing one timestamp: the page boundary
+  // lands mid-tie, so the id half of the (createdAt, id) comparison is what has
+  // to carry pagination forward.
+  it("walks a feed whose entries all share one timestamp", async () => {
+    const rows: IssueRow[] = Array.from({ length: 7 }, (_, n) => ({
+      id: `i${n}`, repoId: "repo-pub", number: n + 1, title: `Issue ${n + 1}`,
+      createdAt: NOW, author: { handle: "alice" },
+    }));
+    vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.release.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.issue.findMany).mockImplementation(honourCursor(rows) as never);
+
+    // Ties break on id ASC, so the delivery order is i0…i6.
+    expect(await walkFeed(2)).toEqual(rows.map((r) => `issue-${r.id}`));
   });
 
   it("ignores a malformed cursor instead of erroring", async () => {

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, repoAccessInclude, resolveRepo } from "../repo-access.js";
+import { canRead, repoAccessInclude, resolveRepo, type RepoAccessInput } from "../repo-access.js";
 import { fromDbWatchLevel, toDbWatchLevel, type ApiWatchLevel } from "../watch-service.js";
 import { setWatchBodySchema } from "../validation.js";
 import { repoResponse } from "./repos.js";
@@ -54,6 +54,39 @@ function parseFeedCursor(raw: string | undefined): FeedCursor | null {
 
 function encodeFeedCursor(item: FeedItem): string {
   return `${item.createdAt}|${item.id}`;
+}
+
+/**
+ * Binary id ordering — deliberately not `localeCompare`, because the same
+ * comparison is handed to the database as an `id: { gt: … }` bound and SQLite
+ * compares TEXT bit by bit. The merge sort and the cursor `where` must agree
+ * exactly or a page boundary drops (or repeats) an entry.
+ */
+function compareId(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The per-source `where` fragment for "strictly after the cursor" in the merge
+ * order (createdAt DESC, item id ASC). Strictness is what makes the bounded
+ * per-source window safe: a `lte` filter re-fetches the cursor row itself, so
+ * the source that produced the cursor spends one of its `perPage + 1` slots on
+ * a row that is then discarded and can never report that more remains.
+ *
+ * `prefix` is the source's item-id prefix, so the id tiebreak is evaluated in
+ * the SAME namespace the merge sort uses. When the cursor came from this source
+ * the tiebreak reduces to a plain id comparison; when it came from another
+ * source the prefixes differ before the ids do, so the prefixes alone decide
+ * the whole same-timestamp group.
+ */
+function feedCursorWhere(cursor: FeedCursor | null, prefix: string) {
+  if (!cursor) return {};
+  const before = { createdAt: { lt: cursor.at } };
+  const tag = `${prefix}-`;
+  if (cursor.id.startsWith(tag)) {
+    return { OR: [before, { createdAt: cursor.at, id: { gt: cursor.id.slice(tag.length) } }] };
+  }
+  return compareId(tag, cursor.id) > 0 ? { OR: [before, { createdAt: cursor.at }] } : before;
 }
 
 /** One wire-format feed entry; `type` discriminates the per-source fields. */
@@ -158,18 +191,28 @@ export async function socialRoutes(app: FastifyInstance) {
 
   /**
    * How many users the repo-wide fan-out actually reaches — the same set
-   * `notifySubscribers` computes: every explicit ALL row, plus every
-   * owner/collaborator whose implicit ALL was never materialized. Two bounded
-   * queries, no denormalized counter (matching `starCount`).
+   * `notifySubscribers` computes, derived the same way: every explicit ALL row,
+   * plus every owner/collaborator whose implicit ALL was never materialized,
+   * then intersected with LIVE read access. That last step is not optional: a
+   * Watch row is a subscription, never a grant, so a stale ALL row on a private
+   * repo would otherwise inflate the count with someone the fan-out will never
+   * reach. One query, no denormalized counter (matching `starCount`).
    */
-  async function watcherCount(repo: { id: string; ownerId: string; collaborators: Array<{ userId: string }> }): Promise<number> {
-    const memberIds = [...new Set([repo.ownerId, ...repo.collaborators.map((c) => c.userId)])];
-    const [explicitAll, memberRows] = await Promise.all([
-      prisma.watch.count({ where: { repoId: repo.id, level: "ALL" } }),
-      prisma.watch.findMany({ where: { repoId: repo.id, userId: { in: memberIds } }, select: { userId: true } }),
-    ]);
-    const withRow = new Set(memberRows.map((r) => r.userId));
-    return explicitAll + memberIds.filter((id) => !withRow.has(id)).length;
+  async function watcherCount(repo: RepoAccessInput & { id: string }): Promise<number> {
+    const watches = await prisma.watch.findMany({
+      where: { repoId: repo.id },
+      select: { userId: true, level: true },
+    });
+    const levelByUser = new Map(watches.map((w) => [w.userId, w.level]));
+
+    const watchers = new Set<string>();
+    for (const w of watches) {
+      if (w.level === "ALL") watchers.add(w.userId);
+    }
+    for (const uid of [repo.ownerId, ...repo.collaborators.map((c) => c.userId)]) {
+      if (!levelByUser.has(uid)) watchers.add(uid);
+    }
+    return [...watchers].filter((uid) => canRead(repo, uid)).length;
   }
 
   // GET /repos/:handle/:name/social — the viewer's star/watch state plus the
@@ -240,7 +283,7 @@ export async function socialRoutes(app: FastifyInstance) {
   // GET /feed?cursor=<createdAt|id>&per_page=N — recent activity across the
   // caller's watched (non-IGNORE) + starred repos, newest first. CURSOR
   // pagination over an in-memory merge of the (bounded) per-source reads: every
-  // source is capped at `perPage + 1` rows at-or-before the cursor, so a deep
+  // source is capped at `perPage + 1` rows STRICTLY after the cursor, so a deep
   // page costs the same as the first one and no page re-fetches what earlier
   // pages already read. Private-repo activity is filtered by a canRead pass over
   // the candidate repos BEFORE any event query — losing access to a repo you
@@ -274,33 +317,32 @@ export async function socialRoutes(app: FastifyInstance) {
     );
     const repoIds = [...repoRef.keys()];
 
-    // One row beyond the page is enough to answer hasMore, per source. `lte`
-    // (not `lt`) keeps rows sharing the cursor's exact timestamp in play; the
-    // id tiebreak below drops the ones already delivered.
+    // One row beyond the page is enough to answer hasMore, per source — but
+    // only because `feedCursorWhere` is STRICTLY after the cursor, so all
+    // `perPage + 1` rows a source returns are rows this page may still serve.
     const window = perPage + 1;
-    const since = cursor ? { createdAt: { lte: cursor.at } } : {};
     const authorSel = { select: { handle: true } } as const;
     const [issues, pulls, releases, events] = await Promise.all([
       prisma.issue.findMany({
-        where: { repoId: { in: repoIds }, ...since },
+        where: { repoId: { in: repoIds }, ...feedCursorWhere(cursor, "issue") },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.pullRequest.findMany({
-        where: { repoId: { in: repoIds }, ...since },
+        where: { repoId: { in: repoIds }, ...feedCursorWhere(cursor, "pr") },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.release.findMany({
-        where: { repoId: { in: repoIds }, isDraft: false, ...since },
+        where: { repoId: { in: repoIds }, isDraft: false, ...feedCursorWhere(cursor, "release") },
         orderBy: { createdAt: "desc" },
         take: window,
         include: { author: authorSel },
       }),
       prisma.timelineEvent.findMany({
-        where: { repoId: { in: repoIds }, kind: { in: [...FEED_TIMELINE_KINDS] }, ...since },
+        where: { repoId: { in: repoIds }, kind: { in: [...FEED_TIMELINE_KINDS] }, ...feedCursorWhere(cursor, "event") },
         orderBy: { createdAt: "desc" },
         take: window,
       }),
@@ -356,15 +398,16 @@ export async function socialRoutes(app: FastifyInstance) {
       });
     }
 
-    entries.sort((a, b) => b.at.getTime() - a.at.getTime() || a.item.id.localeCompare(b.item.id));
-    // Everything strictly after the cursor in that same order. Entries at the
-    // cursor's exact timestamp are kept only when their id sorts after it, so a
-    // page boundary that lands mid-timestamp neither repeats nor skips an entry.
+    entries.sort((a, b) => b.at.getTime() - a.at.getTime() || compareId(a.item.id, b.item.id));
+    // The same "strictly after the cursor" predicate the source queries applied,
+    // re-stated over the merged stream. It is a no-op against a database that
+    // orders text the way `compareId` does; it is here so that a source whose
+    // rows arrive some other way can never re-serve an entry.
     const fresh = cursor
       ? entries.filter(
           (e) =>
             e.at.getTime() < cursor.at.getTime() ||
-            (e.at.getTime() === cursor.at.getTime() && e.item.id.localeCompare(cursor.id) > 0),
+            (e.at.getTime() === cursor.at.getTime() && compareId(e.item.id, cursor.id) > 0),
         )
       : entries;
     const pageItems = fresh.slice(0, perPage).map((e) => e.item);

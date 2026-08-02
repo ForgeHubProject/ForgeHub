@@ -1,5 +1,5 @@
 import { prisma } from "./prisma.js";
-import { canRead, repoAccessInclude } from "./repo-access.js";
+import { canRead, repoAccessInclude, type RepoAccessInput } from "./repo-access.js";
 import { sendNotificationEmail } from "./email-notify.js";
 
 export type NotificationSubjectType = "ISSUE" | "PULL_REQUEST" | "RELEASE";
@@ -80,10 +80,17 @@ export async function notifySubscribers(p: EventParams): Promise<void> {
 // thread-comment), skipping self-notification. An IGNORE watch actually mutes:
 // it suppresses even these direct reasons (issue #88). Read access is re-checked
 // here too — a direct reason is no licence to leak a private repo's subject.
-export async function notifyUser(userId: string, p: EventParams): Promise<void> {
+// `loaded` lets a caller that already holds the access-relevant repo row hand it
+// over instead of paying for the (heavy: org memberships + team member sets)
+// load again — the mention loop calls this once per @handle.
+export async function notifyUser(
+  userId: string,
+  p: EventParams,
+  loaded?: RepoAccessInput,
+): Promise<void> {
   if (userId === p.actorId) return;
   const [repo, watch] = await Promise.all([
-    loadRepoAccess(p.repoId),
+    loaded ?? loadRepoAccess(p.repoId),
     prisma.watch.findUnique({
       where: { userId_repoId: { userId, repoId: p.repoId } },
       select: { level: true },
