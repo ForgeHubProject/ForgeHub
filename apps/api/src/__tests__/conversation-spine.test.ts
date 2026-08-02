@@ -84,6 +84,8 @@ afterAll(async () => { await app.close(); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(REPO as never);
+  // notifyUser re-checks read access at delivery time (issue #88); REPO is PUBLIC.
+  vi.mocked(prisma.repo.findUnique).mockResolvedValue(REPO as never);
   vi.mocked(prisma.user.findUnique).mockImplementation((args: unknown) => {
     const where = (args as { where: { id?: string; handle?: string } }).where;
     if (where.id) return Promise.resolve(HANDLES[where.id] ? { id: where.id, handle: HANDLES[where.id] } : null) as never;

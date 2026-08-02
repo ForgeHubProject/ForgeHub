@@ -719,6 +719,8 @@ export type WatchLevel = "all" | "participating" | "ignore";
 /** GET /repos/:h/:n/social — the viewer's star/watch state for the repo header. */
 export type RepoSocial = {
   starCount: number;
+  /** Users the repo-wide fan-out reaches (explicit ALL + implicit members). */
+  watcherCount: number;
   viewerStarred: boolean;
   /** Effective level: the explicit choice, else the implicit default. */
   watchLevel: WatchLevel;
@@ -744,8 +746,9 @@ export type FeedItem = {
 
 export type FeedPage = {
   items: FeedItem[];
-  page: number;
   perPage: number;
+  /** Opaque cursor for the next page; null when the feed is exhausted. */
+  nextCursor: string | null;
   hasMore: boolean;
 };
 

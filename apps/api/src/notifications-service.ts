@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { canRead, repoAccessInclude } from "./repo-access.js";
 import { sendNotificationEmail } from "./email-notify.js";
 
 export type NotificationSubjectType = "ISSUE" | "PULL_REQUEST" | "RELEASE";
@@ -34,18 +35,26 @@ async function notify(userId: string, p: EventParams): Promise<void> {
   }
 }
 
+// The access-relevant repo row, or null when the repo is gone. Every delivery
+// path re-checks read access against this: a Watch row is a subscription, never
+// a grant, and it can outlive the grant that justified it (collaborator removed,
+// team access revoked, org membership dropped, repo flipped to private). The
+// check at *delivery* time is what holds under access paths that do not exist
+// yet — a private repo's titles must never reach someone who cannot read it.
+async function loadRepoAccess(repoId: string) {
+  return prisma.repo.findUnique({ where: { id: repoId }, include: repoAccessInclude });
+}
+
 // Fan out to the repo's watchers (issue #88), excluding the actor. The set is
 // data-driven: every explicit Watch row at level ALL subscribes its user, and an
 // owner/collaborator WITHOUT a row is treated as an implicit ALL watcher — the
 // rows are materialized on repo create / collaborator add (plus a startup
 // backfill), but a missed write must never silently unsubscribe them. A row at
 // PARTICIPATING or IGNORE keeps its user out of this fan-out; PARTICIPATING
-// users still receive the direct reasons via notifyUser below.
+// users still receive the direct reasons via notifyUser below. The final
+// recipient set is intersected with live read access (see loadRepoAccess).
 export async function notifySubscribers(p: EventParams): Promise<void> {
-  const repo = await prisma.repo.findUnique({
-    where: { id: p.repoId },
-    select: { ownerId: true, collaborators: { select: { userId: true } } },
-  });
+  const repo = await loadRepoAccess(p.repoId);
   if (!repo) return;
 
   const watches = await prisma.watch.findMany({
@@ -63,18 +72,24 @@ export async function notifySubscribers(p: EventParams): Promise<void> {
   }
   subscribers.delete(p.actorId);
 
-  await Promise.all([...subscribers].map((uid) => notify(uid, p)));
+  const recipients = [...subscribers].filter((uid) => canRead(repo, uid));
+  await Promise.all(recipients.map((uid) => notify(uid, p)));
 }
 
 // Notify a single specific user (mentioned / assigned / review-requested /
 // thread-comment), skipping self-notification. An IGNORE watch actually mutes:
-// it suppresses even these direct reasons (issue #88).
+// it suppresses even these direct reasons (issue #88). Read access is re-checked
+// here too — a direct reason is no licence to leak a private repo's subject.
 export async function notifyUser(userId: string, p: EventParams): Promise<void> {
   if (userId === p.actorId) return;
-  const watch = await prisma.watch.findUnique({
-    where: { userId_repoId: { userId, repoId: p.repoId } },
-    select: { level: true },
-  });
+  const [repo, watch] = await Promise.all([
+    loadRepoAccess(p.repoId),
+    prisma.watch.findUnique({
+      where: { userId_repoId: { userId, repoId: p.repoId } },
+      select: { level: true },
+    }),
+  ]);
+  if (!repo || !canRead(repo, userId)) return;
   if (watch?.level === "IGNORE") return;
   await notify(userId, p);
 }

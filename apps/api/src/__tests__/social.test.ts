@@ -8,7 +8,8 @@ vi.mock("../prisma.js", () => ({
     repo: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
     repoCollaborator: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
     star: { upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
-    watch: { upsert: vi.fn(), deleteMany: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+    watch: { upsert: vi.fn(), deleteMany: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    backfillMarker: { findUnique: vi.fn(), create: vi.fn() },
     notification: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), upsert: vi.fn() },
     release: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     protectedBranch: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), upsert: vi.fn(), deleteMany: vi.fn() },
@@ -90,6 +91,9 @@ afterAll(async () => { await app.close(); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(PUBLIC_REPO as never);
+  // notifySubscribers / notifyUser re-check read access, so the notify paths
+  // need the access-relevant repo row too (issue #88).
+  vi.mocked(prisma.repo.findUnique).mockResolvedValue(PUBLIC_REPO as never);
   vi.mocked(prisma.star.upsert).mockResolvedValue({} as never);
   vi.mocked(prisma.star.deleteMany).mockResolvedValue({ count: 1 } as never);
   vi.mocked(prisma.star.count).mockResolvedValue(0 as never);
@@ -99,6 +103,9 @@ beforeEach(() => {
   vi.mocked(prisma.watch.deleteMany).mockResolvedValue({ count: 1 } as never);
   vi.mocked(prisma.watch.findUnique).mockResolvedValue(null);
   vi.mocked(prisma.watch.findMany).mockResolvedValue([]);
+  vi.mocked(prisma.watch.count).mockResolvedValue(0 as never);
+  vi.mocked(prisma.backfillMarker.findUnique).mockResolvedValue(null);
+  vi.mocked(prisma.backfillMarker.create).mockResolvedValue({} as never);
   vi.mocked(prisma.notification.findUnique).mockResolvedValue(null);
   vi.mocked(prisma.notification.upsert).mockResolvedValue({} as never);
 });
@@ -170,6 +177,27 @@ describe("GET /users/:handle/starred", () => {
     const res = await app.inject({ method: "GET", url: "/users/nobody/starred" });
     expect(res.statusCode).toBe(404);
   });
+
+  // Regression (adversarial review): the read used to be unbounded — every Star
+  // row, each dragging the full access include (org memberships + team member
+  // sets) along with it.
+  it("bounds the read to the requested window and reports hasMore", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "u-star", handle: "starrer" } as never);
+    // 3 rows come back for a perPage of 2 — the extra one only answers hasMore.
+    vi.mocked(prisma.star.findMany).mockResolvedValue([
+      { createdAt: NOW, repo: repoRow() },
+      { createdAt: NOW, repo: repoRow() },
+      { createdAt: NOW, repo: repoRow() },
+    ] as never);
+
+    const res = await app.inject({ method: "GET", url: "/users/starrer/starred?page=2&per_page=2" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ page: 2, perPage: 2, hasMore: true });
+    expect(res.json().repos).toHaveLength(2);
+    expect(prisma.star.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 2, take: 3 }),
+    );
+  });
 });
 
 // ─── Watching ─────────────────────────────────────────────────────────────────
@@ -182,7 +210,8 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
       payload: { level: "ignore" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ watchLevel: "ignore" });
+    // watcherCount: 0 explicit ALL rows + the row-less owner.
+    expect(res.json()).toEqual({ watchLevel: "ignore", watcherCount: 1 });
     expect(prisma.watch.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: { userId: "user-9", repoId: "repo-pub", level: "IGNORE" },
@@ -208,7 +237,7 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
     });
     expect(res.statusCode).toBe(200);
     // The owner falls back to the implicit ALL watch.
-    expect(res.json()).toEqual({ watchLevel: "all" });
+    expect(res.json()).toEqual({ watchLevel: "all", watcherCount: 1 });
     expect(prisma.watch.deleteMany).toHaveBeenCalledWith({ where: { userId: "owner-1", repoId: "repo-pub" } });
   });
 
@@ -218,13 +247,13 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
       method: "GET", url: "/repos/alice/pub/social",
       headers: { authorization: ownerToken },
     });
-    expect(asOwner.json()).toEqual({ starCount: 3, viewerStarred: false, watchLevel: "all" });
+    expect(asOwner.json()).toEqual({ starCount: 3, watcherCount: 1, viewerStarred: false, watchLevel: "all" });
 
     const asStranger = await app.inject({
       method: "GET", url: "/repos/alice/pub/social",
       headers: { authorization: strangerToken },
     });
-    expect(asStranger.json()).toEqual({ starCount: 3, viewerStarred: false, watchLevel: "participating" });
+    expect(asStranger.json()).toEqual({ starCount: 3, watcherCount: 1, viewerStarred: false, watchLevel: "participating" });
   });
 
   it("GET /social surfaces an explicit level and the viewer's star", async () => {
@@ -235,7 +264,24 @@ describe("PUT/DELETE /repos/:h/:r/watch + GET /social", () => {
       method: "GET", url: "/repos/alice/pub/social",
       headers: { authorization: ownerToken },
     });
-    expect(res.json()).toEqual({ starCount: 3, viewerStarred: true, watchLevel: "ignore" });
+    expect(res.json()).toEqual({ starCount: 3, watcherCount: 1, viewerStarred: true, watchLevel: "ignore" });
+  });
+
+  // The watcher count mirrors the fan-out set exactly: explicit ALL rows, plus
+  // owner/collaborators whose implicit ALL was never materialized.
+  it("GET /social counts explicit ALL watchers plus row-less members", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({
+      ...PUBLIC_REPO, collaborators: [{ userId: "collab-1" }, { userId: "collab-2" }],
+    } as never);
+    vi.mocked(prisma.watch.count).mockResolvedValue(4 as never);
+    // collab-1 has a row (any level) — only collab-2 and the owner are implicit.
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([{ userId: "collab-1" }] as never);
+
+    const res = await app.inject({
+      method: "GET", url: "/repos/alice/pub/social",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.json().watcherCount).toBe(6);
   });
 });
 
@@ -253,10 +299,18 @@ describe("notifySubscribers (watch-driven)", () => {
     );
   }
 
+  /** The fan-out repo as notifySubscribers loads it (access fields included). */
+  function fanoutRepo(overrides: Record<string, unknown> = {}) {
+    return {
+      ...PUBLIC_REPO,
+      ownerId: "owner-1",
+      collaborators: [{ userId: "collab-1", role: "WRITER" }],
+      ...overrides,
+    };
+  }
+
   it("notifies explicit ALL watchers plus row-less owner/collaborators, excluding the actor", async () => {
-    vi.mocked(prisma.repo.findUnique).mockResolvedValue({
-      ownerId: "owner-1", collaborators: [{ userId: "collab-1" }],
-    } as never);
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(fanoutRepo() as never);
     vi.mocked(prisma.watch.findMany).mockResolvedValue([
       { userId: "fan-1", level: "ALL" },       // outside watcher, opted in
       { userId: "actor-1", level: "ALL" },     // the actor — never self-notified
@@ -267,9 +321,7 @@ describe("notifySubscribers (watch-driven)", () => {
   });
 
   it("IGNORE mutes the repo-wide fan-out even for the owner", async () => {
-    vi.mocked(prisma.repo.findUnique).mockResolvedValue({
-      ownerId: "owner-1", collaborators: [{ userId: "collab-1" }],
-    } as never);
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(fanoutRepo() as never);
     vi.mocked(prisma.watch.findMany).mockResolvedValue([
       { userId: "owner-1", level: "IGNORE" },
     ] as never);
@@ -279,15 +331,45 @@ describe("notifySubscribers (watch-driven)", () => {
   });
 
   it("PARTICIPATING keeps a collaborator out of the fan-out", async () => {
-    vi.mocked(prisma.repo.findUnique).mockResolvedValue({
-      ownerId: "owner-1", collaborators: [{ userId: "collab-1" }],
-    } as never);
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(fanoutRepo() as never);
     vi.mocked(prisma.watch.findMany).mockResolvedValue([
       { userId: "collab-1", level: "PARTICIPATING" },
     ] as never);
 
     await notifySubscribers(EVENT);
     expect(notifiedUserIds()).toEqual(["owner-1"]);
+  });
+
+  // Regression (adversarial review): a Watch row can outlive the grant that
+  // justified it — collaborator removed, team access revoked, repo flipped to
+  // private. Read access is therefore re-checked at delivery time.
+  it("drops a stale ALL watcher who can no longer read a PRIVATE repo", async () => {
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(
+      fanoutRepo({ visibility: "PRIVATE", collaborators: [] }) as never,
+    );
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([
+      { userId: "ex-collab", level: "ALL" }, // removed from the repo, row left behind
+      { userId: "fan-1", level: "ALL" },     // never had access at all
+    ] as never);
+
+    await notifySubscribers(EVENT);
+    expect(notifiedUserIds()).toEqual(["owner-1"]);
+  });
+
+  it("keeps a PRIVATE-repo watcher whose access comes from a team grant", async () => {
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(
+      fanoutRepo({
+        visibility: "PRIVATE",
+        collaborators: [],
+        teamAccess: [{ role: "READER", team: { memberships: [{ userId: "team-reader" }] } }],
+      }) as never,
+    );
+    vi.mocked(prisma.watch.findMany).mockResolvedValue([
+      { userId: "team-reader", level: "ALL" },
+    ] as never);
+
+    await notifySubscribers(EVENT);
+    expect(notifiedUserIds().sort()).toEqual(["owner-1", "team-reader"]);
   });
 });
 
@@ -306,6 +388,22 @@ describe("notifyUser (direct reasons)", () => {
     vi.mocked(prisma.watch.findUnique).mockResolvedValue({ level: "IGNORE" } as never);
     await notifyUser("user-9", EVENT);
     expect(prisma.notification.upsert).not.toHaveBeenCalled();
+  });
+
+  // Regression (adversarial review): a direct reason must not leak a private
+  // repo's subject title to someone whose read access is gone.
+  it("suppresses a mention when the target cannot read the repo", async () => {
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(PRIVATE_REPO as never);
+    await notifyUser("user-9", EVENT);
+    expect(prisma.notification.upsert).not.toHaveBeenCalled();
+  });
+
+  it("still delivers to a PRIVATE-repo collaborator", async () => {
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue({
+      ...PRIVATE_REPO, collaborators: [{ userId: "user-9", role: "READER" }],
+    } as never);
+    await notifyUser("user-9", EVENT);
+    expect(prisma.notification.upsert).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -340,6 +438,83 @@ describe("backfillImplicitWatches", () => {
     await expect(backfillImplicitWatches()).resolves.toBeUndefined();
     expect(prisma.watch.upsert).toHaveBeenCalledTimes(2);
   });
+
+  // Regression (adversarial review): this used to re-scan every repo on every
+  // boot, so startup cost grew with instance size forever.
+  it("marks itself complete and is a single lookup on the next boot", async () => {
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([
+      { id: "r1", ownerId: "owner-1", collaborators: [] },
+    ] as never);
+
+    await backfillImplicitWatches();
+    expect(prisma.backfillMarker.create).toHaveBeenCalledWith({
+      data: { name: "implicit-watches-v1" },
+    });
+
+    // Second boot: the marker exists, so nothing is scanned or written.
+    vi.clearAllMocks();
+    vi.mocked(prisma.backfillMarker.findUnique).mockResolvedValue({ name: "implicit-watches-v1" } as never);
+    await backfillImplicitWatches();
+    expect(prisma.repo.findMany).not.toHaveBeenCalled();
+    expect(prisma.watch.upsert).not.toHaveBeenCalled();
+  });
+
+  it("scans in bounded batches rather than loading every repo at once", async () => {
+    const batch = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: `r${from + i}`, ownerId: `owner-${from + i}`, collaborators: [] }));
+    vi.mocked(prisma.repo.findMany)
+      .mockResolvedValueOnce(batch(1, 200) as never)
+      .mockResolvedValueOnce(batch(201, 5) as never);
+
+    await backfillImplicitWatches();
+
+    expect(prisma.repo.findMany).toHaveBeenCalledTimes(2);
+    const first = vi.mocked(prisma.repo.findMany).mock.calls[0]![0] as Record<string, unknown>;
+    expect(first).toMatchObject({ take: 200 });
+    expect(first["cursor"]).toBeUndefined();
+    // The second batch resumes after the last id of the first.
+    expect(vi.mocked(prisma.repo.findMany).mock.calls[1]![0]).toMatchObject({
+      take: 200, skip: 1, cursor: { id: "r200" },
+    });
+    expect(prisma.watch.upsert).toHaveBeenCalledTimes(205);
+  });
+});
+
+// ─── Watch cleanup on access loss ─────────────────────────────────────────────
+// Regression (adversarial review): removing a collaborator used to leave the
+// materialized ALL row behind, so a private repo kept notifying an ex-member.
+
+describe("DELETE /repos/:name/collaborators/:handle prunes the watch row", () => {
+  const PRIV_OWNED = { ...PRIVATE_REPO, id: "repo-owned", ownerId: "owner-1" };
+
+  beforeEach(() => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "collab-1", handle: "collab" } as never);
+    vi.mocked(prisma.repoCollaborator.findUnique).mockResolvedValue({ id: "rc-1", role: "WRITER" } as never);
+    vi.mocked(prisma.repoCollaborator.delete).mockResolvedValue({} as never);
+  });
+
+  it("deletes the ex-collaborator's watch row when they lose read access", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(PRIV_OWNED as never);
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(PRIV_OWNED as never);
+
+    const res = await app.inject({
+      method: "DELETE", url: "/repos/priv/collaborators/collab",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(prisma.watch.deleteMany).toHaveBeenCalledWith({
+      where: { repoId: "repo-owned", userId: "collab-1" },
+    });
+  });
+
+  it("keeps the watch row on a PUBLIC repo — read access survives the removal", async () => {
+    const res = await app.inject({
+      method: "DELETE", url: "/repos/pub/collaborators/collab",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(prisma.watch.deleteMany).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Feed ─────────────────────────────────────────────────────────────────────
@@ -353,7 +528,7 @@ describe("GET /feed", () => {
   it("returns empty when nothing is watched or starred", async () => {
     const res = await app.inject({ method: "GET", url: "/feed", headers: { authorization: strangerToken } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ items: [], page: 1, perPage: 25, hasMore: false });
+    expect(res.json()).toEqual({ items: [], perPage: 25, nextCursor: null, hasMore: false });
     expect(prisma.repo.findMany).not.toHaveBeenCalled();
   });
 
@@ -427,10 +602,76 @@ describe("GET /feed", () => {
       kind: "merged", actor: "carol", subjectType: "pull_request", number: 3, title: "Fix hinge",
     });
     expect(body.hasMore).toBe(true);
+    // The cursor names the last delivered entry: createdAt | item id.
+    expect(body.nextCursor).toBe("2026-01-15T09:00:00.000Z|issue-i1");
 
     // Page 2 carries the remaining release.
-    const page2 = await app.inject({ method: "GET", url: "/feed?per_page=2&page=2", headers: { authorization: strangerToken } });
+    const page2 = await app.inject({
+      method: "GET", url: `/feed?per_page=2&cursor=${encodeURIComponent(body.nextCursor)}`,
+      headers: { authorization: strangerToken },
+    });
     expect(page2.json().items.map((i: { type: string }) => i.type)).toEqual(["release"]);
     expect(page2.json().hasMore).toBe(false);
+    expect(page2.json().nextCursor).toBeNull();
+
+    // Every source query is bounded by the cursor, not re-read from the top.
+    const secondIssueQuery = vi.mocked(prisma.issue.findMany).mock.calls[1]![0] as {
+      where: { createdAt?: { lte: Date } }; take: number;
+    };
+    expect(secondIssueQuery.take).toBe(3);
+    expect(secondIssueQuery.where.createdAt?.lte).toEqual(new Date("2026-01-15T09:00:00.000Z"));
+  });
+
+  // Regression (adversarial review): offset pagination over a live stream let
+  // activity arriving between two page fetches shift every offset, so load-more
+  // appended entries the first page had already shown (duplicate React keys).
+  it("does not repeat entries when new activity lands between pages", async () => {
+    const issueRow = (id: string, at: string, number: number) => ({
+      id, repoId: "repo-pub", number, title: `Issue ${id}`,
+      createdAt: new Date(at), author: { handle: "alice" },
+    });
+    vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.release.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([
+      issueRow("a", "2026-01-15T10:00:00Z", 1),
+      issueRow("b", "2026-01-15T09:00:00Z", 2),
+      issueRow("c", "2026-01-15T08:00:00Z", 3),
+    ] as never);
+
+    const page1 = await app.inject({ method: "GET", url: "/feed?per_page=2", headers: { authorization: strangerToken } });
+    const first = page1.json();
+    expect(first.items.map((i: { id: string }) => i.id)).toEqual(["issue-a", "issue-b"]);
+
+    // …and now a brand-new issue lands at the head of the stream.
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([
+      issueRow("new", "2026-01-15T11:00:00Z", 4),
+      issueRow("a", "2026-01-15T10:00:00Z", 1),
+      issueRow("b", "2026-01-15T09:00:00Z", 2),
+      issueRow("c", "2026-01-15T08:00:00Z", 3),
+    ] as never);
+
+    const page2 = await app.inject({
+      method: "GET", url: `/feed?per_page=2&cursor=${encodeURIComponent(first.nextCursor)}`,
+      headers: { authorization: strangerToken },
+    });
+    // Offset pagination would have re-served issue-b here.
+    expect(page2.json().items.map((i: { id: string }) => i.id)).toEqual(["issue-c"]);
+  });
+
+  it("ignores a malformed cursor instead of erroring", async () => {
+    vi.mocked(prisma.star.findMany).mockResolvedValue([{ repoId: "repo-pub" }] as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ ...PUBLIC_REPO, owner: { handle: "alice" } }] as never);
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.release.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.timelineEvent.findMany).mockResolvedValue([]);
+
+    const res = await app.inject({ method: "GET", url: "/feed?cursor=garbage", headers: { authorization: strangerToken } });
+    expect(res.statusCode).toBe(200);
+    const where = vi.mocked(prisma.issue.findMany).mock.calls[0]![0] as { where: { createdAt?: unknown } };
+    expect(where.where.createdAt).toBeUndefined();
   });
 });
