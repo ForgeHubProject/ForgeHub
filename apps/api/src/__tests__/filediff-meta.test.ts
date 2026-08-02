@@ -197,6 +197,30 @@ describe("GET /repos/:handle/:name/filediff-meta", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  // Regression (#66 P4 review): a size git cannot answer must NOT be reported
+  // as null. `base` is taken from the query verbatim (it is the caller's chosen
+  // comparison point, not a ref this route resolves), so an unresolvable one is
+  // a genuine git failure inside the sizing step. Before the fix,
+  // `blobSizeAtCommit` swallowed that into null and the endpoint answered 200
+  // with baseSize: null — which the client reads as "this side is free to
+  // download". Unknown must fail the request, not become zero.
+  it("503s when a blob size cannot be determined, rather than quoting null", async () => {
+    const res = await get(`path=model.gltf&sha=${headSha}&base=no-such-base-ref`);
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toMatch(/size/i);
+  });
+
+  // The companion case, to prove the 503 above is about git FAILING and not
+  // merely about a missing blob: a base commit that resolves but does not
+  // contain the path is a legitimate null, answered 200.
+  it("still answers 200 with a null size when the base resolves but lacks the blob", async () => {
+    const res = await get(`path=added.gltf&sha=${addedSha}&base=${baseSha}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.baseSize).toBeNull();
+    expect(body.headSize).toBe(Buffer.byteLength(gltf(3)));
+  });
+
   it("404s for a private repo the caller cannot read", async () => {
     vi.mocked(prisma.repo.findFirst).mockResolvedValue({ ...MOCK_REPO, visibility: "PRIVATE" } as never);
     const res = await get(`path=model.gltf&sha=${headSha}`);
