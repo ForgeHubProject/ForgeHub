@@ -22,7 +22,7 @@ vi.mock("../prisma.js", () => ({
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { __setManifestForTests, __resetManifest } from "../fhr/manifest.js";
-import { createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
+import { checkoutBranch, createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
 import { createTestServer } from "./helpers/server.js";
 
 // The manifest's current build for gltf-scene is e520cc6; the test repo's
@@ -55,6 +55,8 @@ let app: FastifyInstance;
 let baseSha: string;
 let headSha: string;
 let pinnedSha: string;
+let addedSha: string;
+let featureSha: string;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -80,6 +82,13 @@ beforeAll(async () => {
     { ".forge/handlers": '{\n  "gltf-scene": "0ldbld1"\n}\n', "model.gltf": gltf(9) },
     "pin handler build",
   );
+  // A file that exists only from this commit on: its base blob is genuinely
+  // absent, which is a zero-byte side, not an unknown one.
+  addedSha = await makeCommit(repo.workDir, { "added.gltf": gltf(3) }, "add second scene");
+  // A branch, so we can prove the endpoint answers with SHAs and not the ref
+  // the caller happened to pass (the PR file view passes the head branch).
+  await checkoutBranch(repo.workDir, "feature");
+  featureSha = await makeCommit(repo.workDir, { "model.gltf": gltf(11) }, "feature tweak");
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
   app = await createTestServer();
@@ -149,6 +158,42 @@ describe("GET /repos/:handle/:name/filediff-meta", () => {
 
   it("404s for a file with no semantic support (same gate as /filediff)", async () => {
     const res = await get(`path=readme.md&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+  });
+
+  // Regression (#66 P4 review): the client pastes headSha into the Tier-L
+  // `forge diff --web <base>..<head>` command and abbreviates it, and keys its
+  // meta cache on it. Echoing back a branch name corrupted both.
+  it("resolves a branch ref to its commit SHA", async () => {
+    const res = await get(`path=model.gltf&sha=feature`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.headSha).toBe(featureSha);
+    expect(body.headSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(body.baseSha).toBe(addedSha);
+  });
+
+  it("404s for a ref that does not resolve", async () => {
+    expect((await get(`path=model.gltf&sha=no-such-branch`)).statusCode).toBe(404);
+  });
+
+  // Regression (#66 P4 review): an added file's base blob is absent, so its
+  // base size is null while its head size is real — the client must still be
+  // able to compute, with the missing side counted as zero bytes.
+  it("reports a null size for the side an added file has no blob on", async () => {
+    const res = await get(`path=added.gltf&sha=${addedSha}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.baseSha).toBe(pinnedSha); // a real parent — the blob just isn't in it
+    expect(body.baseSize).toBeNull();
+    expect(body.headSize).toBe(Buffer.byteLength(gltf(3)));
+  });
+
+  // Regression (#66 P4 review): /filediff 404s when neither blob exists; this
+  // endpoint used to answer 200 with both sizes null, which the UI read as a
+  // free download of nothing.
+  it("404s when the file exists at neither revision (same gate as /filediff)", async () => {
+    const res = await get(`path=added.gltf&sha=${baseSha}`);
     expect(res.statusCode).toBe(404);
   });
 

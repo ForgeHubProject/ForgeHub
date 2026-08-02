@@ -5,6 +5,7 @@ import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../typ
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import { extensionForFilename, resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
 import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../views/diffViewers/computeTierUi";
+import { needsFileDiffMeta } from "../../lib/computeTier";
 import { useSemanticExtensions } from "../../lib/fhrFormats";
 import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../ui";
 import {
@@ -83,10 +84,19 @@ export function FileDiffCard({
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
   // Compute-tier chrome, semantic files only: the header pill owns the tier,
   // the viewer renders it; both share one cached metadata fetch (#66 P4).
+  // The pill's metadata is fetched only once the pill is engaged — it costs a
+  // handful of git spawns and fills a dropdown most viewers never open.
   const ext = extensionForFilename(filename);
   const isSemantic = semanticExtensions.has(ext);
   const [tier, changeTier] = useComputeTier(ext);
-  const meta = useFileDiffMeta(token, base, blobPath, sha, isSemantic);
+  const [pillEngaged, setPillEngaged] = useState(false);
+  const meta = useFileDiffMeta(
+    token,
+    base,
+    blobPath,
+    sha,
+    needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
+  );
 
   return (
     <div id={`diff-${index}`} className="scroll-mt-4 rounded-md border border-fh-border bg-fh-surface">
@@ -120,7 +130,14 @@ export function FileDiffCard({
           {displayPath}
         </Link>
         <div className="flex flex-shrink-0 items-center gap-2.5">
-          {isSemantic && <ComputeTierPill tier={tier} onChange={changeTier} meta={meta} />}
+          {isSemantic && (
+            <ComputeTierPill
+              tier={tier}
+              onChange={changeTier}
+              meta={meta}
+              onActivate={() => setPillEngaged(true)}
+            />
+          )}
           <DiffCounts additions={file.additions} deletions={file.deletions} />
           <ChangeTypeBadge status={file.status} />
         </div>

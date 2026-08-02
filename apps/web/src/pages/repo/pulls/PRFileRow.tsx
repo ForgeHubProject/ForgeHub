@@ -5,6 +5,7 @@ import type { FileDiff, PRFileEntry } from "../../../types";
 import type { RepoRef } from "../../../lib/autolink";
 import { resolveFileDiffViewer, extensionForFilename } from "../../../views/fileDiffViewerRegistry";
 import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../../views/diffViewers/computeTierUi";
+import { needsFileDiffMeta } from "../../../lib/computeTier";
 import { useSemanticExtensions } from "../../../lib/fhrFormats";
 import { Badge, Skeleton, cx } from "../../../ui";
 import { ChevronRightIcon } from "./prShared";
@@ -56,8 +57,17 @@ export function PRFileRow({
   const isSemantic = semanticExtensions?.has(ext) ?? false;
   // Compute-tier chrome, semantic files only: the header pill owns the tier,
   // the viewer renders it; both share one cached metadata fetch (#66 P4).
+  // The pill's metadata is fetched only once the pill is engaged — a PR full of
+  // semantic assets must not spawn a request per collapsed row on page load.
   const [tier, changeTier] = useComputeTier(ext);
-  const meta = useFileDiffMeta(token, base, file.path, headRef, isSemantic);
+  const [pillEngaged, setPillEngaged] = useState(false);
+  const meta = useFileDiffMeta(
+    token,
+    base,
+    file.path,
+    headRef,
+    needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
+  );
 
   async function loadDiff() {
     if (loaded || diffLoading) return;
@@ -116,7 +126,14 @@ export function PRFileRow({
           {displayPath}
         </Link>
         <div className="flex items-center gap-2 shrink-0 text-fh-xs font-mono">
-          {isSemantic && <ComputeTierPill tier={tier} onChange={changeTier} meta={meta} />}
+          {isSemantic && (
+            <ComputeTierPill
+              tier={tier}
+              onChange={changeTier}
+              meta={meta}
+              onActivate={() => setPillEngaged(true)}
+            />
+          )}
           {threads.length > 0 && (
             <Badge tone={openThreadCount > 0 ? "accent" : "neutral"} pill={false} className="font-sans gap-1">
               <CommentIcon size={11} />

@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import type { FileDiffViewerProps } from "../fileDiffViewerTypes";
-import { fetchRawBlob, getFileSemanticDiff, isFormatNotSupported, type SemanticFileDiff } from "../../api";
+import {
+  ApiError,
+  fetchRawBlob,
+  getFileSemanticDiff,
+  isFormatNotSupported,
+  type FileDiffMeta,
+  type SemanticFileDiff,
+} from "../../api";
 import { loadRendererBundle, type RendererInstance } from "../../lib/rendererBundle";
 import { browserWasmDiff } from "../../lib/browserWasm";
-import { TIER_S_SLOW_MS, assessBrowserTier, type ComputeTier } from "../../lib/computeTier";
+import {
+  TIER_S_SLOW_MS,
+  assessBrowserTier,
+  needsFileDiffMeta,
+  type ComputeTier,
+} from "../../lib/computeTier";
 import {
   BrowserComputeGate,
   BuildMismatchBanner,
@@ -84,8 +96,16 @@ export function FhrFileDiffViewer({
   };
 
   // Shared with the header pill (cached — one request per blob pair): SHAs and
-  // sizes for tiers B/L, capability detection, and the build-pin check.
-  const meta = useFileDiffMeta(token, repoBase, path, headRef);
+  // sizes for tiers B/L, capability detection, and the build-pin check. Asked
+  // for only when something actually reads it: the default Tier S needs none of
+  // it unless the request drags long enough for the nudge to offer alternatives.
+  const meta = useFileDiffMeta(
+    token,
+    repoBase,
+    path,
+    headRef,
+    needsFileDiffMeta({ semantic: true, clientTierActive: tier !== "server", serverSlow: slow }),
+  );
 
   const browserReady =
     tier === "browser" && browserConsented && meta !== null && assessBrowserTier(meta).available;
@@ -124,14 +144,11 @@ export function FhrFileDiffViewer({
         if (tier === "browser" && meta) {
           // Tier B: both blobs down, wasm computes here. The blobs double as
           // the renderer's geometry sources — no second download.
-          const [base, head] = await Promise.all([
-            meta.baseSha ? fetchRawBlob(token, handle, repoName, path, meta.baseSha) : null,
-            fetchRawBlob(token, handle, repoName, path, meta.headSha),
-          ]);
-          if (cancelled) return;
+          const { base, head } = await loadTierBBlobs(token, handle, repoName, path, meta);
+          if (cancelled) return revokeAll();
           const [baseBytes, headBytes] = await Promise.all([
             base ? base.arrayBuffer().then((b) => new Uint8Array(b)) : new Uint8Array(0),
-            head.arrayBuffer().then((b) => new Uint8Array(b)),
+            head ? head.arrayBuffer().then((b) => new Uint8Array(b)) : new Uint8Array(0),
           ]);
           if (cancelled) return;
           const computed = await browserWasmDiff(meta.handlerId, baseBytes, headBytes);
@@ -142,9 +159,11 @@ export function FhrFileDiffViewer({
             objectUrls.push(url);
             blobs.base = { url, size: base.size };
           }
-          const headUrl = URL.createObjectURL(head);
-          objectUrls.push(headUrl);
-          blobs.head = { url: headUrl, size: head.size };
+          if (head) {
+            const url = URL.createObjectURL(head);
+            objectUrls.push(url);
+            blobs.head = { url, size: head.size };
+          }
         } else {
           // Tier S: the canonical server-computed diff (the record for review).
           diff = await getFileSemanticDiff(token, handle, repoName, path, headRef);
@@ -176,8 +195,11 @@ export function FhrFileDiffViewer({
         if (cancelled) return;
         // The repo hasn't opted this format in (no handler / not enabled): show
         // exactly what the file would have shown without semantic support,
-        // rather than an error.
-        if (isFormatNotSupported(e)) {
+        // rather than an error. Server tier only — a 404 reaching here from a
+        // browser compute cannot mean that (filediff-meta already answered 200,
+        // which is the same gate), so silently swapping in a raw text diff
+        // would hide a real failure behind a plausible-looking one.
+        if (tier === "server" && isFormatNotSupported(e)) {
           setStatus("fallback");
           return;
         }
@@ -259,6 +281,50 @@ export function FhrFileDiffViewer({
       <div ref={hostRef} style={{ display: status === "ready" ? "block" : "none" }} />
     </div>
   );
+}
+
+/** The /rawblob fetch, injectable so the tier-B blob pairing is unit-testable. */
+export type RawBlobFetcher = typeof fetchRawBlob;
+
+/**
+ * Fetch the blob pair Tier B computes from. Each side is independent and, when
+ * it is genuinely absent, empty rather than fatal: an ADDED file has a real
+ * parent SHA but no blob in it, a DELETED file has no blob at head, and a
+ * RENAME leaves the base side empty at the new path. /rawblob 404s in all three
+ * cases, and the whole compute must not collapse into the plain-text fallback
+ * because of it — the server's own /filediff substitutes an empty buffer
+ * (readBlobAsBuffer null → Buffer.alloc(0)) for exactly this reason, and Tier B
+ * has to agree with it or the two tiers disagree on what the diff even is.
+ *
+ * The declared size is what says "absent": null means the blob is not in that
+ * tree (the server 404s rather than reporting null for a size it failed to
+ * read), so the fetch is skipped entirely. A 404 is still tolerated as a
+ * belt-and-braces second signal; any other failure is a real error and
+ * propagates. Both sides absent is not a diffable pair and throws.
+ */
+export async function loadTierBBlobs(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  path: string,
+  meta: Pick<FileDiffMeta, "baseSha" | "headSha" | "baseSize" | "headSize">,
+  fetchBlob: RawBlobFetcher = fetchRawBlob,
+): Promise<{ base: Blob | null; head: Blob | null }> {
+  const side = async (sha: string | null, size: number | null): Promise<Blob | null> => {
+    if (!sha || size === null) return null;
+    try {
+      return await fetchBlob(token, handle, repoName, path, sha);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  };
+  const [base, head] = await Promise.all([
+    side(meta.baseSha, meta.baseSize),
+    side(meta.headSha, meta.headSize),
+  ]);
+  if (!base && !head) throw new Error("File not found at either revision");
+  return { base, head };
 }
 
 /**

@@ -5,10 +5,10 @@ import type { GoConstructor } from "./wasm_exec";
 // Tier-B compute: run the official FHR handler's wasm build IN THE BROWSER
 // (issue #66 P4, SPEC-RENDERING §4). This is the client twin of the API's
 // official-handlers.ts/wasm-runtime.ts pair: the same GOOS=js binary, fetched
-// through the API's /handlers proxy (which re-serves it as application/wasm —
-// release hosts serve octet-stream, and may lack CORS), instantiated with the
-// same vendored Go wasm_exec runtime, exposing the same `diff(base, head) →
-// JSON string` global the server worker calls.
+// through the API's /handlers proxy (same-origin, so the manifest's host needn't
+// serve CORS), instantiated with the same vendored Go wasm_exec runtime,
+// exposing the same `diff(base, head) → JSON string` global the server worker
+// calls.
 //
 // Trust model: only *official* builds are reachable — the proxy resolves
 // exclusively through the FHR manifest, so this path can never load a
@@ -16,11 +16,15 @@ import type { GoConstructor } from "./wasm_exec";
 // (SPEC-RENDERING P6); community compute belongs to the consented sandbox
 // (#70), not this module.
 //
-// The wasm runs on the main thread, not a worker: the input is capped well
-// below the server's DoS ceiling by capability detection (computeTier.ts), the
-// user explicitly opted in after a cost disclosure, and — unlike the server —
-// a hang here blocks only the viewer's own tab. A worker port is a possible
-// follow-up if large diffs prove janky.
+// The wasm runs on the MAIN THREAD, and that is the weak point of this module,
+// not a settled one: `handler.diff()` is a synchronous call with no timeout and
+// no abort path, so a pathological input freezes the viewer's tab outright. The
+// only thing standing between a user and that is capability detection
+// (computeTier.ts TIER_B_MAX_BLOB_BYTES), which is why that ceiling is pinned to
+// the server's own per-blob MAX_WASM_BYTES rather than anything larger — the
+// server refuses to attempt more than that even with a worker it can kill, so
+// offering the browser more would be backwards. Raising it is a worker port,
+// not a constant change.
 
 /** The structured diff a wasm handler produces — same wire shape the server returns. */
 export type BrowserStructuredDiff = { version: string; format: string; changes: DiffChange[] };
@@ -38,13 +42,39 @@ const defaultDeps: BrowserWasmDeps = {
   instantiate: instantiateOnPage,
 };
 
+/**
+ * The two ambient things instantiation reaches for, injectable so the
+ * global-discovery logic below is testable without a real Go build.
+ */
+export type PageInstantiateDeps = {
+  /** Installs `globalThis.Go` (the vendored wasm_exec runtime). */
+  loadGoRuntime: () => Promise<void>;
+  instantiateWasm: (
+    bytes: ArrayBuffer,
+    imports: WebAssembly.Imports,
+  ) => Promise<{ instance: WebAssembly.Instance }>;
+  scope: Record<string, unknown>;
+};
+
+const pageDeps: PageInstantiateDeps = {
+  loadGoRuntime: async () => {
+    await import("./wasm_exec.js"); // side effect: installs globalThis.Go
+  },
+  instantiateWasm: (bytes, imports) => WebAssembly.instantiate(bytes, imports),
+  scope: globalThis as unknown as Record<string, unknown>,
+};
+
 // Instantiate a GOOS=js handler build on this page — mirrors the API's
 // wasm-worker.cjs: snapshot the __forgeHandler* globals, run the program (it
 // registers its api synchronously, then parks on select{}), and pick up the
 // global it added.
-async function instantiateOnPage(bytes: ArrayBuffer, handlerId: string): Promise<BrowserWasmHandler> {
-  await import("./wasm_exec.js"); // side effect: installs globalThis.Go
-  const g = globalThis as Record<string, unknown>;
+export async function instantiateOnPage(
+  bytes: ArrayBuffer,
+  handlerId: string,
+  deps: PageInstantiateDeps = pageDeps,
+): Promise<BrowserWasmHandler> {
+  await deps.loadGoRuntime();
+  const g = deps.scope;
   const Go = g["Go"] as GoConstructor | undefined;
   if (!Go) throw new Error(`wasm ${handlerId}: Go runtime failed to load`);
 
@@ -52,7 +82,7 @@ async function instantiateOnPage(bytes: ArrayBuffer, handlerId: string): Promise
   const before = new Set(handlerGlobals());
 
   const go = new Go();
-  const { instance } = await WebAssembly.instantiate(bytes, go.importObject);
+  const { instance } = await deps.instantiateWasm(bytes, go.importObject);
   void go.run(instance);
 
   const key = handlerGlobals().find((k) => {

@@ -29,13 +29,45 @@ export function isComputeTier(v: unknown): v is ComputeTier {
 // ─── capability detection (Tier B) ──────────────────────────────────────────────
 
 /**
- * Ceiling on the combined blob download before Tier B is withheld entirely
- * (SPEC-RENDERING open question 3's proposal: hide above 200 MB combined).
+ * Per-blob ceiling above which Tier B is withheld entirely — deliberately the
+ * SAME number as the server's MAX_WASM_BYTES (fhr/official-handlers.ts), and
+ * for a stronger version of the same reason. A wasm diff call can't be
+ * interrupted from JS; the server at least runs it in a worker it can kill on
+ * timeout, while browserWasm.ts runs it on the page's main thread, where a hang
+ * freezes the tab. Offering the browser an input the server itself refuses to
+ * attempt would be backwards. SPEC-RENDERING open question 3 floats a 200 MB
+ * combined ceiling; that needs the worker port first (see browserWasm.ts).
  */
-export const TIER_B_MAX_COMBINED_BYTES = 200 * 1024 * 1024;
+export const TIER_B_MAX_BLOB_BYTES = 8 * 1024 * 1024;
 
 /** Tier-S latency past which the reactive "render on your machine?" nudge shows. */
 export const TIER_S_SLOW_MS = 4000;
+
+/** Everything that can legitimately make a file's tier metadata worth asking for. */
+export type MetaNeed = {
+  /** The file has a semantic handler at all — nothing else applies otherwise. */
+  semantic: boolean;
+  /** The tier pill is being engaged; its menu discloses per-tier costs. */
+  pillEngaged?: boolean;
+  /** A client tier (B or L) is selected — it is built out of this metadata. */
+  clientTierActive?: boolean;
+  /** A Tier-S request passed the threshold; the nudge offers alternatives. */
+  serverSlow?: boolean;
+};
+
+/**
+ * Whether a file's compute-tier metadata should be requested YET. Default: no.
+ *
+ * /filediff-meta costs roughly six git subprocess spawns per file, so this is
+ * deliberately as lazy as /filediff itself. A commit or PR touching N semantic
+ * assets — the exact case 3D formats exist for — must not fire N concurrent
+ * requests on page load to populate a quiet pill's dropdown, for rows nobody
+ * expanded and menus nobody opened. Only an actual reader pays.
+ */
+export function needsFileDiffMeta(need: MetaNeed): boolean {
+  if (!need.semantic) return false;
+  return Boolean(need.pillEngaged || need.clientTierActive || need.serverSlow);
+}
 
 /** WebAssembly support probe, parameterized for tests via `scope`. */
 export function browserWasmSupported(scope: object = globalThis): boolean {
@@ -50,9 +82,15 @@ export type TierBAssessment =
 /**
  * Whether Tier B can be offered for this file, and at what honest cost.
  * Capability is detected, never assumed (SPEC-RENDERING §4): the manifest must
- * declare a wasm build, the browser must run wasm, and the combined blob
- * download must be under the ceiling. When unavailable the UI hides/disables
- * the option and shows the reason — it never fails later instead.
+ * declare a wasm build, the browser must run wasm, and each blob must be under
+ * the ceiling. When unavailable the UI hides/disables the option and shows the
+ * reason — it never fails later instead.
+ *
+ * A null size means the blob is genuinely absent on that side (an added,
+ * deleted or renamed file), which is zero bytes to download — the server 404s
+ * rather than reporting null for a size it merely failed to read. Both sides
+ * null is therefore never a real answer, and is refused rather than disclosed
+ * as a free download of nothing.
  */
 export function assessBrowserTier(
   meta: FileDiffMeta,
@@ -64,14 +102,17 @@ export function assessBrowserTier(
   if (!meta.wasmAvailable) {
     return { available: false, reason: `handler '${meta.handlerId}' publishes no wasm build` };
   }
-  const downloadBytes = (meta.baseSize ?? 0) + (meta.headSize ?? 0);
-  if (downloadBytes > TIER_B_MAX_COMBINED_BYTES) {
+  if (meta.baseSize === null && meta.headSize === null) {
+    return { available: false, reason: "the size of this file's blobs is unknown" };
+  }
+  const oversized = Math.max(meta.baseSize ?? 0, meta.headSize ?? 0);
+  if (oversized > TIER_B_MAX_BLOB_BYTES) {
     return {
       available: false,
-      reason: `blobs are too large to compute in the browser (${formatBytes(downloadBytes)} combined)`,
+      reason: `this file is too large to compute in the browser (${formatBytes(oversized)}, limit ${formatBytes(TIER_B_MAX_BLOB_BYTES)} per revision)`,
     };
   }
-  return { available: true, downloadBytes };
+  return { available: true, downloadBytes: (meta.baseSize ?? 0) + (meta.headSize ?? 0) };
 }
 
 /** "84 MB", "1.2 GB" — for honest download-cost disclosure. */
@@ -122,15 +163,23 @@ export function buildMismatch(meta: FileDiffMeta): BuildMismatch | null {
 
 /**
  * The copyable `forge diff --web` command for Tier L (SPEC-RENDERING §5; the
- * flag shipped in forge P2). SHAs are abbreviated for paste-friendliness; git
- * resolves any unambiguous prefix. With no base (added file / root commit) the
- * range is dropped and forge diffs against the working tree.
+ * flag shipped in forge P2). With no base (added file / root commit) the range
+ * is dropped and forge diffs against the working tree.
+ *
+ * Only full SHAs are abbreviated: git resolves any unambiguous SHA prefix, but
+ * slicing anything else produces a DIFFERENT ref (a "claude/hub-66" that either
+ * errors or, worse, resolves), so any other revision is emitted verbatim.
  */
 export function forgeDiffCommand(path: string, baseSha: string | null, headSha: string): string {
   // Quote the path only when it needs it, so the common case stays clean.
   const p = /[\s"'\\$`]/.test(path) ? `"${path.replace(/(["\\$`])/g, "\\$1")}"` : path;
   if (!baseSha) return `forge diff --web ${p}`;
-  return `forge diff --web ${p} ${baseSha.slice(0, 12)}..${headSha.slice(0, 12)}`;
+  return `forge diff --web ${p} ${abbreviateRev(baseSha)}..${abbreviateRev(headSha)}`;
+}
+
+/** A full SHA shortened for paste-friendliness; anything else left alone. */
+export function abbreviateRev(rev: string): string {
+  return /^[0-9a-f]{40}$/.test(rev) ? rev.slice(0, 12) : rev;
 }
 
 // ─── sticky preference (per-format + global) ────────────────────────────────────

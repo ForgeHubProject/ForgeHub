@@ -3,11 +3,11 @@ import { handlerWasmUrl } from "../fhr/manifest.js";
 
 // Same-origin proxy + cache for official FHR handler *wasm builds*, the Tier-B
 // (in-browser compute) sibling of the /renderers bundle proxy. The web app
-// can't reliably fetch the wasm straight from GitHub releases: those are served
-// as application/octet-stream, which breaks WebAssembly.instantiateStreaming's
-// MIME check, and the manifest may point anywhere (self-hosted registries)
-// without CORS headers. So ForgeHub fetches the build once and re-serves it
-// with the correct application/wasm type (SPEC-RENDERING §4, Tier B).
+// can't reliably fetch the wasm straight from GitHub releases: the manifest may
+// point anywhere (self-hosted registries) without CORS headers, and the browser
+// must be able to trust that what it executes is an *official* build. So
+// ForgeHub fetches the build once and re-serves it same-origin, typed
+// application/wasm (SPEC-RENDERING §4, Tier B).
 //
 // Trust model is identical to /renderers and the server's own wasm runner:
 // ONLY handlers the official manifest declares a wasm build for are served —
@@ -17,13 +17,30 @@ import { handlerWasmUrl } from "../fhr/manifest.js";
 // `forge-handler-<id>.wasm` release convention.
 const WASM_BASE = process.env["FHR_WASM_BASE"];
 
-const HANDLER_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+// Length-bounded: the id is unauthenticated attacker input and becomes a cache
+// key, so it can't be an arbitrarily long string.
+const HANDLER_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // A full wasm asset filename, e.g. "forge-handler-gltf-scene.wasm".
-const WASM_ASSET_RE = /^forge-handler-[a-z0-9][a-z0-9-]*\.wasm$/;
+const WASM_ASSET_RE = /^forge-handler-[a-z0-9][a-z0-9-]{0,63}\.wasm$/;
 const CACHE_TTL_MS = 60 * 60 * 1000;
+// Entries hold whole wasm binaries and are keyed by unauthenticated input, so
+// the map is bounded and evicts oldest-first. The official manifest declares a
+// handful of handlers; anything beyond that is noise, not working set.
+const CACHE_MAX_ENTRIES = 16;
 
 type CacheEntry = { bytes: Buffer | null; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
+
+// Map iteration is insertion-ordered, so the first key is the oldest write.
+function cacheStore(handlerId: string, entry: CacheEntry): void {
+  cache.delete(handlerId);
+  cache.set(handlerId, entry);
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 /** Test-only: drop the in-memory cache so a test's stubbed fetch is observed. */
 export function __clearHandlerWasmCache(): void {
@@ -78,7 +95,7 @@ export async function handlerWasmRoutes(app: FastifyInstance) {
         }
       }
       bytes = url ? await fetchWasmAsset(url) : null;
-      cache.set(handlerId, { bytes, fetchedAt: Date.now() });
+      cacheStore(handlerId, { bytes, fetchedAt: Date.now() });
     }
 
     if (bytes === null) {
