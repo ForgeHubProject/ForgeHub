@@ -5,7 +5,7 @@ import type {
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, RefCompareResult, Release,
-  ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  ReleaseAsset, Repo, RequestedReviewer, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
   TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
@@ -485,11 +485,58 @@ export async function createPull(
   fromBranch: string,
   toBranch?: string,
   description?: string,
+  draft?: boolean,
 ): Promise<PullRequest> {
   return req(`/repos/${handle}/${repoName}/pulls`, {
     method: "POST",
     token,
-    body: JSON.stringify({ title, fromBranch, toBranch, description }),
+    body: JSON.stringify({ title, fromBranch, toBranch, description, draft }),
+  });
+}
+
+/** Leave draft (issue #82): flips isDraft off. Author-or-owner only; one-way. */
+export async function markPullReady(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ id: string; number: number; state: string; isDraft: boolean }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/ready`, {
+    method: "POST",
+    token,
+  });
+}
+
+/**
+ * Request (or re-request) reviews from repo members (issue #82). Re-requesting
+ * someone who already reviewed flips them back to "requested" and re-notifies.
+ */
+export async function requestReviewers(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  handles: string[],
+): Promise<{ requestedReviewers: RequestedReviewer[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/requested-reviewers`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ handles }),
+  });
+}
+
+/** Withdraw review requests (issue #82). */
+export async function removeRequestedReviewers(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  handles: string[],
+): Promise<{ requestedReviewers: RequestedReviewer[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/requested-reviewers`, {
+    method: "DELETE",
+    token,
+    body: JSON.stringify({ handles }),
   });
 }
 

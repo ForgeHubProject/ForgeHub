@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { listPulls } from "../../../api";
 import type { PullRequest } from "../../../types";
 import { Button, EmptyState, RelativeTime, Skeleton, cx } from "../../../ui";
-import { BranchFlow, GitPullRequestIcon, PRStateIcon, type PRState } from "./prShared";
+import { BranchFlow, DraftBadge, GitPullRequestIcon, PRStateIcon, type PRState } from "./prShared";
 
 type FilterKey = "open" | "merged" | "closed";
 
@@ -131,13 +131,14 @@ export function PullsList({ token, handle, repoName }: { token: string; handle: 
                   className="w-full text-left flex items-start gap-3 px-4 py-3 hover:bg-fh-surface-muted/60 transition-colors"
                 >
                   <span className="mt-0.5">
-                    <PRStateIcon state={pr.state} />
+                    <PRStateIcon state={pr.state} draft={pr.isDraft} />
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2 flex-wrap">
                       <span className="text-fh-base font-semibold text-fh-fg hover:text-fh-accent-fg truncate">
                         {pr.title}
                       </span>
+                      {pr.isDraft && pr.state === "open" && <DraftBadge />}
                     </div>
                     <p className="mt-1 text-fh-sm text-fh-fg-muted">
                       <span className="text-fh-fg-subtle">#{pr.number}</span>{" "}
