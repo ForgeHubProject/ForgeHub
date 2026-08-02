@@ -696,60 +696,45 @@ async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promis
 }
 
 /**
- * How far back a per-path history read may walk. Without a pathspec `git log`
- * stops after `skip + perPage` commits, so a page costs what it returns. With
- * one it keeps walking until it has found that many *matching* commits, so a
- * rare or unknown path would scan the whole DAG — on a route that is
- * unauthenticated for public repos. Capping the *position* of the oldest commit
- * considered keeps a path-filtered page as cheap as an unfiltered one.
+ * Wall-clock bound on one per-path history read, in milliseconds. Override with
+ * `PATH_HISTORY_TIMEOUT_MS`.
+ *
+ * Without a pathspec `git log` stops after `skip + perPage` commits, so a page
+ * costs what it returns. With one it keeps walking until it has found that many
+ * *matching* commits, so a rare or unknown path can walk the whole DAG — on a
+ * route that is unauthenticated for public repos. That is the thing to contain.
+ *
+ * It is bounded by *time* rather than by commit count on purpose. Every count
+ * bound we tried buys its cheapness by changing which commit git names for a
+ * path, and a header commit that is fast and wrong is worse than one that is
+ * occasionally missing. A timeout cannot produce a wrong answer: the read either
+ * finishes and is exactly what `git log <ref> -- <path>` says, or it is killed
+ * and returns nothing.
  */
-export const PATH_HISTORY_SCAN_LIMIT = 2000;
+export const PATH_HISTORY_DEFAULT_TIMEOUT_MS = 5000;
 
-/**
- * Window tried before {@link PATH_HISTORY_SCAN_LIMIT}. Enumerating the newest N
- * commits costs an N-commit walk, and the overwhelmingly common read — the code
- * tab asking for the newest commit touching the directory on screen — is
- * answered within a handful of commits. Starting small keeps browsing a
- * thousand-commit repo from paying a thousand-commit walk per navigation; the
- * full limit is only enumerated when the small window came up short of a page.
- */
-const PATH_HISTORY_FAST_WINDOW = 256;
-
-/** Run a git command with `input` fed to its stdin. */
-function gitWithStdin(storageKey: string, args: string[], input: string): Promise<string> {
-  const cwd = bareRepoPathFromKey(storageKey);
-  return new Promise((resolve, reject) => {
-    const child = execFileCb("git", args, { cwd, maxBuffer: MAX }, (err, stdout) =>
-      err ? reject(err) : resolve(stdout.trim()),
-    );
-    child.stdin?.on("error", reject);
-    child.stdin?.end(input);
-  });
+/** Effective per-path read timeout, read per call so it can be set at runtime. */
+function pathHistoryTimeoutMs(): number {
+  const raw = Number(process.env["PATH_HISTORY_TIMEOUT_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : PATH_HISTORY_DEFAULT_TIMEOUT_MS;
 }
 
 /**
- * Path-filtered commit lines whose cost is capped by *position*: no commit older
- * than the newest {@link PATH_HISTORY_SCAN_LIMIT} is ever considered.
+ * Path-filtered commit lines: exactly what `git log <ref> -- <pathspec>` names,
+ * bounded by {@link PATH_HISTORY_DEFAULT_TIMEOUT_MS} of wall clock.
  *
- * A position cap and an ancestry exclusion are different things, and git has no
- * "stop after N commits walked" flag on `git log`. `^<sha>` prunes only that
- * commit and *its ancestors* — one lineage — so on any repo with a second long
- * lineage (a long-lived branch merged at the tip, a merged fork, an unrelated
- * history) every commit past the cap that is not an ancestor of the boundary
- * stays fully walkable, and the cap does nothing. So enumerate the newest N
- * commits and filter exactly those: `rev-list --max-count=N` stops after N
- * commits regardless of shape, and `log --no-walk` considers precisely the
- * commits handed to it with no ancestry traversal at all.
+ * This is a plain walk, so git's own history simplification applies: at a merge,
+ * git follows a parent the tree is TREESAME to and prunes the rest, which is why
+ * a change that was merged away (a merge resolved in favour of the other side)
+ * is not reported for the path — git and GitHub both name the commit whose
+ * content is actually in the tree. Nothing here may substitute a cheaper rule
+ * for that one; `RepoCodeTab` reads element 0 of this list as the directory's
+ * header commit, and any rule that puts a different commit there names a commit
+ * whose change never landed.
  *
- * Two flag facts this depends on, both verified against git 2.43:
- *  - `--max-count`/`-n` *cancels* `--no-walk` (git resumes traversing), so the
- *    page size is applied here in JS, never handed to `git log`.
- *  - `--skip` is safe alongside `--no-walk` and only indexes into the matches.
- *
- * Within the window a commit is reported when it is not TREESAME to any parent,
- * so a side branch merged into the window contributes its own path-touching
- * commits rather than being pruned away by first-parent simplification. That is
- * a superset of the walking form's output, and still position-capped.
+ * `--` disambiguates the pathspec, so a path that looks like a ref is safe. A
+ * walk killed at the timeout rejects, which {@link listCommits} turns into an
+ * empty page.
  */
 async function pathFilteredCommitLines(
   storageKey: string,
@@ -759,38 +744,13 @@ async function pathFilteredCommitLines(
   perPage: number,
   format: string,
 ): Promise<string[]> {
-  // A window of W commits can never yield more than W matches, so a page that
-  // starts beyond the fast window has nothing to gain from trying it first.
-  const windows = skip + perPage > PATH_HISTORY_FAST_WINDOW
-    ? [PATH_HISTORY_SCAN_LIMIT]
-    : [PATH_HISTORY_FAST_WINDOW, PATH_HISTORY_SCAN_LIMIT];
-
-  for (const windowSize of windows) {
-    const listed = await git(storageKey, ["rev-list", `--max-count=${windowSize}`, ref]);
-    const shas = listed.split("\n").filter(Boolean);
-    if (!shas.length) return [];
-    const out = await gitWithStdin(
-      storageKey,
-      [
-        "log", "--stdin", "--no-walk=unsorted", `--skip=${skip}`, `--format=${format}`,
-        // The `--` disambiguates the pathspec, so a path that looks like a ref
-        // is safe.
-        "--", pathspec,
-      ],
-      shas.join("\n") + "\n",
-    );
-    const lines = out.split("\n").filter(Boolean);
-    // Widening can only help when this window was both short of a full page and
-    // not already the whole history (or the hard limit).
-    if (
-      lines.length >= perPage ||
-      shas.length < windowSize ||
-      windowSize === PATH_HISTORY_SCAN_LIMIT
-    ) {
-      return lines.slice(0, perPage);
-    }
-  }
-  return [];
+  const cwd = bareRepoPathFromKey(storageKey);
+  const { stdout } = await execFile(
+    "git",
+    ["log", ref, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
+    { cwd, maxBuffer: MAX, timeout: pathHistoryTimeoutMs(), killSignal: "SIGKILL" },
+  );
+  return stdout.trim().split("\n").filter(Boolean);
 }
 
 export async function listCommits(
