@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { loadActiveFormats } from "./forge-formats.js";
+import { loadHandlerPins } from "./forge-handlers.js";
 import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 
 const execFile = promisify(execFileCb);
@@ -162,6 +163,31 @@ const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forg
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
 export async function activeFormatsAtCommit(storageKey: string, commitIsh: string): Promise<Set<string>> {
   return loadActiveFormats(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+// The repo's handler-build pins (.forge/handlers) at a commit, for surfacing
+// build skew between a client compute tier and the server's official build.
+export async function handlerPinsAtCommit(storageKey: string, commitIsh: string): Promise<Map<string, string | null>> {
+  return loadHandlerPins(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+/**
+ * Size in bytes of a file's blob at a commit, or null when the path is not in
+ * that commit's tree. Answered without materializing the blob, so a client can
+ * be told the honest download cost of browser-side compute before it fetches
+ * anything.
+ *
+ * `ls-tree -l` rather than `cat-file -s` on purpose: it exits 0 with no output
+ * for an absent path, so "the blob isn't there" (an added/deleted/renamed file
+ * — legitimately zero bytes to download) stays distinguishable from a git
+ * failure, which throws. "Cost unknown" must never be reported as "free".
+ */
+export async function blobSizeAtCommit(storageKey: string, commitIsh: string, filePath: string): Promise<number | null> {
+  const out = await git(storageKey, ["ls-tree", "-l", commitIsh, "--", filePath]);
+  // "<mode> blob <sha> <size>\t<path>" — trees and submodules carry "-" and are
+  // not blobs to download either way.
+  const m = /^\S+ blob \S+ +(\d+)\t/.exec(out);
+  return m ? Number(m[1]) : null;
 }
 
 function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {

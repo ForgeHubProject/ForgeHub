@@ -1,11 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import type { FileDiffViewerProps } from "../fileDiffViewerTypes";
 import {
-  fetchRawBlob, getFileSemanticDiff, isFormatNotEnabled, isFormatNotSupported,
-  type FormatNotEnabled, type SemanticFileDiff,
+  ApiError,
+  fetchRawBlob,
+  getFileSemanticDiff,
+  isFormatNotEnabled,
+  isFormatNotSupported,
+  type FileDiffMeta,
+  type FormatNotEnabled,
+  type SemanticFileDiff,
 } from "../../api";
 import { loadRendererBundle, type RendererInstance } from "../../lib/rendererBundle";
 import { notEnabledScopeKey } from "../../lib/notEnabledFormats";
+import { browserWasmDiff } from "../../lib/browserWasm";
+import {
+  TIER_S_SLOW_MS,
+  assessBrowserTier,
+  needsFileDiffMeta,
+  type ComputeTier,
+} from "../../lib/computeTier";
+import {
+  BrowserComputeGate,
+  BuildMismatchBanner,
+  LocalHandoffPanel,
+  SlowServerNudge,
+  useFileDiffMeta,
+} from "./computeTierUi";
 import { resolveBaseFileDiffViewer } from "../fileDiffViewerRegistry";
 import { FormatNotEnabledCard } from "./FormatNotEnabledCard";
 
@@ -24,10 +44,18 @@ type RendererBlobs = { base?: BlobRef; head?: BlobRef };
  * mount() renderer contract and StructuredDiff; all format knowledge lives in
  * the renderer bundle and the API's manifest.
  *
- * It fetches the server-computed StructuredDiff for the blob pair, loads the
- * format's FHR renderer bundle by diff.handlerId, and mounts it — replacing the
- * plain text/binary diff for that file. The rich native workspace is unaffected;
- * this upgrades the commit/PR file view only.
+ * The diff can be computed by any tier (issue #66 P4, SPEC-RENDERING §4); the
+ * tier arrives from the diff-header pill via `computeTier`:
+ *
+ *   S — server (default, canonical): fetch the server-computed StructuredDiff,
+ *       exactly the pre-P4 path. If the request drags past the latency
+ *       threshold, a nudge offers the client tiers instead of a bare spinner.
+ *   B — browser: after an explicit honest-cost consent, download BOTH raw
+ *       blobs, run the official handler's wasm build in this tab, and mount
+ *       the same renderer on the result. Capability-gated; build skew against
+ *       the repo's .forge/handlers pin is bannered loudly, never silent.
+ *   L — local: no compute at all — a copyable `forge diff --web` command hands
+ *       the diff to the user's own forge; zero bytes leave ForgeHub.
  *
  * Graceful degradation splits in two (#73):
  * - "format-not-enabled" (200): an official handler EXISTS, the repo just
@@ -39,15 +67,27 @@ type RendererBlobs = { base?: BlobRef; head?: BlobRef };
  *   CTA. Only genuine failures (500, network) surface the error line.
  *
  * The renderer's optional geometry/"View in 3D" scene needs the actual file
- * bytes, so we also fetch the base/head raw blobs (auth-aware) and hand the
- * renderer object URLs for them — the renderer fetch()es those without an
- * Authorization header. Object URLs are revoked on teardown so they don't leak.
+ * bytes, so the server path also fetches the base/head raw blobs (auth-aware)
+ * and hands the renderer object URLs for them; the browser path reuses the very
+ * blobs it computed from. Object URLs are revoked on teardown so they don't
+ * leak.
  */
-export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffViewerProps) {
+export function FhrFileDiffViewer({
+  file,
+  repoBase,
+  headRef,
+  token,
+  computeTier,
+  onComputeTierChange,
+}: FileDiffViewerProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const instRef = useRef<RendererInstance | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState("");
+  // Tier-S request in flight past the threshold → show the reactive nudge.
+  const [slow, setSlow] = useState(false);
+  // Tier B computes only after the honest-cost gate is clicked (per mount).
+  const [browserConsented, setBrowserConsented] = useState(false);
   const [notEnabled, setNotEnabled] = useState<FormatNotEnabled | null>(null);
 
   const path = file.status === "deleted" ? file.oldPath : file.newPath;
@@ -55,7 +95,40 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
   // repoBase is "/handle/repo"
   const [, handle, repoName] = repoBase.split("/");
 
+  // Uncontrolled fallback so the nudge still works where no header pill owns
+  // the tier; when a parent passes computeTier, its value wins.
+  const [localTier, setLocalTier] = useState<ComputeTier>("server");
+  const tier = computeTier ?? localTier;
+  const changeTier = (t: ComputeTier) => {
+    setLocalTier(t);
+    onComputeTierChange?.(t);
+  };
+
+  // Shared with the header pill (cached — one request per blob pair): SHAs and
+  // sizes for tiers B/L, capability detection, and the build-pin check. Asked
+  // for only when something actually reads it: the default Tier S needs none of
+  // it unless the request drags long enough for the nudge to offer alternatives.
+  const meta = useFileDiffMeta(
+    token,
+    repoBase,
+    path,
+    headRef,
+    needsFileDiffMeta({ semantic: true, clientTierActive: tier !== "server", serverSlow: slow }),
+  );
+
+  const browserReady =
+    tier === "browser" && browserConsented && meta !== null && assessBrowserTier(meta).available;
+
+  // Read by the effect through a ref so meta's null→loaded transition doesn't
+  // re-run (and re-fetch) a server-tier diff that never needed it; the browser
+  // tier is already re-triggered by `browserReady`, which implies meta loaded.
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
+
   useEffect(() => {
+    // Tier L renders a hand-off panel, no compute. Tier B waits for consent.
+    if (tier === "local" || (tier === "browser" && !browserReady)) return;
+
     let cancelled = false;
     // Object URLs created for this mount; revoked on teardown so they don't leak.
     const objectUrls: string[] = [];
@@ -65,28 +138,68 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
     };
     setStatus("loading");
     setMessage("");
+    setSlow(false);
     setNotEnabled(null);
+    // The nudge replaces the spinner only for the server tier — a slow browser
+    // compute is the user's own machine, with its cost already consented to.
+    const slowTimer =
+      tier === "server" ? window.setTimeout(() => setSlow(true), TIER_S_SLOW_MS) : undefined;
 
     (async () => {
       try {
-        const diff = await getFileSemanticDiff(token, handle, repoName, path, headRef);
-        if (cancelled) return;
-        // Official handler exists but the repo hasn't opted the format in —
-        // show the actionable card instead of a silent fallback (#73).
-        if (isFormatNotEnabled(diff)) {
-          setNotEnabled(diff);
-          setStatus("not-enabled");
-          return;
+        let diff: SemanticFileDiff;
+        let blobs: RendererBlobs;
+
+        const meta = metaRef.current;
+        if (tier === "browser" && meta) {
+          // Tier B: both blobs down, wasm computes here. The blobs double as
+          // the renderer's geometry sources — no second download.
+          const { base, head } = await loadTierBBlobs(token, handle, repoName, path, meta);
+          if (cancelled) return revokeAll();
+          const [baseBytes, headBytes] = await Promise.all([
+            base ? base.arrayBuffer().then((b) => new Uint8Array(b)) : new Uint8Array(0),
+            head ? head.arrayBuffer().then((b) => new Uint8Array(b)) : new Uint8Array(0),
+          ]);
+          if (cancelled) return;
+          const computed = await browserWasmDiff(meta.handlerId, baseBytes, headBytes);
+          diff = { ...computed, handlerId: meta.handlerId, path, baseSha: meta.baseSha, headSha: meta.headSha };
+          blobs = {};
+          if (base) {
+            const url = URL.createObjectURL(base);
+            objectUrls.push(url);
+            blobs.base = { url, size: base.size };
+          }
+          if (head) {
+            const url = URL.createObjectURL(head);
+            objectUrls.push(url);
+            blobs.head = { url, size: head.size };
+          }
+        } else {
+          // Tier S: the canonical server-computed diff (the record for review).
+          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef);
+          if (cancelled) return revokeAll();
+          // Official handler exists but the repo hasn't opted the format in —
+          // show the actionable card instead of a silent fallback (#73). Only
+          // the server tier can see this: /filediff-meta applies the same
+          // opt-in gate and 404s, so a client tier never gets this far.
+          if (isFormatNotEnabled(result)) {
+            revokeAll();
+            setNotEnabled(result);
+            setStatus("not-enabled");
+            return;
+          }
+          diff = result;
+          // Best-effort: the change tree renders even if the blobs are missing;
+          // only the on-demand geometry scene needs them.
+          blobs = await loadRendererBlobs(token, handle, repoName, path, diff, objectUrls);
         }
+        if (cancelled) return revokeAll();
+
         if (!diff.changes || diff.changes.length === 0) {
+          revokeAll();
           setStatus("empty");
           return;
         }
-
-        // Best-effort: the change tree renders even if the blobs are missing;
-        // only the on-demand geometry scene needs them.
-        const blobs = await loadRendererBlobs(token, handle, repoName, path, diff, objectUrls);
-        if (cancelled) return revokeAll();
 
         const bundle = await loadRendererBundle(diff.handlerId);
         if (cancelled || !hostRef.current) return revokeAll();
@@ -101,25 +214,33 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
         setStatus("ready");
       } catch (e) {
         if (cancelled) return;
-        // The repo hasn't opted this format in (no handler / not enabled): show
-        // exactly what the file would have shown without semantic support,
-        // rather than an error.
-        if (isFormatNotSupported(e)) {
+        // No official handler for this extension at all (404 — the not-enabled
+        // case answers 200 and is handled above): show exactly what the file
+        // would have shown without semantic support, rather than an error.
+        // Server tier only — a 404 reaching here from a
+        // browser compute cannot mean that (filediff-meta already answered 200,
+        // which is the same gate), so silently swapping in a raw text diff
+        // would hide a real failure behind a plausible-looking one.
+        if (tier === "server" && isFormatNotSupported(e)) {
           setStatus("fallback");
           return;
         }
         setMessage(e instanceof Error ? e.message : String(e));
         setStatus("error");
+      } finally {
+        if (slowTimer !== undefined) window.clearTimeout(slowTimer);
+        if (!cancelled) setSlow(false);
       }
     })();
 
     return () => {
       cancelled = true;
+      if (slowTimer !== undefined) window.clearTimeout(slowTimer);
       instRef.current?.unmount();
       instRef.current = null;
       revokeAll();
     };
-  }, [token, handle, repoName, path, headRef]);
+  }, [token, handle, repoName, path, headRef, tier, browserReady]);
 
   // 404 fallback: render the base (text/binary) viewer this file would have used
   // without semantic support — no extra chrome, so it looks identical.
@@ -140,9 +261,53 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
     );
   }
 
+  // Tier L: the forge hand-off (needs meta for the SHAs in the command).
+  if (tier === "local") {
+    return meta ? (
+      <LocalHandoffPanel meta={meta} />
+    ) : (
+      <div className="px-4 py-3">
+        <p className="text-sm text-gh-muted italic">Resolving revisions…</p>
+      </div>
+    );
+  }
+
+  // Tier B, pre-compute: capability + honest-cost gate.
+  if (tier === "browser" && !browserReady) {
+    if (!meta) {
+      return (
+        <div className="px-4 py-3">
+          <p className="text-sm text-gh-muted italic">Checking browser-compute capability…</p>
+        </div>
+      );
+    }
+    const assessment = assessBrowserTier(meta);
+    if (!assessment.available) {
+      return (
+        <div className="px-4 py-3">
+          <p className="text-sm text-gh-muted italic">
+            Browser compute unavailable: {assessment.reason}. Switch the tier pill to use the server
+            diff.
+          </p>
+        </div>
+      );
+    }
+    return <BrowserComputeGate meta={meta} onCompute={() => setBrowserConsented(true)} />;
+  }
+
   return (
     <div className="px-4 py-3">
-      {status === "loading" && <p className="text-sm text-gh-muted italic">Computing semantic diff…</p>}
+      {/* Tier B renders against whatever build the proxy serves — if the repo
+          pins a different one, that skew stays visible above the result. */}
+      {tier === "browser" && meta && status !== "loading" && <BuildMismatchBanner meta={meta} />}
+      {status === "loading" &&
+        (tier === "server" && slow ? (
+          <SlowServerNudge meta={meta} onSwitch={changeTier} />
+        ) : (
+          <p className="text-sm text-gh-muted italic">
+            {tier === "browser" ? "Computing in your browser…" : "Computing semantic diff…"}
+          </p>
+        ))}
       {status === "empty" && <p className="text-sm text-gh-muted italic">No semantic changes detected.</p>}
       {status === "error" && (
         <p className="text-sm text-gh-muted italic">Semantic diff unavailable: {message}</p>
@@ -150,6 +315,50 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
       <div ref={hostRef} style={{ display: status === "ready" ? "block" : "none" }} />
     </div>
   );
+}
+
+/** The /rawblob fetch, injectable so the tier-B blob pairing is unit-testable. */
+export type RawBlobFetcher = typeof fetchRawBlob;
+
+/**
+ * Fetch the blob pair Tier B computes from. Each side is independent and, when
+ * it is genuinely absent, empty rather than fatal: an ADDED file has a real
+ * parent SHA but no blob in it, a DELETED file has no blob at head, and a
+ * RENAME leaves the base side empty at the new path. /rawblob 404s in all three
+ * cases, and the whole compute must not collapse into the plain-text fallback
+ * because of it — the server's own /filediff substitutes an empty buffer
+ * (readBlobAsBuffer null → Buffer.alloc(0)) for exactly this reason, and Tier B
+ * has to agree with it or the two tiers disagree on what the diff even is.
+ *
+ * The declared size is what says "absent": null means the blob is not in that
+ * tree (the server 404s rather than reporting null for a size it failed to
+ * read), so the fetch is skipped entirely. A 404 is still tolerated as a
+ * belt-and-braces second signal; any other failure is a real error and
+ * propagates. Both sides absent is not a diffable pair and throws.
+ */
+export async function loadTierBBlobs(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  path: string,
+  meta: Pick<FileDiffMeta, "baseSha" | "headSha" | "baseSize" | "headSize">,
+  fetchBlob: RawBlobFetcher = fetchRawBlob,
+): Promise<{ base: Blob | null; head: Blob | null }> {
+  const side = async (sha: string | null, size: number | null): Promise<Blob | null> => {
+    if (!sha || size === null) return null;
+    try {
+      return await fetchBlob(token, handle, repoName, path, sha);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  };
+  const [base, head] = await Promise.all([
+    side(meta.baseSha, meta.baseSize),
+    side(meta.headSha, meta.headSize),
+  ]);
+  if (!base && !head) throw new Error("File not found at either revision");
+  return { base, head };
 }
 
 /**
