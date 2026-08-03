@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { ingestCommitRange } from "./ingest.js";
 import { emitHeadPushedForPush } from "./timeline-service.js";
+import { syncCodeownersReviewersForPush } from "./codeowners-service.js";
 import { triggerWorkflowsForPrSync } from "./ci/trigger.js";
 import { emitPushEvents } from "./push-events.js";
 import { installPreReceiveHook } from "./git-hooks.js";
@@ -62,7 +63,8 @@ export async function preparePushProtection(
 /**
  * After a receive-pack completes, diff branch tips against `shasBefore` and, for
  * every branch whose SHA changed or is new, fire (best-effort, non-blocking):
- * artifact ingestion, `head_pushed` PR events, outbound `push` webhooks + push CI,
+ * artifact ingestion, `head_pushed` PR events, CODEOWNERS reviewer requests,
+ * outbound `push` webhooks + push CI,
  * and `pull_request` CI re-runs for open PRs whose head moved. Identical to the
  * git-http post-receive block so both transports are indistinguishable downstream.
  */
@@ -95,6 +97,11 @@ export async function runPostReceiveEffects(
     }
     emitHeadPushedForPush(repoId, actorId, changed).catch((err: unknown) =>
       app.log.error({ err }, "post-push head_pushed events failed"),
+    );
+    // CODEOWNERS auto-review-requests for open PRs whose head just moved (issue
+    // #89) — a new commit can touch newly-owned paths.
+    syncCodeownersReviewersForPush(repoId, actorId, changed).catch((err: unknown) =>
+      app.log.error({ err }, "post-push CODEOWNERS reviewer requests failed"),
     );
     if (repo.storageKey) {
       const storageKey = repo.storageKey;

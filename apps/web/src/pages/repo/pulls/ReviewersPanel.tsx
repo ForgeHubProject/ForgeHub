@@ -107,6 +107,12 @@ export function ReviewersPanel({
               <Link to={`/${row.handle}`} className="text-fh-sm text-fh-fg hover:text-fh-accent-fg truncate no-underline">
                 {row.handle}
               </Link>
+              {/* Provenance for an automatic request (issue #89). */}
+              {row.request?.viaCodeowners && (
+                <Tooltip label="Requested automatically by a CODEOWNERS rule">
+                  <span className="text-fh-xs text-fh-fg-subtle font-mono shrink-0">CODEOWNERS</span>
+                </Tooltip>
+              )}
               <span className="ml-auto inline-flex items-center gap-1">
                 {/* Re-request: puts a reviewer who already responded back in the queue. */}
                 {showPicker && row.request?.state === "reviewed" && (
