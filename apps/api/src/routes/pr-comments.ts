@@ -7,6 +7,7 @@ import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 import { recordEvent } from "../timeline-service.js";
 import { resolveBranchSha } from "../git-utils.js";
 import { isReviewStale } from "../review-summary.js";
+import { deleteSubjectReactions, reactionRollupFor, reactionRollups, type ReactionRollup } from "../reactions-service.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -16,13 +17,16 @@ function formatPRComment(comment: {
   author: { handle: string };
   createdAt: Date;
   updatedAt: Date;
-}) {
+}, rollup?: ReactionRollup) {
   return {
     id: comment.id,
     body: comment.body,
     author: comment.author.handle,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
+    // Emoji reactions (#90) — empty when no rollup was fetched (new comments).
+    reactions: rollup?.reactions ?? {},
+    viewerReacted: rollup?.viewerReacted ?? [],
   };
 }
 
@@ -67,7 +71,7 @@ function formatReviewComment(comment: {
   review?: { state: string } | null;
   createdAt: Date;
   updatedAt: Date;
-}) {
+}, rollup?: ReactionRollup) {
   return {
     id: comment.id,
     reviewId: comment.reviewId,
@@ -82,6 +86,9 @@ function formatReviewComment(comment: {
     pending: comment.review ? comment.review.state === "PENDING" : false,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
+    // Emoji reactions (#90) — empty when no rollup was fetched (new comments).
+    reactions: rollup?.reactions ?? {},
+    viewerReacted: rollup?.viewerReacted ?? [],
   };
 }
 
@@ -195,7 +202,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
         include: { author: { select: { handle: true } } },
       });
 
-      return { comments: comments.map(formatPRComment) };
+      // Reactions ride along, batched: ONE grouped query for the whole list (#90).
+      const rollups = await reactionRollups("PR_COMMENT", comments.map((c) => c.id), userId);
+      return { comments: comments.map((c) => formatPRComment(c, rollups.get(c.id))) };
     },
   );
 
@@ -288,7 +297,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
         body: updated.body,
       }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr comment edit)"));
 
-      return formatPRComment(updated);
+      return formatPRComment(updated, await reactionRollupFor("PR_COMMENT", comment.id, userId));
     },
   );
 
@@ -315,6 +324,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
       }
 
       await prisma.pullRequestComment.delete({ where: { id: comment.id } });
+
+      // Explicit reaction sweep — the polymorphic subject FK can't cascade (#90).
+      await deleteSubjectReactions([{ subjectType: "PR_COMMENT", subjectIds: [comment.id] }]);
 
       return reply.status(204).send();
     },
@@ -450,9 +462,10 @@ export async function prCommentRoutes(app: FastifyInstance) {
       if (!review) return reply.status(404).send({ error: "Review not found" });
 
       const headSha = await headShaOf(ctx.repo, ctx.pr);
+      const rollups = await reactionRollups("PR_REVIEW_COMMENT", review.comments.map((c) => c.id), userId);
       return {
         ...formatReview(review, { commentCount: review.comments.length, currentHeadSha: headSha }),
-        comments: review.comments.map(formatReviewComment),
+        comments: review.comments.map((c) => formatReviewComment(c, rollups.get(c.id))),
       };
     },
   );
@@ -548,7 +561,15 @@ export async function prCommentRoutes(app: FastifyInstance) {
         return reply.status(422).send({ error: "Only PENDING reviews can be deleted" });
       }
 
+      // The review's draft comments cascade with it; sweep their reactions (the
+      // author may have reacted to their own drafts — no one else can see them).
+      const commentIds = (
+        await prisma.pullRequestReviewComment.findMany({ where: { reviewId: review.id }, select: { id: true } })
+      ).map((c) => c.id);
+
       await prisma.pullRequestReview.delete({ where: { id: review.id } });
+
+      await deleteSubjectReactions([{ subjectType: "PR_REVIEW_COMMENT", subjectIds: commentIds }]);
 
       return reply.status(204).send();
     },
@@ -585,7 +606,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
         },
       });
 
-      return { comments: comments.map(formatReviewComment) };
+      // Reactions ride along, batched: ONE grouped query for the whole list (#90).
+      const rollups = await reactionRollups("PR_REVIEW_COMMENT", comments.map((c) => c.id), userId);
+      return { comments: comments.map((c) => formatReviewComment(c, rollups.get(c.id))) };
     },
   );
 
@@ -700,7 +723,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
         body: updated.body,
       }).catch((err) => request.log.error({ err }, "syncBodyReferences (pr review comment edit)"));
 
-      return formatReviewComment(updated);
+      return formatReviewComment(updated, await reactionRollupFor("PR_REVIEW_COMMENT", comment.id, userId));
     },
   );
 
@@ -726,7 +749,16 @@ export async function prCommentRoutes(app: FastifyInstance) {
         return reply.status(403).send({ error: "Only the author or repository owner can delete this comment" });
       }
 
+      // Deleting a thread root cascades its replies (inReplyTo FK), so gather the
+      // reply ids first and sweep their reactions along with the comment's own —
+      // the polymorphic subject FK can't cascade (#90).
+      const replyIds = (
+        await prisma.pullRequestReviewComment.findMany({ where: { inReplyToId: comment.id }, select: { id: true } })
+      ).map((r) => r.id);
+
       await prisma.pullRequestReviewComment.delete({ where: { id: comment.id } });
+
+      await deleteSubjectReactions([{ subjectType: "PR_REVIEW_COMMENT", subjectIds: [comment.id, ...replyIds] }]);
 
       return reply.status(204).send();
     },
@@ -834,7 +866,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
       },
     });
 
-    return reply.send(formatReviewComment(updated));
+    return reply.send(formatReviewComment(updated, await reactionRollupFor("PR_REVIEW_COMMENT", updated.id, userId)));
   }
 
   app.post(
