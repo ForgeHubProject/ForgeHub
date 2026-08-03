@@ -281,6 +281,9 @@ model PullRequestReviewerRequest {
   createdAt     DateTime  @default(now())
   fulfilledAt   DateTime?
   dismissedAt   DateTime?
+  // Provenance: true when a CODEOWNERS rule created the request rather than a
+  // person (issue #89). Display-only — the sidebar labels it "via CODEOWNERS".
+  viaCodeowners Boolean   @default(false)
 
   pullRequest PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   user        User        @relation("ReviewerRequestUser", fields: [userId], references: [id], onDelete: Cascade)

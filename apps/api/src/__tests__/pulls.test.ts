@@ -75,6 +75,12 @@ vi.mock("../timeline-service.js", () => ({
   emitHeadPushedForPush: vi.fn().mockResolvedValue(undefined),
 }));
 
+// CODEOWNERS auto-review-requests (#89) — the service's own behavior is covered
+// in codeowners-requests.test.ts; here we assert the PR-create wiring.
+vi.mock("../codeowners-service.js", () => ({
+  applyCodeownersReviewers: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("../references-service.js", () => ({
   syncBodyReferences: vi.fn().mockResolvedValue(undefined),
   closeIssuesForMergedPull: vi.fn().mockResolvedValue(undefined),
@@ -140,6 +146,7 @@ vi.mock("bcryptjs", () => ({
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { notifyUser } from "../notifications-service.js";
+import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
@@ -269,6 +276,31 @@ describe("POST /repos/:handle/:name/pulls", () => {
     const body = res.json();
     expect(body.number).toBe(1);
     expect(body.state).toBe("open");
+  });
+
+  it("runs the CODEOWNERS auto-review-request pass for the new PR", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls",
+      headers: { authorization: authorToken },
+      payload: { title: "Add feature", fromBranch: "feature", toBranch: "main" },
+    });
+    expect(vi.mocked(applyCodeownersReviewers)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "repo-pr-1", storageKey: "alice/my-repo.git", ownerId: "other-owner" }),
+      expect.objectContaining({ id: "pr-1", number: 1, fromBranch: "feature", toBranch: "main", authorId: AUTHOR_ID }),
+      AUTHOR_ID,
+    );
+  });
+
+  it("still creates the PR when the CODEOWNERS pass fails", async () => {
+    vi.mocked(applyCodeownersReviewers).mockRejectedValueOnce(new Error("git exploded"));
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls",
+      headers: { authorization: authorToken },
+      payload: { title: "Add feature", fromBranch: "feature", toBranch: "main" },
+    });
+    expect(res.statusCode).toBe(201);
   });
 
   it("400 when title is missing", async () => {
