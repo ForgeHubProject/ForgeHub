@@ -5,7 +5,7 @@ import type {
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState, RefCompareResult, Release,
-  ReleaseAsset, Repo, RequestedReviewer, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  ReleaseAsset, Repo, RepoTemplates, RequestedReviewer, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
   TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
@@ -966,6 +966,18 @@ export type RepoMember = { id: string; handle: string; displayName: string | nul
 
 export async function listRepoMembers(token: string | null, handle: string, repoName: string): Promise<{ members: RepoMember[] }> {
   return req(`/repos/${handle}/${repoName}/members`, { token: token ?? undefined });
+}
+
+/**
+ * The repo's issue / PR templates from its default branch (issue #89). Never
+ * required — callers treat a failure as "this repo has no templates".
+ */
+export async function listRepoTemplates(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<RepoTemplates> {
+  return req(`/repos/${handle}/${repoName}/templates`, { token: token ?? undefined });
 }
 
 export async function getIssue(

@@ -482,6 +482,8 @@ export type RequestedReviewer = {
   state: "requested" | "reviewed";
   requestedBy: string;
   requestedAt: string;
+  /** The request came from a CODEOWNERS rule rather than a person (issue #89). */
+  viaCodeowners?: boolean;
 };
 
 export type PullRequest = {
@@ -570,6 +572,29 @@ export type Label = {
   name: string;
   color: string;
   description: string | null;
+};
+
+// ─── Repo-provided issue / PR templates (issue #89) ──────────────────────────
+
+/** One `.forgehub/ISSUE_TEMPLATE/*.md` file, front-matter split from its body. */
+export type IssueTemplate = {
+  path: string;
+  name: string;
+  about: string | null;
+  /** Front-matter label NAMES, resolved against the repo's labels at compose time. */
+  labels: string[];
+  body: string;
+};
+
+/** The repo's single `.forgehub/PULL_REQUEST_TEMPLATE.md`, when it has one. */
+export type PullRequestTemplate = {
+  path: string;
+  body: string;
+};
+
+export type RepoTemplates = {
+  issueTemplates: IssueTemplate[];
+  pullRequestTemplate: PullRequestTemplate | null;
 };
 
 /** The compact milestone reference embedded in issue / PR payloads (#83). */
