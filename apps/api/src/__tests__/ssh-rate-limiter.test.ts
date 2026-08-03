@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 // Import the rate-limiter helpers directly — no server or DB needed.
-import { isRateLimited, recordAuthFailure, resetAuthFailures } from "../ssh/server.js";
+import { isRateLimited, recordAuthFailure, resetAuthFailures, sweepExpiredFailures } from "../ssh/server.js";
 
 // The module-level failMap is shared across tests; we reset state via resetAuthFailures.
 
@@ -61,6 +61,36 @@ describe("SSH auth rate-limiter", () => {
     // Four fresh failures — should not re-lock.
     for (let i = 0; i < 4; i++) recordAuthFailure(IP);
     expect(isRateLimited(IP)).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("sweepExpiredFailures removes an entry whose window has expired without it being re-checked", () => {
+    vi.useFakeTimers();
+    const OTHER_IP = "203.0.113.9";
+    recordAuthFailure(IP);
+    recordAuthFailure(OTHER_IP);
+    vi.advanceTimersByTime(61_000);
+
+    // Neither IP has been looked up via isRateLimited, so nothing has lazily
+    // cleared them yet — sweep should remove both expired records directly.
+    sweepExpiredFailures();
+
+    vi.useRealTimers();
+    // Now under the limit regardless (no more failures recorded), but recording
+    // ONE more failure for each should start a fresh window rather than adding
+    // onto a stale one — i.e. neither is rate-limited after just one more failure.
+    recordAuthFailure(IP);
+    recordAuthFailure(OTHER_IP);
+    expect(isRateLimited(IP)).toBe(false);
+    expect(isRateLimited(OTHER_IP)).toBe(false);
+    resetAuthFailures(OTHER_IP);
+  });
+
+  it("sweepExpiredFailures leaves a record whose window has not expired", () => {
+    vi.useFakeTimers();
+    for (let i = 0; i < 5; i++) recordAuthFailure(IP);
+    sweepExpiredFailures();
+    expect(isRateLimited(IP)).toBe(true);
     vi.useRealTimers();
   });
 });

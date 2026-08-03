@@ -54,6 +54,7 @@ vi.mock("../prisma.js", () => ({
           ? { id: "deploy-key-1", repoId: H.REPO_ID, readOnly: true, publicKey: H.deployPub }
           : null,
       ),
+      update: vi.fn().mockResolvedValue(undefined),
     },
     repo: {
       findFirst: vi.fn(async () => ({

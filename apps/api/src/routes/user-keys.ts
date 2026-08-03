@@ -18,6 +18,7 @@ type SSHKeyRow = {
   publicKey: string;
   fingerprint: string;
   lastUsedAt: Date | null;
+  lastUsedIp: string | null;
   createdAt: Date;
 };
 
@@ -28,6 +29,7 @@ function publicSSHKey(k: SSHKeyRow) {
     publicKey: k.publicKey,
     fingerprint: k.fingerprint,
     lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+    lastUsedIp: k.lastUsedIp,
     createdAt: k.createdAt.toISOString(),
   };
 }

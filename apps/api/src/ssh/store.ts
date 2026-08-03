@@ -46,7 +46,12 @@ export async function resolveActorByFingerprint(fingerprint: string): Promise<Ss
   return null;
 }
 
-/** Best-effort `lastUsedAt` bump for a user SSH key on successful auth. */
-export function touchSshKey(sshKeyId: string): void {
-  prisma.sSHKey.update({ where: { id: sshKeyId }, data: { lastUsedAt: new Date() } }).catch(() => {});
+/** Best-effort `lastUsedAt`/`lastUsedIp` bump for a user SSH key on successful auth. */
+export function touchSshKey(sshKeyId: string, ip: string): void {
+  prisma.sSHKey.update({ where: { id: sshKeyId }, data: { lastUsedAt: new Date(), lastUsedIp: ip } }).catch(() => {});
+}
+
+/** Best-effort `lastUsedAt`/`lastUsedIp` bump for a deploy key on successful auth. */
+export function touchDeployKey(deployKeyId: string, ip: string): void {
+  prisma.deployKey.update({ where: { id: deployKeyId }, data: { lastUsedAt: new Date(), lastUsedIp: ip } }).catch(() => {});
 }

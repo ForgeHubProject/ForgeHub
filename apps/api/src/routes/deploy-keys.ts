@@ -19,6 +19,8 @@ type DeployKeyRow = {
   publicKey: string;
   fingerprint: string;
   readOnly: boolean;
+  lastUsedAt: Date | null;
+  lastUsedIp: string | null;
   createdAt: Date;
 };
 
@@ -29,6 +31,8 @@ function publicDeployKey(k: DeployKeyRow) {
     publicKey: k.publicKey,
     fingerprint: k.fingerprint,
     readOnly: k.readOnly,
+    lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+    lastUsedIp: k.lastUsedIp,
     createdAt: k.createdAt.toISOString(),
   };
 }

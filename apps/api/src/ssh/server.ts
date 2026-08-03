@@ -8,7 +8,7 @@ import { bareRepoPathFromKey, sshHostKeyPath } from "../git-storage.js";
 import { prisma } from "../prisma.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 import { fingerprintFromRaw } from "./keys.js";
-import { resolveActorByFingerprint, touchSshKey, type SshActor } from "./store.js";
+import { resolveActorByFingerprint, touchDeployKey, touchSshKey, type SshActor } from "./store.js";
 
 const { Server, utils: sshUtils } = ssh2;
 
@@ -52,6 +52,18 @@ export function recordAuthFailure(ip: string): void {
 /** Reset the failure record for an IP on successful auth (avoid penalising legit retries). */
 export function resetAuthFailures(ip: string): void {
   failMap.delete(ip);
+}
+
+/**
+ * Remove expired records so a scan across many source IPs (each failing once and
+ * never returning) doesn't grow `failMap` without bound. Entries are otherwise only
+ * cleared lazily, when that same IP is checked again.
+ */
+export function sweepExpiredFailures(): void {
+  const now = Date.now();
+  for (const [ip, rec] of failMap) {
+    if (now - rec.windowStart > WINDOW_MS) failMap.delete(ip);
+  }
 }
 
 /**
@@ -177,6 +189,7 @@ function fail(stream: ServerChannel, message: string, code = 128): void {
 async function handleExec(
   app: FastifyInstance,
   actor: SshActor,
+  ip: string,
   command: string,
   stream: ServerChannel,
 ): Promise<void> {
@@ -240,7 +253,8 @@ async function handleExec(
     if (parsed.service === "git-receive-pack" && shasBefore) {
       void runPostReceiveEffects(app, { id: repo.id, storageKey }, actorUserId, repoPath, shasBefore);
     }
-    if (actor.kind === "user") touchSshKey(actor.sshKeyId);
+    if (actor.kind === "user") touchSshKey(actor.sshKeyId, ip);
+    else touchDeployKey(actor.deployKeyId, ip);
     try {
       stream.exit(code ?? 0);
       stream.end();
@@ -252,11 +266,11 @@ async function handleExec(
 
 // ─── connection wiring ────────────────────────────────────────────────────────
 
-function onSession(app: FastifyInstance, actor: SshActor, accept: () => Session): void {
+function onSession(app: FastifyInstance, actor: SshActor, ip: string, accept: () => Session): void {
   const session = accept();
   session.on("exec", (execAccept, execReject, info) => {
     const stream = execAccept();
-    void handleExec(app, actor, info.command, stream).catch((err) => {
+    void handleExec(app, actor, ip, info.command, stream).catch((err) => {
       app.log.error({ err }, "ssh exec handler crashed");
       fail(stream, "internal error", 1);
     });
@@ -289,6 +303,7 @@ function onAuthentication(
     const actor = await resolveActorByFingerprint(fingerprint);
     if (!actor) {
       recordAuthFailure(ip);
+      app.log.warn({ fingerprint, ip }, "ssh: auth failed — no key on record for this fingerprint");
       ctx.reject();
       return;
     }
@@ -300,18 +315,24 @@ function onAuthentication(
       if (pub instanceof Error) {
         app.log.error({ err: pub, fingerprint }, "ssh: stored public key failed to parse");
         recordAuthFailure(ip);
+        app.log.warn({ fingerprint, ip }, "ssh: auth failed — stored key unparsable");
         ctx.reject();
         return;
       }
       const ok = ctx.blob ? pub.verify(ctx.blob, ctx.signature, ctx.hashAlgo) : false;
       if (ok !== true) {
         recordAuthFailure(ip);
+        app.log.warn({ fingerprint, ip }, "ssh: auth failed — signature verification failed");
         ctx.reject();
         return;
       }
+
+      resetAuthFailures(ip);
+      const actorDesc =
+        actor.kind === "user" ? { kind: "user", userId: actor.userId } : { kind: "deploy", deployKeyId: actor.deployKeyId, repoId: actor.repoId };
+      app.log.info({ fingerprint, ip, actor: actorDesc }, "ssh: auth succeeded");
     }
 
-    resetAuthFailures(ip);
     bind(actor);
     ctx.accept();
   })().catch((err) => {
@@ -345,7 +366,7 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
     client.on("authentication", (ctx) => onAuthentication(app, ctx, ip, (a) => { actor = a; }));
     client.on("session", (accept) => {
       if (!actor) return; // ssh2 only emits `session` after `ready`, but guard anyway.
-      onSession(app, actor, accept);
+      onSession(app, actor, ip, accept);
     });
     client.on("error", (err) => {
       // Client-side disconnects are noisy and expected; log at debug level.
@@ -364,10 +385,15 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
 
   app.log.info(`SSH git transport listening on port ${port}`);
 
+  // Periodically sweep expired rate-limiter entries so an IP that fails once and
+  // never returns doesn't leave its record in failMap forever (issue #156).
+  const sweepTimer = setInterval(sweepExpiredFailures, WINDOW_MS).unref();
+
   return {
     port,
     close: () =>
       new Promise<void>((resolve) => {
+        clearInterval(sweepTimer);
         server.close(() => resolve());
       }),
   };
