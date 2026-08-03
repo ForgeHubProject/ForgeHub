@@ -18,10 +18,10 @@ import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
 import { PRFileRow } from "./PRFileRow";
 import { PRFileTree } from "./PRFileTree";
+import { ReviewersPanel } from "./ReviewersPanel";
 import {
   ReviewCard,
   ReviewSubmitPanel,
-  ReviewVerdictIcon,
   type ComposeMode,
   type ReviewInteraction,
   type Verdict,
@@ -344,7 +344,7 @@ export function PullDetail({
 
       {/* Status line */}
       <div className="flex items-center gap-3 flex-wrap pb-4 mb-5 border-b border-fh-border">
-        <StatePill state={pr.state} />
+        <StatePill state={pr.state} draft={pr.isDraft} />
         <p className="text-fh-sm text-fh-fg-muted inline-flex items-center gap-1.5 flex-wrap">
           <span className="font-semibold text-fh-fg">{pr.author}</span>
           <span>wants to merge into</span>
@@ -577,32 +577,24 @@ export function PullDetail({
           <PRChecks token={token} handle={handle} repoName={repoName} pr={pr} base={base} />
 
           {/* Merge box */}
-          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
+          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || isOwner} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
         </div>
 
         {/* Sidebar */}
         <aside className="w-full lg:w-56 shrink-0 text-fh-sm">
-          <div className="border-b border-fh-border pb-3 mb-3">
-            <p className="font-semibold text-fh-fg mb-1.5">Reviewers</p>
-            {pr.reviewSummary && pr.reviewSummary.reviewers.length > 0 ? (
-              <ul className="space-y-1.5">
-                {pr.reviewSummary.reviewers.map((rv) => (
-                  <li key={rv.author} className="flex items-center gap-1.5">
-                    <Avatar name={rv.author} size={18} />
-                    <Link to={`/${rv.author}`} className="text-fh-sm text-fh-fg hover:text-fh-accent-fg truncate no-underline">
-                      {rv.author}
-                    </Link>
-                    <span className="ml-auto inline-flex items-center gap-1">
-                      {rv.stale && <span className="text-fh-xs text-fh-fg-subtle">stale</span>}
-                      <ReviewVerdictIcon state={rv.state} size={14} className={rv.stale ? "opacity-40" : undefined} />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-fh-xs text-fh-fg-subtle">No reviews yet.</p>
-            )}
-          </div>
+          {/* Reviewers: reviews + request state, with request/re-request (issue #82) */}
+          <ReviewersPanel
+            token={token}
+            handle={handle}
+            repoName={repoName}
+            pr={pr}
+            currentUser={user.handle}
+            canManage={isAuthor || isOwner}
+            onRequestsChange={(requested) => {
+              setPr((prev) => (prev ? { ...prev, requestedReviewers: requested } : prev));
+              refreshTimeline();
+            }}
+          />
           <div>
             <p className="font-semibold text-fh-fg mb-1.5">Labels</p>
             <p className="text-fh-xs text-fh-fg-subtle">No labels yet.</p>

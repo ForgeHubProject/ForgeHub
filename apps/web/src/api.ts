@@ -5,7 +5,7 @@ import type {
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState, RefCompareResult, Release,
-  ReleaseAsset, Repo, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  ReleaseAsset, Repo, RequestedReviewer, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
   TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
@@ -87,6 +87,42 @@ export async function getFileSemanticDiff(
 ): Promise<SemanticFileDiff | FormatNotEnabled> {
   return req(
     `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    { token: token ?? undefined },
+  );
+}
+
+/**
+ * Result of GET /repos/:h/:n/filediff-meta — everything the compute-tier UI
+ * needs WITHOUT the server computing a diff (issue #66 P4): blob SHAs + sizes
+ * (honest Tier-B download costs, the Tier-L forge command), whether a wasm
+ * build exists (Tier-B capability detection), and the manifest's current build
+ * vs. the repo's `.forge/handlers` pin (surfacing build skew loudly).
+ */
+export type FileDiffMeta = {
+  handlerId: string;
+  path: string;
+  baseSha: string | null;
+  headSha: string;
+  /** Exact blob byte counts — what Tier B would download. Null when absent. */
+  baseSize: number | null;
+  headSize: number | null;
+  wasmAvailable: boolean;
+  /** The build the server executes (manifest-stamped), null if unstamped. */
+  officialBuild: string | null;
+  /** The repo's `.forge/handlers` pin for this handler, null when unpinned. */
+  pinnedBuild: string | null;
+};
+
+/** Compute-tier metadata for one file at a commit (no diff is computed). */
+export async function getFileDiffMeta(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+): Promise<FileDiffMeta> {
+  return req(
+    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
     { token: token ?? undefined },
   );
 }
@@ -222,6 +258,30 @@ export async function createRepo(
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined }),
   });
+}
+
+/**
+ * Update a repository's description (null clears it) and/or visibility. The
+ * server route addresses the caller's own personal repo by name — Settings is
+ * only reachable by the owning user, so no handle is sent.
+ */
+export async function updateRepo(
+  token: string,
+  repoName: string,
+  patch: { description?: string | null; visibility?: "public" | "private" },
+): Promise<Repo> {
+  return req(`/repos/${repoName}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/**
+ * Permanently delete a repository (DB rows + git storage), addressed by owning
+ * handle and name like {@link getRepo}. The owner has to be part of the address:
+ * a bare name resolves against the *caller's* namespace server-side, so deleting
+ * from someone else's repo page would otherwise hit the caller's same-named repo.
+ * Resolves only on the server's 204 — any other status throws.
+ */
+export async function deleteRepo(token: string, handle: string, repoName: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}`, { method: "DELETE", token });
 }
 
 // ─── composition ─────────────────────────────────────────────────────────────
@@ -513,11 +573,58 @@ export async function createPull(
   fromBranch: string,
   toBranch?: string,
   description?: string,
+  draft?: boolean,
 ): Promise<PullRequest> {
   return req(`/repos/${handle}/${repoName}/pulls`, {
     method: "POST",
     token,
-    body: JSON.stringify({ title, fromBranch, toBranch, description }),
+    body: JSON.stringify({ title, fromBranch, toBranch, description, draft }),
+  });
+}
+
+/** Leave draft (issue #82): flips isDraft off. Author-or-owner only; one-way. */
+export async function markPullReady(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ id: string; number: number; state: string; isDraft: boolean }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/ready`, {
+    method: "POST",
+    token,
+  });
+}
+
+/**
+ * Request (or re-request) reviews from repo members (issue #82). Re-requesting
+ * someone who already reviewed flips them back to "requested" and re-notifies.
+ */
+export async function requestReviewers(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  handles: string[],
+): Promise<{ requestedReviewers: RequestedReviewer[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/requested-reviewers`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ handles }),
+  });
+}
+
+/** Withdraw review requests (issue #82). */
+export async function removeRequestedReviewers(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  handles: string[],
+): Promise<{ requestedReviewers: RequestedReviewer[] }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/requested-reviewers`, {
+    method: "DELETE",
+    token,
+    body: JSON.stringify({ handles }),
   });
 }
 
@@ -728,18 +835,23 @@ export async function forkRepo(
 
 // ─── commits ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * List commits on a ref, forwarding the query params the server actually reads
+ * (issue #109): `page`/`per_page` for pagination and `path` for per-path
+ * history (only commits touching that file or directory).
+ */
 export async function listCommits(
   token: string | null,
   handle: string,
   repoName: string,
   ref?: string,
-  path?: string,
-  limit?: number,
-): Promise<{ commits: CommitInfo[] }> {
+  opts: { path?: string; page?: number; perPage?: number } = {},
+): Promise<{ commits: CommitInfo[]; branch: string; path: string | null; page: number; perPage: number }> {
   const qs = new URLSearchParams();
   if (ref) qs.set("branch", ref);
-  if (path) qs.set("path", path);
-  if (limit) qs.set("limit", String(limit));
+  if (opts.path) qs.set("path", opts.path);
+  if (opts.page) qs.set("page", String(opts.page));
+  if (opts.perPage) qs.set("per_page", String(opts.perPage));
   const q = qs.toString() ? `?${qs}` : "";
   return req(`/repos/${handle}/${repoName}/commits${q}`, { token: token ?? undefined });
 }

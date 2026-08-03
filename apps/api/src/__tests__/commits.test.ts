@@ -5,7 +5,7 @@
  * git plumbing. Prisma is mocked to control repo visibility and auth.
  */
 
-import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 // ─── Prisma mock (hoisted) ────────────────────────────────────────────────────
 // Only mock what resolveRepo and auth routes touch; git-utils is NOT mocked.
@@ -36,8 +36,13 @@ vi.mock("../prisma.js", () => ({
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import { listCommits, getCommit, listTree, defaultBranch } from "../git-utils.js";
-import { createTestRepo, makeCommit, checkoutBranch, type TestRepo } from "./helpers/git.js";
+import {
+  bareRepoPathFromKey, createDeepHistoryRepo, createMergeHistoryRepo, createMergedAwayRepo,
+  createTestRepo, makeCommit, checkoutBranch, type TestRepo,
+} from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 
 // ─── Repo + server setup ──────────────────────────────────────────────────────
@@ -141,6 +146,161 @@ describe("listCommits()", () => {
     const commits = await listCommits(repo.storageKey, "nonexistent-branch");
     expect(commits).toEqual([]);
   });
+
+  it("filters history to commits touching a file path", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "src/main.ts" });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("filters history to commits touching a directory path", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "src" });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("combines a path filter with pagination", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "readme.txt", perPage: 1, page: 2 });
+    expect(commits.map((c) => c.sha)).toEqual([sha1]);
+  });
+
+  it("returns empty array for a path no commit touches", async () => {
+    const commits = await listCommits(repo.storageKey, defBranch, { path: "no/such/file.txt" });
+    expect(commits).toEqual([]);
+  });
+});
+
+// ─── git-utils: per-path history is git's own history simplification ──────────
+//
+// `RepoCodeTab` issues `{ path, perPage: 1 }` and reads element 0 as the
+// directory's header commit — author, subject, short SHA, relative time, and the
+// CI badge keyed off that SHA — so the only correct answer is the commit
+// `git log -1 <ref> -- <path>` names. A linear chain cannot check that: every
+// candidate rule agrees on a chain. These cases run on merge topologies, where
+// the rules come apart, and take git itself as the oracle.
+
+const execFile = promisify(execFileCb);
+const gitSays = async (bare: string, args: string[]): Promise<string> => {
+  const { stdout } = await execFile("git", ["-C", bare, ...args]);
+  return stdout.trim();
+};
+
+describe("listCommits() per-path history follows git's TREESAME parent", () => {
+  let key: string;
+  let bare: string;
+
+  beforeAll(async () => {
+    // src/app.ts edited on main, edited again on a side branch, merged keeping
+    // ours — so the side edit touches the path but its content is not in the
+    // tree, and it is dated *newer* than the edit that did land.
+    key = await createMergedAwayRepo("test/merged-away.git", "main", "src/app.ts");
+    bare = bareRepoPathFromKey(key);
+  }, 30_000);
+
+  it("names the commit whose change is in the tree, not the one merged away", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "src/app.ts"]);
+    const [head] = await listCommits(key, "main", { path: "src/app.ts", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("REAL main edit");
+  });
+
+  it("does the same for a directory — the code tab's actual call shape", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "src"]);
+    const [head] = await listCommits(key, "main", { path: "src", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("REAL main edit");
+  });
+
+  it("keeps the merged-away commit out of the whole page, not just the head", async () => {
+    const expected = (await gitSays(bare, ["log", "main", "--format=%s", "--", "src/app.ts"])).split("\n");
+    const subjects = (await listCommits(key, "main", { path: "src/app.ts", perPage: 20 })).map((c) => c.subject);
+    expect(subjects).toEqual(expected);
+    expect(subjects).not.toContain("DISCARDED side edit");
+  });
+});
+
+// ─── git-utils: history simplification reaches through a merge's 2nd parent ───
+//
+// The other half of following TREESAME parents: when the path's content came in
+// from the *second* parent, git crosses into that lineage rather than staying on
+// the mainline. Any scheme that only considers a window of the newest commits,
+// or only the first-parent line, reports nothing here.
+
+describe("listCommits() per-path history crosses a merge's second parent", () => {
+  const PER_LINEAGE = 150;
+  let mergeKey: string;
+  let bare: string;
+
+  beforeAll(async () => {
+    mergeKey = await createMergeHistoryRepo(
+      "test/merge-history.git", "main", PER_LINEAGE, "rare.txt", "churn.txt",
+    );
+    bare = bareRepoPathFromKey(mergeKey);
+  }, 60_000);
+
+  it("finds a path only the older lineage touches", async () => {
+    // rare.txt is written solely by the root of the second lineage — the oldest
+    // commit in the repo, reachable only across the merge.
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "rare.txt"]);
+    const [head] = await listCommits(mergeKey, "main", { path: "rare.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("b0");
+  });
+
+  it("names the newest commit for a path the mainline churns", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "churn.txt"]);
+    const [head] = await listCommits(mergeKey, "main", { path: "churn.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe(`a${PER_LINEAGE - 1}`);
+  });
+});
+
+// ─── git-utils: the per-path bound is wall-clock, not commit count ────────────
+//
+// `/repos/:h/:r/commits` is unauthenticated for public repos, so one request
+// must not be able to walk a whole DAG unattended. The bound is a timeout on the
+// git process: it can cut a read short, but it can never make a read name a
+// different commit than git does. A commit-count cap can, which is why there
+// isn't one — a long-dormant path is still answered correctly, however deep.
+
+describe("listCommits() per-path bound", () => {
+  const DEPTH = 2050;
+  let deepKey: string;
+  let bare: string;
+
+  beforeAll(async () => {
+    deepKey = await createDeepHistoryRepo("test/deep-history.git", "main", DEPTH, "ancient.txt", "churn.txt");
+    bare = bareRepoPathFromKey(deepKey);
+  }, 30_000);
+
+  afterEach(() => {
+    delete process.env["PATH_HISTORY_TIMEOUT_MS"];
+  });
+
+  it("finds a path touched only by the oldest of thousands of commits", async () => {
+    const expected = await gitSays(bare, ["log", "-1", "main", "--format=%H %s", "--", "ancient.txt"]);
+    const [head] = await listCommits(deepKey, "main", { path: "ancient.txt", perPage: 1 });
+    expect(`${head?.sha} ${head?.subject}`).toBe(expected);
+    expect(head?.subject).toBe("c0");
+  });
+
+  it("serves a deep page of a path with thousands of matches", async () => {
+    const expected = await gitSays(bare, ["log", "--skip=1999", "-n", "1", "main", "--format=%s", "--", "churn.txt"]);
+    const commits = await listCommits(deepKey, "main", { path: "churn.txt", perPage: 1, page: 2000 });
+    expect(commits.map((c) => c.subject)).toEqual([expected]);
+    expect(expected).toBe("c50");
+  });
+
+  it("returns an empty page when the walk exceeds the timeout", async () => {
+    process.env["PATH_HISTORY_TIMEOUT_MS"] = "1";
+    expect(await listCommits(deepKey, "main", { path: "ancient.txt", perPage: 1 })).toEqual([]);
+  });
+
+  it("leaves unfiltered pagination alone at the same timeout", async () => {
+    // The bound exists for path reads; an unfiltered page already costs only
+    // skip + perPage commits and must not be cut short.
+    process.env["PATH_HISTORY_TIMEOUT_MS"] = "1";
+    const commits = await listCommits(deepKey, "main", { perPage: 1, page: DEPTH });
+    expect(commits.map((c) => c.subject)).toEqual(["c0"]);
+  });
 });
 
 // ─── git-utils: getCommit ─────────────────────────────────────────────────────
@@ -227,6 +387,26 @@ describe("GET /repos/:h/:r/commits", () => {
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/commits?branch=feature%2Fcfg" });
     expect(res.statusCode).toBe(200);
     expect(res.json().commits).toHaveLength(3);
+  });
+
+  it("filters by ?path and echoes it in the payload", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/repos/alice/my-repo/commits?branch=${encodeURIComponent(defBranch)}&path=${encodeURIComponent("src/main.ts")}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.path).toBe("src/main.ts");
+    expect(body.commits).toHaveLength(1);
+    expect(body.commits[0].sha).toBe(sha1);
+  });
+
+  it("treats a blank ?path as no filter", async () => {
+    const res = await app.inject({ method: "GET", url: `/repos/alice/my-repo/commits?branch=${encodeURIComponent(defBranch)}&path=` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.path).toBeNull();
+    expect(body.commits).toHaveLength(2);
   });
 
   it("returns 404 for unknown repo", async () => {

@@ -406,6 +406,59 @@ describe("DELETE /repos/:name", () => {
   });
 });
 
+describe("DELETE /repos/:handle/:name", () => {
+  let app: FastifyInstance;
+  let token: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    token = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.repo.delete).mockResolvedValue(makeRepo() as never);
+  });
+
+  it("204 for a repo addressed by its owning handle and name", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/alice/my-repo",
+      headers: { authorization: token },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(prisma.repo.delete).toHaveBeenCalledWith({ where: { id: "repo-1" } });
+  });
+
+  it("resolves under the owning handle, never the caller's bare name", async () => {
+    // Deleting from bob/my-repo must not fall through to alice's own my-repo:
+    // the lookup carries bob's handle AND the caller's id, so it finds nothing.
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(null as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/bob/my-repo",
+      headers: { authorization: token },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(prisma.repo.delete).not.toHaveBeenCalled();
+
+    const { where } = vi.mocked(prisma.repo.findFirst).mock.calls.at(-1)![0]!;
+    expect(where).toMatchObject({
+      name: "my-repo",
+      ownerId: OWNER_ID,
+      orgId: null,
+      OR: [{ owner: { handle: "bob" }, orgId: null }, { org: { handle: "bob" } }],
+    });
+  });
+
+  it("401 without token", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/repos/alice/my-repo" });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe("POST /repos/:name/collaborators", () => {
   let app: FastifyInstance;
   let token: string;

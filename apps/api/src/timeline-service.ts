@@ -18,6 +18,9 @@ export type TimelineEventKind =
   | "reopened"
   | "merged"
   | "reviewed"
+  // Draft PRs + requested reviewers (#82)
+  | "ready_for_review"
+  | "review_requested"
   | "referenced"
   | "head_pushed"
   | "title_changed"

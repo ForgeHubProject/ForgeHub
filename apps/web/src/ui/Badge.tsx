@@ -2,9 +2,16 @@ import { cx } from "./cx";
 import { readableTextOn } from "./color";
 
 export type BadgeTone = "neutral" | "accent" | "success" | "danger" | "warning" | "purple";
+export type BadgeVariant = "solid" | "outline";
 
 type BadgeProps = {
   tone?: BadgeTone;
+  /**
+   * `solid` (default) fills with the tone's wash; `outline` is the GitHub-style
+   * bordered pill on a transparent ground — the shape for visibility chips
+   * ("Public" / "Private") and other quiet metadata.
+   */
+  variant?: BadgeVariant;
   /** Pill (fully rounded) vs. subtle rounded rectangle. */
   pill?: boolean;
   className?: string;
@@ -20,14 +27,23 @@ const tones: Record<BadgeTone, string> = {
   purple: "text-fh-purple-fg bg-fh-purple-muted",
 };
 
+const outlineTones: Record<BadgeTone, string> = {
+  neutral: "text-fh-fg-muted border-fh-border",
+  accent: "text-fh-accent-fg border-fh-accent-emphasis/40",
+  success: "text-fh-success-fg border-fh-success-emphasis/40",
+  danger: "text-fh-danger-fg border-fh-danger-emphasis/40",
+  warning: "text-fh-warning-fg border-fh-warning-emphasis/40",
+  purple: "text-fh-purple-fg border-fh-purple-emphasis/40",
+};
+
 /** A small status pill in one of the semantic tones. */
-export function Badge({ tone = "neutral", pill = true, className, children }: BadgeProps) {
+export function Badge({ tone = "neutral", variant = "solid", pill = true, className, children }: BadgeProps) {
   return (
     <span
       className={cx(
-        "inline-flex items-center gap-1 px-2 py-0.5 text-fh-xs font-medium border border-transparent",
+        "inline-flex items-center gap-1 px-2 py-0.5 text-fh-xs font-medium border",
         pill ? "rounded-full" : "rounded",
-        tones[tone],
+        variant === "outline" ? outlineTones[tone] : cx("border-transparent", tones[tone]),
         className,
       )}
     >

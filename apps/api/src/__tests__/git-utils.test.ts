@@ -20,6 +20,7 @@ import {
   performSquashMerge,
   performRebaseMerge,
   performRevert,
+  blobSizeAtCommit,
 } from "../git-utils.js";
 
 const AUTHOR = { name: "Merl Merger", email: "merl@forgehub.io" };
@@ -528,4 +529,72 @@ describe("performRevert", () => {
       await r.cleanup();
     }
   }, 30_000);
+});
+
+// ─── Blob sizes (compute-tier honest costs, #66 P4) ───────────────────────────
+//
+// The whole contract of `blobSizeAtCommit` is the DIFFERENCE between its two
+// negative answers, because the caller turns one of them into a download-cost
+// promise:
+//
+//   null  = the path is genuinely not in that commit's tree (an added/deleted/
+//           renamed file) → legitimately zero bytes to download
+//   throw = git could not answer → the cost is UNKNOWN, and /filediff-meta
+//           must 503 rather than quote a free download it can't stand behind
+//
+// A catch-all that returns null for both collapses "unknown" into "free", which
+// is the bug this pins. The `ls-tree -l` implementation is what keeps them
+// apart: it exits 0 with empty output for an absent path and non-zero for a
+// git failure.
+
+describe("blobSizeAtCommit", () => {
+  let sizeRepo: TestRepo;
+  let firstSha: string;
+  let secondSha: string;
+
+  beforeAll(async () => {
+    sizeRepo = await createTestRepo("test/blob-size.git");
+    firstSha = await makeCommit(
+      sizeRepo.workDir,
+      { "kept.txt": "0123456789", "empty.txt": "" },
+      "init",
+    );
+    secondSha = await makeCommit(sizeRepo.workDir, { "later.txt": "abc" }, "add later.txt");
+  }, 30_000);
+
+  afterAll(async () => {
+    await sizeRepo.cleanup();
+  });
+
+  it("returns the exact byte size of a blob in that commit's tree", async () => {
+    expect(await blobSizeAtCommit(sizeRepo.storageKey, firstSha, "kept.txt")).toBe(10);
+    expect(await blobSizeAtCommit(sizeRepo.storageKey, secondSha, "later.txt")).toBe(3);
+  });
+
+  it("distinguishes a committed empty file (0) from an absent one (null)", async () => {
+    expect(await blobSizeAtCommit(sizeRepo.storageKey, firstSha, "empty.txt")).toBe(0);
+    // Same path, an earlier commit that predates the file: absent, not zero-size.
+    expect(await blobSizeAtCommit(sizeRepo.storageKey, firstSha, "later.txt")).toBeNull();
+  });
+
+  it("returns null — not a throw — for a path absent from the tree", async () => {
+    expect(await blobSizeAtCommit(sizeRepo.storageKey, secondSha, "never-existed.txt")).toBeNull();
+  });
+
+  it("THROWS when git cannot answer, instead of reporting the cost as null", async () => {
+    // An unresolvable commit-ish is a git failure, not an absent path. Reporting
+    // null here would tell the client the blob is free to download.
+    await expect(
+      blobSizeAtCommit(sizeRepo.storageKey, "0000000000000000000000000000000000000000", "kept.txt"),
+    ).rejects.toThrow();
+    await expect(
+      blobSizeAtCommit(sizeRepo.storageKey, "no-such-ref", "kept.txt"),
+    ).rejects.toThrow();
+  });
+
+  it("THROWS when the repository storage itself is unreadable", async () => {
+    await expect(
+      blobSizeAtCommit("test/definitely-not-a-repo.git", "HEAD", "kept.txt"),
+    ).rejects.toThrow();
+  });
 });

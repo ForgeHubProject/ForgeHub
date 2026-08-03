@@ -16,16 +16,18 @@ import { canWrite, repoAccessInclude } from "./repo-access.js";
  *   1. a review is submitted (routes/pr-comments.ts), which can clear the
  *      change-request gate and satisfy required approvals; and
  *   2. a CI run completes successfully (ci/runner.ts), which can turn the
- *      check summary green for the head commit.
+ *      check summary green for the head commit; and
+ *   3. a draft PR is marked ready for review (routes/pulls.ts), which clears the
+ *      draft gate (#82) — an armed draft is legal, it just cannot fire yet.
  *
  * (Arming itself also evaluates once, so a PR whose gates are ALREADY green
  * merges immediately — otherwise no future signal would ever arrive.)
  *
  * The gates are the same ones the merge endpoint enforces, with NO overrides:
- * branch protection (hard gate, #85), zero active change requests (the soft
- * gate — auto-merge never overrides it), and a green check summary for the
- * head SHA (no failing, no pending; no runs at all counts as green, mirroring
- * the protection contract's "absent checks must not block").
+ * draft state (#82), branch protection (hard gate, #85), zero active change
+ * requests (the soft gate — auto-merge never overrides it), and a green check
+ * summary for the head SHA (no failing, no pending; no runs at all counts as
+ * green, mirroring the protection contract's "absent checks must not block").
  *
  * Everything the ARM endpoint validated is re-validated at fire time, because an
  * armed PR can sit for days: the method is re-checked against the repo's merge
@@ -63,11 +65,17 @@ export async function checkSummaryForCommit(repoId: string, sha: string): Promis
  * reasons (empty ⇒ ready to fire). Pure read — never mutates anything.
  */
 export async function evaluateAutoMergeGates(
-  pr: { id: string; toBranch: string },
+  pr: { id: string; toBranch: string; isDraft?: boolean },
   repoId: string,
   headSha: string | null,
 ): Promise<{ ready: boolean; reasons: string[] }> {
   const reasons: string[] = [];
+
+  // Draft state (#82) is a hard gate, exactly as at the merge endpoints: a draft
+  // PR may be ARMED (arming is how you say "merge this once it's ready"), but it
+  // must never fire while the draft flag is set. Marking the PR ready re-runs
+  // this evaluation, so clearing the flag is itself an auto-merge signal.
+  if (pr.isDraft) reasons.push("pull request is a draft");
 
   const review = await computeReviewSummary(pr.id, headSha);
   if (review.changesRequested > 0) {
