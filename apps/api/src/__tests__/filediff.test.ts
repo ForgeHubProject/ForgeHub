@@ -69,6 +69,7 @@ let app: FastifyInstance;
 let baseSha: string;
 let headSha: string;
 let communitySha: string;
+let notEnabledSha: string;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -93,6 +94,13 @@ beforeAll(async () => {
     repo.workDir,
     { ".forge/formats": ".gltf\n.widget\n", "part.widget": "v=1" },
     "opt in a community format",
+  );
+  // ".glb" is official per the (stubbed) manifest but never appears in this
+  // repo's .forge/formats — the enabled-elsewhere case #73 turns into a CTA.
+  notEnabledSha = await makeCommit(
+    repo.workDir,
+    { "models/Untitled.glb": "glb-bytes" },
+    "add a glb without opting the format in",
   );
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
@@ -153,9 +161,29 @@ describe("GET /repos/:handle/:name/filediff", () => {
     expect((await get(`path=model.gltf`)).statusCode).toBe(400);
   });
 
-  it("404s for a file whose extension is not in .forge/formats", async () => {
+  it("404s for a file whose extension has no official handler at all", async () => {
+    // ".md" maps to nothing in the manifest — genuinely unsupported, so the
+    // honest 404 stands (no call-to-action payload, #73 case 2).
     const res = await get(`path=readme.md&sha=${headSha}`);
     expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "No semantic handler for this file" });
+  });
+
+  it("returns a format-not-enabled CTA for an official ext the repo hasn't opted in (#73 case 1)", async () => {
+    // ".glb" is official per the manifest but absent from .forge/formats at
+    // this commit — a fixable state, answered 200 with the hint commands.
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=models/Untitled.glb&sha=${notEnabledSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      status: "format-not-enabled",
+      path: "models/Untitled.glb",
+      ext: ".glb",
+      message: "Format .glb is not added to this repo's .forge/formats.",
+      hint: ["forge formats add .glb", "forge formats ignore .glb"],
+    });
+    // No handler ever runs for a not-enabled file — messaging only.
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
   });
 
   it("404s for an opted-in but non-official extension (the manifest is the authority, not opt-in alone)", async () => {

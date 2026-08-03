@@ -7,12 +7,18 @@
 import { useState } from "react";
 import { Avatar, Badge, Button, RelativeTime, Textarea, cx } from "../../../ui";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
+import { ReactionBar } from "../../../components/ReactionBar";
 import type { RepoRef } from "../../../lib/autolink";
 import type { Review, ReviewComment, ReviewCommentPosition } from "../../../types";
+
+/** What ReactionBar needs to toggle reactions on review comments (#90). */
+export type ReactionCtx = { token: string; handle: string; repoName: string };
 
 /** The review mutation surface threaded down to the diff/thread widgets. */
 export type ReviewInteraction = {
   currentUser: string;
+  /** Set to enable reaction pills on review-thread comments (#90). */
+  reactionCtx?: ReactionCtx;
   /** The viewer has an unsubmitted draft review in progress. */
   hasPendingReview: boolean;
   /** The viewer may open new inline comments (logged in, not the PR author, PR open). */
@@ -210,12 +216,14 @@ function CommentCard({
   canApplySuggestion,
   busy,
   onApplySuggestion,
+  reactionCtx,
 }: {
   comment: ReviewComment;
   repo: RepoRef;
   canApplySuggestion?: boolean;
   busy?: boolean;
   onApplySuggestion?: (commentId: string) => void;
+  reactionCtx?: ReactionCtx;
 }) {
   return (
     <div className="px-3 py-2.5">
@@ -233,6 +241,19 @@ function CommentCard({
             canApply={canApplySuggestion === true && !comment.pending}
             busy={busy}
             onApply={onApplySuggestion}
+          />
+        )}
+        {/* Reactions (#90) — drafts are private, so no pills until submitted. */}
+        {reactionCtx && !comment.pending && (
+          <ReactionBar
+            token={reactionCtx.token}
+            handle={reactionCtx.handle}
+            repoName={reactionCtx.repoName}
+            subjectType="pr_review_comment"
+            subjectId={comment.id}
+            reactions={comment.reactions}
+            viewerReacted={comment.viewerReacted}
+            className="mt-2"
           />
         )}
       </div>
@@ -298,6 +319,7 @@ export function ReviewThread({
   onReply,
   onToggleResolve,
   onApplySuggestion,
+  reactionCtx,
   /** Compact framing for anchoring under a diff line. */
   anchored,
 }: {
@@ -310,6 +332,7 @@ export function ReviewThread({
   onReply: (rootId: string, body: string) => void;
   onToggleResolve: (rootId: string, resolved: boolean) => void;
   onApplySuggestion?: (commentId: string) => void;
+  reactionCtx?: ReactionCtx;
   anchored?: boolean;
 }) {
   const { root, replies } = thread;
@@ -360,9 +383,9 @@ export function ReviewThread({
         </div>
       )}
       <div className="divide-y divide-fh-border">
-        <CommentCard comment={root} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} />
+        <CommentCard comment={root} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} reactionCtx={reactionCtx} />
         {replies.map((r) => (
-          <CommentCard key={r.id} comment={r} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} />
+          <CommentCard key={r.id} comment={r} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} reactionCtx={reactionCtx} />
         ))}
       </div>
 
@@ -584,6 +607,7 @@ export function FileThreadList({
           onReply={review.onReply}
           onToggleResolve={review.onToggleResolve}
           onApplySuggestion={review.onApplySuggestion}
+          reactionCtx={review.reactionCtx}
           anchored
         />
       ))}

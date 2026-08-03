@@ -17,6 +17,7 @@ import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } 
 import { executePullMerge, resolveActorIdentity } from "../pull-merge.js";
 import { maybeAutoMergePr } from "../auto-merge.js";
 import { isMergeMethod, repoMergePolicy } from "../merge-policy.js";
+import { reactionRollupFor, reactionRollups, emptyRollup } from "../reactions-service.js";
 
 /**
  * The auto-merge fields of a PR payload: null until armed, and null again once
@@ -139,6 +140,9 @@ export async function pullRoutes(app: FastifyInstance) {
       },
     });
 
+    // Reactions ride along, batched: ONE grouped query for the whole page (#90).
+    const rollups = await reactionRollups("PULL_REQUEST", pulls.map((p) => p.id), userId);
+
     return {
       pulls: pulls.map((p) => ({
         id: p.id,
@@ -155,6 +159,7 @@ export async function pullRoutes(app: FastifyInstance) {
           : null,
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
+        ...(rollups.get(p.id) ?? emptyRollup()),
       })),
     };
   });
@@ -305,6 +310,8 @@ export async function pullRoutes(app: FastifyInstance) {
         : null,
       createdAt: pr.createdAt.toISOString(),
       updatedAt: pr.updatedAt.toISOString(),
+      // Emoji reactions on the PR body (#90): grouped counts + viewer state.
+      ...(await reactionRollupFor("PULL_REQUEST", pr.id, userId)),
     };
   });
 
