@@ -48,6 +48,12 @@ vi.mock("../prisma.js", () => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    // Reactions (#90) ride on PR list/detail payloads — default to "none".
+    reaction: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(),
+      deleteMany: vi.fn(),
+    },
   },
 }));
 
