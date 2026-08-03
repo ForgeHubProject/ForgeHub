@@ -1,13 +1,14 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
-  DesignVersion, DiffChange, DiffResult, FileDiff, ForkSummary, Issue, IssueComment,
+  DesignVersion, DiffChange, DiffResult, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
-  ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState, RefCompareResult, Release,
-  ReleaseAsset, Repo, RequestedReviewer, Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
+  ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
+  RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
+  Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
-  TreeEntry, User, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -1030,6 +1031,18 @@ export async function listRepoMembers(token: string | null, handle: string, repo
   return req(`/repos/${handle}/${repoName}/members`, { token: token ?? undefined });
 }
 
+/**
+ * The repo's issue / PR templates from its default branch (issue #89). Never
+ * required — callers treat a failure as "this repo has no templates".
+ */
+export async function listRepoTemplates(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<RepoTemplates> {
+  return req(`/repos/${handle}/${repoName}/templates`, { token: token ?? undefined });
+}
+
 export async function getIssue(
   token: string | null,
   handle: string,
@@ -1865,6 +1878,75 @@ export async function markNotificationRead(token: string, id: string): Promise<v
 
 export async function deleteNotification(token: string, id: string): Promise<void> {
   return req(`/notifications/${id}`, { method: "DELETE", token });
+}
+
+// ─── stars + watching + feed (issue #88) ─────────────────────────────────────────
+
+/** Viewer star/watch state + grouped star count for the repo header. */
+export async function getRepoSocial(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<RepoSocial> {
+  return req(`/repos/${handle}/${repoName}/social`, { token: token ?? undefined });
+}
+
+export async function starRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ starred: boolean; starCount: number }> {
+  return req(`/repos/${handle}/${repoName}/star`, { method: "PUT", token });
+}
+
+export async function unstarRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ starred: boolean; starCount: number }> {
+  return req(`/repos/${handle}/${repoName}/star`, { method: "DELETE", token });
+}
+
+/** One page of the repos a user starred, filtered to what the viewer may read. */
+export async function listStarredRepos(
+  token: string | null,
+  handle: string,
+  page = 1,
+  perPage = 25,
+): Promise<{ repos: Array<Repo & { starredAt: string }>; page: number; perPage: number; hasMore: boolean }> {
+  return req(`/users/${handle}/starred?page=${page}&per_page=${perPage}`, { token: token ?? undefined });
+}
+
+export async function setWatchLevel(
+  token: string,
+  handle: string,
+  repoName: string,
+  level: WatchLevel,
+): Promise<{ watchLevel: WatchLevel; watcherCount: number }> {
+  return req(`/repos/${handle}/${repoName}/watch`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ level }),
+  });
+}
+
+/** Drop the explicit choice; the response carries the fallback level. */
+export async function unwatchRepo(
+  token: string,
+  handle: string,
+  repoName: string,
+): Promise<{ watchLevel: WatchLevel; watcherCount: number }> {
+  return req(`/repos/${handle}/${repoName}/watch`, { method: "DELETE", token });
+}
+
+/**
+ * Recent activity across watched + starred repos, newest first. Cursor-paged:
+ * pass the previous page's `nextCursor` to continue, so entries arriving in the
+ * meantime cannot shift the boundary and re-serve rows already displayed.
+ */
+export async function getFeed(token: string, cursor?: string | null, perPage = 25): Promise<FeedPage> {
+  const q = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+  return req(`/feed?per_page=${perPage}${q}`, { token });
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────────────────

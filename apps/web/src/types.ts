@@ -126,6 +126,8 @@ export type Repo = {
   source?: ForkRef | null;
   /** Number of direct forks the viewer is allowed to see. */
   forkCount?: number;
+  /** Grouped star count (issue #88); absent on payloads that predate it. */
+  starCount?: number;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
@@ -493,6 +495,8 @@ export type RequestedReviewer = {
   state: "requested" | "reviewed";
   requestedBy: string;
   requestedAt: string;
+  /** The request came from a CODEOWNERS rule rather than a person (issue #89). */
+  viaCodeowners?: boolean;
 };
 
 export type PullRequest = {
@@ -585,6 +589,29 @@ export type Label = {
   name: string;
   color: string;
   description: string | null;
+};
+
+// ─── Repo-provided issue / PR templates (issue #89) ──────────────────────────
+
+/** One `.forgehub/ISSUE_TEMPLATE/*.md` file, front-matter split from its body. */
+export type IssueTemplate = {
+  path: string;
+  name: string;
+  about: string | null;
+  /** Front-matter label NAMES, resolved against the repo's labels at compose time. */
+  labels: string[];
+  body: string;
+};
+
+/** The repo's single `.forgehub/PULL_REQUEST_TEMPLATE.md`, when it has one. */
+export type PullRequestTemplate = {
+  path: string;
+  body: string;
+};
+
+export type RepoTemplates = {
+  issueTemplates: IssueTemplate[];
+  pullRequestTemplate: PullRequestTemplate | null;
 };
 
 /** The compact milestone reference embedded in issue / PR payloads (#83). */
@@ -760,6 +787,47 @@ export type Notification = {
   read: boolean;
   repo: string;
   updatedAt: string;
+};
+
+// ─── Stars + watching + feed (issue #88) ─────────────────────────────────────────
+
+/** The three-level watch subscription; see the Watch model for semantics. */
+export type WatchLevel = "all" | "participating" | "ignore";
+
+/** GET /repos/:h/:n/social — the viewer's star/watch state for the repo header. */
+export type RepoSocial = {
+  starCount: number;
+  /** Users the repo-wide fan-out reaches (explicit ALL + implicit members). */
+  watcherCount: number;
+  viewerStarred: boolean;
+  /** Effective level: the explicit choice, else the implicit default. */
+  watchLevel: WatchLevel;
+};
+
+/** One entry of GET /feed; `type` discriminates which optional fields are set. */
+export type FeedItem = {
+  type: "issue_opened" | "pr_opened" | "release" | "timeline";
+  id: string;
+  repo: { ownerHandle: string; name: string };
+  actor: string;
+  createdAt: string;
+  /** issue_opened / pr_opened / timeline */
+  number?: number;
+  title?: string;
+  /** timeline */
+  kind?: string;
+  subjectType?: "issue" | "pull_request";
+  /** release */
+  tagName?: string;
+  releaseName?: string;
+};
+
+export type FeedPage = {
+  items: FeedItem[];
+  perPage: number;
+  /** Opaque cursor for the next page; null when the feed is exhausted. */
+  nextCursor: string | null;
+  hasMore: boolean;
 };
 
 /** One slice of the format/domain composition bar. */

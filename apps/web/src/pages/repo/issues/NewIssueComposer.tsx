@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Avatar, Button, Field, Textarea, TextInput } from "../../../ui";
-import { createIssue, listLabels, listRepoMembers, RepoMember, updateIssue } from "../../../api";
-import type { Label, User } from "../../../types";
+import { Avatar, Button, Field, Select, Textarea, TextInput } from "../../../ui";
+import { createIssue, listLabels, listRepoMembers, listRepoTemplates, RepoMember, updateIssue } from "../../../api";
+import type { IssueTemplate, Label, User } from "../../../types";
+import { canReplaceBody, resolveTemplateLabels } from "../templatesModel";
 import { SidebarAssignee, SidebarLabels } from "./Sidebar";
 import { ChevronLeftIcon } from "./icons";
 
@@ -20,11 +21,36 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
   const [assignee, setAssignee] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Repo-provided issue templates (issue #89) — absent for most repos.
+  const [templates, setTemplates] = useState<IssueTemplate[]>([]);
+  const [templatePath, setTemplatePath] = useState("");
+  const [appliedBody, setAppliedBody] = useState<string | null>(null);
 
   useEffect(() => {
     listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
     listRepoMembers(token, handle, repoName).then((d) => setMembers(d.members)).catch(() => {});
+    // A repo without templates (or an unreadable one) just leaves the picker off.
+    listRepoTemplates(token, handle, repoName).then((d) => setTemplates(d.issueTemplates)).catch(() => {});
   }, [token, handle, repoName]);
+
+  /**
+   * Apply a template: its body fills the description (unless the author has
+   * already typed something of their own) and its front-matter labels pre-apply,
+   * resolved against the repo's real labels so unknown names are ignored.
+   */
+  function chooseTemplate(path: string) {
+    setTemplatePath(path);
+    const template = templates.find((t) => t.path === path);
+    if (!template) return;
+    if (canReplaceBody(body, appliedBody)) {
+      setBody(template.body);
+      setAppliedBody(template.body);
+    }
+    const preset = resolveTemplateLabels(allLabels, template.labels);
+    if (preset.length > 0) {
+      setSelected((prev) => [...prev, ...preset.filter((l) => !prev.some((p) => p.id === l.id))]);
+    }
+  }
 
   function toggleLabel(label: Label) {
     setSelected((prev) =>
@@ -87,6 +113,20 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
                   />
                 )}
               </Field>
+              {templates.length > 0 && (
+                <Field label="Template" hint="Start from one of this repository's issue templates.">
+                  {(id) => (
+                    <Select id={id} value={templatePath} onChange={(e) => chooseTemplate(e.target.value)}>
+                      <option value="">No template</option>
+                      {templates.map((t) => (
+                        <option key={t.path} value={t.path}>
+                          {t.name}{t.about ? ` — ${t.about}` : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              )}
               <Field label="Description" hint="Styling with Markdown is supported.">
                 {(id) => (
                   <Textarea

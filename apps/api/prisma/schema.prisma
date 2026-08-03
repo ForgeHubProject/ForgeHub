@@ -63,6 +63,8 @@ model User {
   orgMemberships   OrgMembership[]
   teamMemberships  TeamMembership[]
   prFileViews      PullRequestFileView[]      @relation("PRFileViewUser")
+  stars            Star[]
+  watches          Watch[]
   reactions        Reaction[]
 }
 
@@ -145,6 +147,9 @@ model Repo {
   orgId      String?
   org        Organization?      @relation(fields: [orgId], references: [id], onDelete: Cascade)
   teamAccess TeamRepoAccess[]
+
+  stars   Star[]
+  watches Watch[]
 
   // Personal-repo name uniqueness is guaranteed by the globally-unique `storageKey`
   // (`<namespaceHandle>/<name>.git`, built from the OWNING handle). We drop the old
@@ -329,6 +334,9 @@ model PullRequestReviewerRequest {
   createdAt     DateTime  @default(now())
   fulfilledAt   DateTime?
   dismissedAt   DateTime?
+  // Provenance: true when a CODEOWNERS rule created the request rather than a
+  // person (issue #89). Display-only — the sidebar labels it "via CODEOWNERS".
+  viaCodeowners Boolean   @default(false)
 
   pullRequest PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   user        User        @relation("ReviewerRequestUser", fields: [userId], references: [id], onDelete: Cascade)
@@ -596,6 +604,55 @@ model CrossReference {
 
   @@unique([sourceType, sourceId, targetType, targetId])
   @@index([targetType, targetId])
+}
+
+// ─── Stars + watching (issue #88) ────────────────────────────────────────────────
+//
+// The social layer. A Star is a bookmark + popularity signal (counted, never
+// denormalized — payloads use a grouped `_count`). A Watch is a per-user
+// subscription level for a repo's activity:
+//   ALL           — notified of everything notifySubscribers fans out.
+//   PARTICIPATING — only when directly involved (mentioned / assigned /
+//                   review-requested — the reasons notifyUser already delivers
+//                   individually). This is also the effective default for anyone
+//                   without a row.
+//   IGNORE        — muted: no notifications from this repo, even direct ones.
+// Owners and collaborators get an implicit ALL watch: rows are created on repo
+// create / fork / collaborator add (plus a startup backfill for pre-existing
+// rows), and notifySubscribers additionally treats a row-less owner/collaborator
+// as ALL so a missed write can never silently unsubscribe them.
+
+enum WatchLevel {
+  ALL
+  PARTICIPATING
+  IGNORE
+}
+
+model Star {
+  id        String   @id @default(cuid())
+  userId    String
+  repoId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, repoId])
+  @@index([repoId])
+}
+
+model Watch {
+  id        String     @id @default(cuid())
+  userId    String
+  repoId    String
+  level     WatchLevel @default(ALL)
+  createdAt DateTime   @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, repoId])
+  @@index([repoId])
 }
 
 enum NotificationReason {
@@ -1210,4 +1267,13 @@ model TeamRepoAccess {
 
   @@unique([teamId, repoId])
   @@index([repoId])
+}
+
+// A completed one-shot data backfill, keyed by name (issue #88). A row means the
+// named backfill already ran to completion, so boot skips it instead of
+// re-scanning every repo forever — the cost of a "one-time" migration must not
+// grow with instance size on every restart. Absent row = not yet run.
+model BackfillMarker {
+  name        String   @id
+  completedAt DateTime @default(now())
 }
