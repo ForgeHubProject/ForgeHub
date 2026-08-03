@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 // Import the rate-limiter helpers directly — no server or DB needed.
-import { isRateLimited, recordAuthFailure, resetAuthFailures } from "../ssh/server.js";
+import { isRateLimited, recordAuthFailure, resetAuthFailures, sweepExpiredFailures } from "../ssh/server.js";
 
 // The module-level failMap is shared across tests; we reset state via resetAuthFailures.
 
@@ -61,6 +61,37 @@ describe("SSH auth rate-limiter", () => {
     // Four fresh failures — should not re-lock.
     for (let i = 0; i < 4; i++) recordAuthFailure(IP);
     expect(isRateLimited(IP)).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("sweepExpiredFailures removes entries whose window has elapsed", () => {
+    vi.useFakeTimers();
+    const OTHER_IP = "192.0.2.2";
+    for (let i = 0; i < 5; i++) recordAuthFailure(IP);
+    for (let i = 0; i < 5; i++) recordAuthFailure(OTHER_IP);
+    expect(isRateLimited(IP)).toBe(true);
+    expect(isRateLimited(OTHER_IP)).toBe(true);
+
+    // Advance past the window and sweep.
+    vi.advanceTimersByTime(61_000);
+    sweepExpiredFailures();
+
+    // Both entries are gone — subsequent isRateLimited calls return false without
+    // needing the lazy-delete path.
+    expect(isRateLimited(IP)).toBe(false);
+    expect(isRateLimited(OTHER_IP)).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("sweepExpiredFailures leaves entries whose window has not elapsed", () => {
+    vi.useFakeTimers();
+    for (let i = 0; i < 5; i++) recordAuthFailure(IP);
+    expect(isRateLimited(IP)).toBe(true);
+
+    // Sweep before the window expires — entry must survive.
+    vi.advanceTimersByTime(30_000);
+    sweepExpiredFailures();
+    expect(isRateLimited(IP)).toBe(true);
     vi.useRealTimers();
   });
 });

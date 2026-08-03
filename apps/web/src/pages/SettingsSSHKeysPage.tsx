@@ -205,7 +205,7 @@ export function SettingsSSHKeysPage({ token, user, onLogout }: Props) {
                     <p className="text-fh-xs text-fh-fg-subtle mt-1.5 flex items-center gap-1.5 flex-wrap">
                       <span>Added <RelativeTime date={k.createdAt} /></span>
                       <span aria-hidden>·</span>
-                      <span>{k.lastUsedAt ? <>Last used <RelativeTime date={k.lastUsedAt} /></> : "Never used"}</span>
+                      <span>{k.lastUsedAt ? <>Last used <RelativeTime date={k.lastUsedAt} />{k.lastUsedIp ? ` from ${k.lastUsedIp}` : ""}</> : "Never used"}</span>
                     </p>
                   </div>
                 </div>

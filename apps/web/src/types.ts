@@ -79,6 +79,7 @@ export type SSHKey = {
   publicKey: string;
   fingerprint: string;
   lastUsedAt: string | null;
+  lastUsedIp: string | null;
   createdAt: string;
 };
 
@@ -89,6 +90,8 @@ export type DeployKey = {
   publicKey: string;
   fingerprint: string;
   readOnly: boolean;
+  lastUsedAt: string | null;
+  lastUsedIp: string | null;
   createdAt: string;
 };
 
