@@ -67,8 +67,8 @@ export function CommentableTextDiff({
     setComposeKey(keyOf(anchor));
   }
 
-  function submitCompose(anchor: Anchor, body: string, mode: ComposeMode) {
-    review.onCreate(filePath, { type: "text", side: anchor.side, line: anchor.line }, body, mode);
+  function submitCompose(anchor: Anchor, body: string, mode: ComposeMode, suggestion?: string) {
+    review.onCreate(filePath, { type: "text", side: anchor.side, line: anchor.line }, body, mode, suggestion);
     setComposeKey(null);
   }
 
@@ -141,9 +141,11 @@ export function CommentableTextDiff({
                                 repo={repo}
                                 currentUser={review.currentUser}
                                 canResolve={review.canResolve(t.root.author)}
+                                canApplySuggestion={review.canApplySuggestion}
                                 busy={review.busy}
                                 onReply={review.onReply}
                                 onToggleResolve={review.onToggleResolve}
+                                onApplySuggestion={review.onApplySuggestion}
                                 reactionCtx={review.reactionCtx}
                                 anchored
                               />
@@ -155,7 +157,10 @@ export function CommentableTextDiff({
                                 busy={review.busy}
                                 autoFocus
                                 placeholder={`Comment on line ${anchor.line}`}
-                                onSubmit={(body, mode) => submitCompose(anchor, body, mode)}
+                                // Suggestions replace the anchored line at the PR
+                                // head, so only incoming-side anchors seed one.
+                                suggestionSeed={anchor.side === "incoming" ? line.content : null}
+                                onSubmit={(body, mode, suggestion) => submitCompose(anchor, body, mode, suggestion)}
                                 onCancel={() => setComposeKey(null)}
                               />
                             )}

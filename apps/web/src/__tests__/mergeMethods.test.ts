@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   MERGE_METHOD_OPTIONS,
+  allowedMergeOptions,
   isMergeMethod,
   mergeMethodOption,
   mergeMethodStorageKey,
   readMergeMethod,
+  resolveInitialMethod,
   writeMergeMethod,
   revertPrTitle,
   isConflictError,
@@ -115,5 +117,42 @@ describe("isConflictError", () => {
   it("does not match unrelated errors", () => {
     expect(isConflictError("Write access required")).toBe(false);
     expect(isConflictError("Branch is already merged")).toBe(false);
+  });
+});
+
+// ─── Per-repo merge policy (issue #119) ────────────────────────────────────────
+
+describe("allowedMergeOptions", () => {
+  it("offers only the policy's allowed methods, in canonical order", () => {
+    const options = allowedMergeOptions({ allowedMethods: ["rebase", "merge"], defaultMethod: "merge" });
+    expect(options.map((o) => o.method)).toEqual(["merge", "rebase"]);
+  });
+
+  it("offers everything for an absent or empty policy (older API payloads)", () => {
+    expect(allowedMergeOptions(undefined).map((o) => o.method)).toEqual(["merge", "squash", "rebase"]);
+    expect(allowedMergeOptions({ allowedMethods: [], defaultMethod: "merge" }).map((o) => o.method))
+      .toEqual(["merge", "squash", "rebase"]);
+  });
+});
+
+describe("resolveInitialMethod", () => {
+  const policy = { allowedMethods: ["merge", "squash"] as MergeMethod[], defaultMethod: "squash" as MergeMethod };
+
+  it("prefers the remembered per-repo method when still allowed", () => {
+    const storage = fakeStorage({ [mergeMethodStorageKey("alice", "repo")]: "merge" });
+    expect(resolveInitialMethod("alice", "repo", policy, storage)).toBe("merge");
+  });
+
+  it("falls back to the repo default when the remembered method is no longer allowed", () => {
+    const storage = fakeStorage({ [mergeMethodStorageKey("alice", "repo")]: "rebase" });
+    expect(resolveInitialMethod("alice", "repo", policy, storage)).toBe("squash");
+  });
+
+  it("uses the repo default when nothing is remembered", () => {
+    expect(resolveInitialMethod("alice", "repo", policy, fakeStorage())).toBe("squash");
+  });
+
+  it("without a policy behaves like the pre-policy merge box (remembered, else merge)", () => {
+    expect(resolveInitialMethod("alice", "repo", undefined, fakeStorage())).toBe("merge");
   });
 });

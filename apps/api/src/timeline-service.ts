@@ -24,6 +24,10 @@ export type TimelineEventKind =
   | "referenced"
   | "head_pushed"
   | "title_changed"
+  // PR power features (#119)
+  | "auto_merge_enabled"
+  | "auto_merge_disabled"
+  | "suggestion_applied"
   // Issue triage (#120)
   | "pinned"
   | "unpinned"

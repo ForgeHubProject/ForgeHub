@@ -52,6 +52,16 @@ vi.mock("../prisma.js", () => ({
     protectedBranch: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    // Auto-merge's check-summary gate (#119) — default to "no runs" (green).
+    workflowRun: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    // Viewed-file bookkeeping (#119).
+    pullRequestFileView: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     personalAccessToken: {
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -105,6 +115,11 @@ vi.mock("../git-utils.js", () => ({
   performRebaseMerge: vi.fn().mockResolvedValue({ ok: true, sha: "reba5e00" }),
   performRevert: vi.fn().mockResolvedValue({ ok: true, branch: "revert-pr-1", sha: "revert00" }),
   listMergeBaseCommits: vi.fn().mockResolvedValue([{ subject: "first" }, { subject: "second" }]),
+  getMergeBaseFileList: vi.fn().mockResolvedValue([
+    { path: "src/a.ts", additions: 3, deletions: 1, binary: false, status: "modified" },
+    { path: "docs/b.md", additions: 5, deletions: 0, binary: false, status: "added" },
+  ]),
+  listChangedPaths: vi.fn().mockResolvedValue([]),
   branchShas: vi.fn().mockResolvedValue([]),
   listFilesDifferingBetweenBranches: vi.fn().mockResolvedValue([]),
   readFileAtBranch: vi.fn().mockResolvedValue(null),
@@ -400,6 +415,25 @@ describe("GET /repos/:handle/:name/pulls/:number", () => {
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
     expect(res.json().mergeable).toBeDefined();
   });
+
+  it("reports the armed auto-merge intent on an OPEN PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ autoMergeMethod: "squash", autoMergeById: OWNER_ID }) as never,
+    );
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ handle: "merger" } as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.json().autoMerge).toEqual({ method: "squash", by: "merger" });
+  });
+
+  // Regression (issue #119): a terminal PR must never advertise a pending
+  // auto-merge, even if a row written before the columns were cleared survives.
+  it("reports autoMerge as null on a merged PR that still carries the columns", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", autoMergeMethod: "squash", autoMergeById: OWNER_ID }) as never,
+    );
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.json().autoMerge).toBeNull();
+  });
 });
 
 describe("PATCH /repos/:handle/:name/pulls/:number", () => {
@@ -505,6 +539,24 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
     expect(res.json().merged).toBe(true);
     expect(res.json().sha).toBe("deadbeef");
     expect(res.json().method).toBe("merge");
+  });
+
+  // Regression (issue #119): the armed intent is spent once the PR merges —
+  // leaving it set made `GET /pulls/:number` report auto-merge as still armed.
+  it("clears the armed auto-merge intent when the PR merges", async () => {
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+
+    await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "MERGED", autoMergeMethod: null, autoMergeById: null }),
+      }),
+    );
   });
 
   it("defaults to the merge method (performMerge) when none is supplied", async () => {
@@ -945,6 +997,331 @@ describe("merge/revert push fan-out (wave-B MINOR-1)", () => {
   });
 });
 
+// ─── issue #119: per-repo merge policy on the merge endpoint ───────────────────
+
+describe("merge endpoint honors the repo merge policy (issue #119)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+  });
+
+  it("400s a method the repo does not allow", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ allowedMergeMethods: "merge", defaultMergeMethod: "merge" }) as never,
+    );
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "squash" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/not allowed/i);
+  });
+
+  it("defaults to the repo's defaultMergeMethod when none is supplied", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ allowedMergeMethods: "merge,squash", defaultMergeMethod: "squash" }) as never,
+    );
+    const { performSquashMerge } = await import("../git-utils.js");
+    vi.mocked(performSquashMerge).mockClear().mockResolvedValueOnce({ ok: true, sha: "5qua5h00" });
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().method).toBe("squash");
+    expect(vi.mocked(performSquashMerge)).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the policy on the PR detail payload", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ allowedMergeMethods: "merge,rebase", defaultMergeMethod: "rebase" }) as never,
+    );
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mergePolicy).toEqual({ allowedMethods: ["merge", "rebase"], defaultMethod: "rebase" });
+  });
+});
+
+// ─── issue #119: auto-merge arm / cancel endpoints ─────────────────────────────
+
+describe("POST/DELETE /repos/:handle/:name/pulls/:number/auto-merge (issue #119)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockClear().mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+  });
+
+  it("stores the intent (method + arming user)", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "rebase" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().autoMerge).toEqual({ method: "rebase", by: "merger" });
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { autoMergeMethod: "rebase", autoMergeById: OWNER_ID } }),
+    );
+  });
+
+  it("merges IMMEDIATELY when every gate is already green at arm time", async () => {
+    // First findFirst → the route's lookup (not yet armed); second → the
+    // evaluation's re-load, now carrying the stored intent.
+    vi.mocked(prisma.pullRequest.findFirst)
+      .mockResolvedValueOnce(makePR() as never)
+      .mockResolvedValueOnce(makePR({ autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear().mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "merge" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(true);
+    expect(res.json().sha).toBe("deadbeef");
+    expect(vi.mocked(performMerge)).toHaveBeenCalledTimes(1);
+    // The firing persisted the MERGED state.
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ state: "MERGED", mergeMethod: "merge" }) }),
+    );
+  });
+
+  it("stays armed (merged=false) while a change request keeps the review gate red", async () => {
+    vi.mocked(prisma.pullRequest.findFirst)
+      .mockResolvedValueOnce(makePR() as never)
+      .mockResolvedValueOnce(makePR({ autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([{
+      id: "rev-1", pullRequestId: "pr-1", authorId: "user-reviewer",
+      state: "CHANGES_REQUESTED", body: null, submittedAt: new Date(),
+      commitSha: "abc1234", createdAt: new Date(), updatedAt: new Date(),
+      author: { handle: "reviewer" },
+    }] as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear();
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(false);
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+  });
+
+  it("stays armed (merged=false) while checks are pending", async () => {
+    vi.mocked(prisma.pullRequest.findFirst)
+      .mockResolvedValueOnce(makePR() as never)
+      .mockResolvedValueOnce(makePR({ autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([
+      { checkRuns: [{ status: "running", conclusion: null }] },
+    ] as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear();
+
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(false);
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+  });
+
+  it("400s arming with a method the repo policy does not allow", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ allowedMergeMethods: "merge", defaultMergeMethod: "merge" }) as never,
+    );
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "squash" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/not allowed/i);
+  });
+
+  it("409s arming a non-open PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ state: "CLOSED" }) as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("403s a caller without write access", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ ownerId: "other", collaborators: [] }) as never,
+    );
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("DELETE disarms an armed PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ autoMergeMethod: "squash", autoMergeById: OWNER_ID }) as never,
+    );
+    const res = await app.inject({
+      method: "DELETE", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().autoMerge).toBeNull();
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { autoMergeMethod: null, autoMergeById: null } }),
+    );
+  });
+
+  it("DELETE 409s when auto-merge is not armed", async () => {
+    const res = await app.inject({
+      method: "DELETE", url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("closing a PR disarms auto-merge", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never,
+    );
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ state: "CLOSED" }) as never);
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: ownerToken },
+      payload: { state: "closed" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "CLOSED", autoMergeMethod: null, autoMergeById: null }),
+      }),
+    );
+  });
+});
+
+// ─── issue #119: viewed-file state on the files view ───────────────────────────
+
+describe("PR viewed files (issue #119)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestFileView.findMany).mockClear().mockResolvedValue([] as never);
+    vi.mocked(prisma.pullRequestFileView.upsert).mockClear();
+    vi.mocked(prisma.pullRequestFileView.deleteMany).mockClear();
+  });
+
+  it("files payload stamps the caller's viewed state per entry", async () => {
+    vi.mocked(prisma.pullRequestFileView.findMany).mockResolvedValue([
+      { filePath: "src/a.ts" },
+    ] as never);
+    const res = await app.inject({
+      method: "GET", url: "/repos/alice/my-repo/pulls/1/files",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    const files = res.json().files as Array<{ path: string; viewed: boolean }>;
+    expect(files.find((f) => f.path === "src/a.ts")?.viewed).toBe(true);
+    expect(files.find((f) => f.path === "docs/b.md")?.viewed).toBe(false);
+  });
+
+  it("anonymous readers get viewed: false without a lookup", async () => {
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(prisma.pullRequestFileView.findMany)).not.toHaveBeenCalled();
+    expect((res.json().files as Array<{ viewed: boolean }>).every((f) => f.viewed === false)).toBe(true);
+  });
+
+  it("PUT viewed-files marks a file viewed (upsert on the composite key)", async () => {
+    const res = await app.inject({
+      method: "PUT", url: "/repos/alice/my-repo/pulls/1/viewed-files",
+      headers: { authorization: ownerToken },
+      payload: { path: "src/a.ts", viewed: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: "src/a.ts", viewed: true });
+    expect(vi.mocked(prisma.pullRequestFileView.upsert)).toHaveBeenCalledWith({
+      where: { pullRequestId_userId_filePath: { pullRequestId: "pr-1", userId: OWNER_ID, filePath: "src/a.ts" } },
+      create: { pullRequestId: "pr-1", userId: OWNER_ID, filePath: "src/a.ts" },
+      update: { viewedAt: expect.any(Date) },
+    });
+  });
+
+  it("PUT viewed-files with viewed:false clears the row", async () => {
+    const res = await app.inject({
+      method: "PUT", url: "/repos/alice/my-repo/pulls/1/viewed-files",
+      headers: { authorization: ownerToken },
+      payload: { path: "src/a.ts", viewed: false },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(prisma.pullRequestFileView.deleteMany)).toHaveBeenCalledWith({
+      where: { pullRequestId: "pr-1", userId: OWNER_ID, filePath: "src/a.ts" },
+    });
+    expect(vi.mocked(prisma.pullRequestFileView.upsert)).not.toHaveBeenCalled();
+  });
+
+  it("400s a missing path or non-boolean viewed", async () => {
+    const noPath = await app.inject({
+      method: "PUT", url: "/repos/alice/my-repo/pulls/1/viewed-files",
+      headers: { authorization: ownerToken },
+      payload: { viewed: true },
+    });
+    expect(noPath.statusCode).toBe(400);
+
+    const badViewed = await app.inject({
+      method: "PUT", url: "/repos/alice/my-repo/pulls/1/viewed-files",
+      headers: { authorization: ownerToken },
+      payload: { path: "src/a.ts", viewed: "yes" },
+    });
+    expect(badViewed.statusCode).toBe(400);
+  });
+
+  it("401s an anonymous PUT", async () => {
+    const res = await app.inject({
+      method: "PUT", url: "/repos/alice/my-repo/pulls/1/viewed-files",
+      payload: { path: "src/a.ts", viewed: true },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 // ─── wave-B MAJOR-2: PAT scope enforcement on PR write endpoints ───────────────
 
 describe("PAT scope enforcement on PR write endpoints (wave-B MAJOR-2)", () => {
@@ -1201,6 +1578,57 @@ describe("draft pull requests (issue #82)", () => {
       headers: { authorization: authorToken },
     });
     expect(res.statusCode).toBe(409);
+  });
+
+  // ── Draft × auto-merge (issue #82 × issue #119) ─────────────────────────────
+  // Arming a draft is allowed ("merge it once it's ready"), but the draft flag is
+  // an auto-merge gate: nothing fires until /ready clears it — and /ready is
+  // itself an auto-merge signal, so the intent is honoured the moment it can be.
+
+  it("arming a DRAFT PR stores the intent but does NOT merge, even with green gates", async () => {
+    vi.mocked(prisma.pullRequest.findFirst)
+      .mockResolvedValueOnce(makePR({ isDraft: true }) as never)
+      .mockResolvedValueOnce(makePR({ isDraft: true, autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/auto-merge",
+      headers: { authorization: ownerToken },
+      payload: { mergeMethod: "merge" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().merged).toBe(false);
+    expect(res.json().autoMerge).toEqual({ method: "merge", by: expect.any(String) });
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+    // The intent was stored and NOT disarmed by the blocked evaluation.
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { autoMergeMethod: "merge", autoMergeById: OWNER_ID } }),
+    );
+  });
+
+  it("POST /ready fires the armed auto-merge once the draft gate clears", async () => {
+    vi.mocked(prisma.pullRequest.findFirst)
+      // the route's own lookup: still a draft, already armed …
+      .mockResolvedValueOnce(makePR({ isDraft: true, autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never)
+      // … the firing path re-loads it after the update: no longer a draft.
+      .mockResolvedValue(makePR({ isDraft: false, autoMergeMethod: "merge", autoMergeById: OWNER_ID }) as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ isDraft: false }) as never);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockClear().mockResolvedValue({ ok: true, sha: "deadbeef" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/ready",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().isDraft).toBe(false);
+    // The signal is fire-and-forget; wait for the evaluation to land.
+    await vi.waitFor(() => expect(vi.mocked(performMerge)).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -310,6 +310,60 @@ describe("PATCH /repos/:name", () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  // ── Merge policy (issue #119) ──────────────────────────────────────────────
+
+  it("stores the merge policy string-encoded and returns it as arrays", async () => {
+    vi.mocked(prisma.repo.update).mockResolvedValue(
+      makeRepo({ allowedMergeMethods: "merge,squash", defaultMergeMethod: "squash" }) as never,
+    );
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/repos/my-repo",
+      headers: { authorization: token },
+      payload: { allowedMergeMethods: ["merge", "squash"], defaultMergeMethod: "squash" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().allowedMergeMethods).toEqual(["merge", "squash"]);
+    expect(res.json().defaultMergeMethod).toBe("squash");
+    expect(vi.mocked(prisma.repo.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ allowedMergeMethods: "merge,squash", defaultMergeMethod: "squash" }),
+      }),
+    );
+  });
+
+  it("400 when the default falls outside the allowed set", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/repos/my-repo",
+      headers: { authorization: token },
+      payload: { allowedMergeMethods: ["squash"], defaultMergeMethod: "merge" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/allowed methods/i);
+  });
+
+  it("400 when narrowing the allowed set below the current default without moving it", async () => {
+    // Current default is "merge" (fixture default policy); dropping it must fail.
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/repos/my-repo",
+      headers: { authorization: token },
+      payload: { allowedMergeMethods: ["rebase"] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("400 for an empty allowed set", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/repos/my-repo",
+      headers: { authorization: token },
+      payload: { allowedMergeMethods: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
 
 describe("DELETE /repos/:name", () => {

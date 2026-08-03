@@ -132,6 +132,9 @@ export type Repo = {
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
   sshHost?: string | null;
+  /** Owner merge policy (issue #119): allowed methods + preselected default. */
+  allowedMergeMethods?: Array<"merge" | "squash" | "rebase">;
+  defaultMergeMethod?: "merge" | "squash" | "rebase";
   createdAt: string;
   updatedAt: string;
 };
@@ -361,6 +364,8 @@ export type PRFileEntry = {
   deletions: number;
   binary: boolean;
   status: "added" | "modified" | "deleted" | "renamed";
+  /** Viewed by the CALLING user (issue #119); false/absent for anonymous readers. */
+  viewed?: boolean;
 };
 
 /** Latest-submitted review state for one reviewer (server-computed). */
@@ -414,6 +419,12 @@ export type ReviewComment = {
   resolvedBy: string | null;
   /** True while the comment belongs to the viewer's own unsubmitted (draft) review. */
   pending: boolean;
+  /** Suggested replacement for the anchored line (issue #119); null when none. */
+  suggestion: string | null;
+  /** True once the suggestion was committed to the head branch. */
+  suggestionApplied: boolean;
+  /** SHA of the head commit the apply produced; null until applied. */
+  suggestionCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
   // Emoji reactions (#90) — optional so older payloads still parse.
@@ -504,6 +515,10 @@ export type PullRequest = {
   headSha?: string | null;
   reviewSummary?: ReviewSummary;
   protection?: ProtectionStatus | null;
+  /** Owner merge policy (issue #119): which methods the merge box may offer. */
+  mergePolicy?: { allowedMethods: Array<"merge" | "squash" | "rebase">; defaultMethod: "merge" | "squash" | "rebase" };
+  /** Armed auto-merge intent (issue #119); null/absent when not armed. */
+  autoMerge?: { method: "merge" | "squash" | "rebase"; by: string } | null;
   mergedAt: string | null;
   mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;

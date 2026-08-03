@@ -673,6 +673,68 @@ export async function revertPull(
   });
 }
 
+/**
+ * Arm auto-merge (issue #119): the PR merges itself with `mergeMethod` — as the
+ * caller — once the review gate and CI checks are green. A PR that is ALREADY
+ * green merges immediately (`merged: true` in the response).
+ */
+export async function enableAutoMerge(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  mergeMethod: MergeMethod,
+): Promise<{ autoMerge: { method: MergeMethod; by: string }; merged: boolean; sha?: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/auto-merge`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ mergeMethod }),
+  });
+}
+
+/** Disarm auto-merge on a PR (any writer may cancel). */
+export async function cancelAutoMerge(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ autoMerge: null }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/auto-merge`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+/** Set the caller's per-file "Viewed" tick on a PR's files view (issue #119). */
+export async function setPRFileViewed(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  path: string,
+  viewed: boolean,
+): Promise<{ path: string; viewed: boolean }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/viewed-files`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ path, viewed }),
+  });
+}
+
+/** Owner setting (issue #119): the repo's allowed merge methods + default. */
+export async function updateRepoMergePolicy(
+  token: string,
+  repoName: string,
+  allowedMergeMethods: MergeMethod[],
+  defaultMergeMethod: MergeMethod,
+): Promise<Repo> {
+  return req(`/repos/${repoName}`, {
+    method: "PATCH",
+    token,
+    body: JSON.stringify({ allowedMergeMethods, defaultMergeMethod }),
+  });
+}
+
 export type MergeSide = "base" | "incoming";
 
 export type TextFileMergeResolution = {
@@ -1349,12 +1411,30 @@ export async function createReviewComment(
   handle: string,
   repoName: string,
   number: number,
-  input: { body: string; filePath: string; position: ReviewCommentPosition },
+  input: { body: string; filePath: string; position: ReviewCommentPosition; suggestion?: string },
 ): Promise<ReviewComment> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments`, {
     method: "POST",
     token,
     body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Apply a comment's suggested change (issue #119): commits the replacement to
+ * the PR head branch. 409 (ApiError) signals an already-applied suggestion, a
+ * stale anchor, or a head branch that moved mid-apply.
+ */
+export async function applySuggestion(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  commentId: string,
+): Promise<ReviewComment & { sha: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/review-comments/${commentId}/apply-suggestion`, {
+    method: "POST",
+    token,
   });
 }
 

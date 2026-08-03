@@ -10,6 +10,7 @@ import { useSemanticExtensions } from "../../../lib/fhrFormats";
 import { Badge, Skeleton, cx } from "../../../ui";
 import { ChevronRightIcon } from "./prShared";
 import { CommentableTextDiff } from "./CommentableTextDiff";
+import { fileAnchorId } from "./fileTree";
 import { FileThreadList, groupThreads, type ReviewInteraction } from "./reviewShared";
 import type { ReviewComment } from "../../../types";
 import { CommentIcon } from "./reviewShared";
@@ -30,6 +31,7 @@ export function PRFileRow({
   repoRef,
   comments,
   review,
+  onToggleViewed,
 }: {
   token: string;
   handle: string;
@@ -41,12 +43,15 @@ export function PRFileRow({
   repoRef: RepoRef;
   comments: ReviewComment[];
   review: ReviewInteraction;
+  /** Set when the viewer is signed in — enables the per-file Viewed tick (issue #119). */
+  onToggleViewed?: (path: string, viewed: boolean) => void;
 }) {
   const fileComments = comments.filter((c) => c.filePath === file.path);
   const threads = groupThreads(fileComments);
   const openThreadCount = threads.filter((t) => !t.root.resolved).length;
-  // Auto-expand when a file carries review conversation.
-  const [expanded, setExpanded] = useState(threads.length > 0);
+  // Auto-expand when a file carries review conversation — unless the viewer
+  // already ticked it Viewed (a viewed file starts collapsed, GitHub-style).
+  const [expanded, setExpanded] = useState(threads.length > 0 && !file.viewed);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -103,8 +108,15 @@ export function PRFileRow({
           ? "warning"
           : "neutral";
 
+  /** Ticking Viewed collapses the card (and vice-stays); unticking re-expands nothing. */
+  function toggleViewed(e: React.ChangeEvent<HTMLInputElement>) {
+    const next = e.target.checked;
+    onToggleViewed?.(file.path, next);
+    if (next) setExpanded(false);
+  }
+
   return (
-    <div className="border border-fh-border rounded-md bg-fh-surface overflow-hidden">
+    <div id={fileAnchorId(file.path)} className="border border-fh-border rounded-md bg-fh-surface overflow-hidden scroll-mt-4">
       <div
         className={cx(
           "flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-fh-canvas hover:bg-fh-surface-muted transition-colors",
@@ -151,6 +163,20 @@ export function PRFileRow({
             <Badge tone={statusTone} pill={false} className="font-sans">
               {file.status}
             </Badge>
+          )}
+          {onToggleViewed && (
+            <label
+              className="flex items-center gap-1 font-sans text-fh-xs text-fh-fg-muted cursor-pointer select-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                className="accent-[var(--fh-accent-emphasis,currentColor)]"
+                checked={file.viewed === true}
+                onChange={toggleViewed}
+              />
+              Viewed
+            </label>
           )}
         </div>
       </div>

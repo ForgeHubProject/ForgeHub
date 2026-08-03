@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
   getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateTopics, updateWebhook,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
+  type MergeMethod,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type {
@@ -40,6 +41,7 @@ const WEBHOOK = "M8.5 4.5a1.5 1.5 0 00-1.415 2A.75.75 0 015.67 7.003 3 3 0 118.5
 const BRANCH = "M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z";
 const TAG = "M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.75 1.75 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z";
 const KEY = "M10.5 0a5.499 5.499 0 00-5.243 7.148L.436 11.97a1.489 1.489 0 00-.436 1.053v1.487C0 15.328.672 16 1.5 16h1.487c.395 0 .774-.157 1.054-.436l.31-.311a.75.75 0 00.22-.53v-.807h.807a.75.75 0 00.53-.22l.716-.716a.75.75 0 00.22-.53v-.807h.462l4.822-4.821A5.499 5.499 0 0010.5 0zm1.5 4.75a1 1 0 11-2 0 1 1 0 012 0z";
+const MERGE = "M5.45 5.154A4.25 4.25 0 0 0 9.25 9.25v2.378a2.251 2.251 0 1 1-1.5 0V9.25A2.75 2.75 0 0 1 5.45 6.659l-.776-.776a.75.75 0 0 1 1.06-1.06l.716.716v-.385zm.01 5.096a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0zM9.25 5.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-3a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z";
 
 /** Normalize free text into a lowercase-kebab topic slug (server-validated too). */
 function normalizeTopic(raw: string): string {
@@ -1624,9 +1626,137 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
   );
 }
 
+// ── Pull requests: merge policy (issue #119) ──────────────────────────────────
+
+const MERGE_METHOD_LABEL: Record<MergeMethod, { label: string; hint: string }> = {
+  merge: { label: "Allow merge commits", hint: "Add all commits from the head branch via a merge commit." },
+  squash: { label: "Allow squash merging", hint: "Combine all commits into one commit on the base branch." },
+  rebase: { label: "Allow rebase merging", hint: "Replay the commits individually onto the base branch." },
+};
+const ALL_METHODS: MergeMethod[] = ["merge", "squash", "rebase"];
+
+function MergePolicySection({
+  token,
+  handle,
+  repoName,
+  isOwner,
+}: {
+  token: string;
+  handle: string;
+  repoName: string;
+  isOwner: boolean;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [allowed, setAllowed] = useState<MergeMethod[]>(ALL_METHODS);
+  const [defaultMethod, setDefaultMethod] = useState<MergeMethod>("merge");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setLoading(true);
+    getRepo(token, handle, repoName)
+      .then((repo) => {
+        if (repo.allowedMergeMethods?.length) setAllowed(repo.allowedMergeMethods);
+        if (repo.defaultMergeMethod) setDefaultMethod(repo.defaultMergeMethod);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token, handle, repoName]);
+
+  function toggle(method: MergeMethod) {
+    setAllowed((prev) => {
+      const next = prev.includes(method) ? prev.filter((m) => m !== method) : [...ALL_METHODS.filter((m) => prev.includes(m) || m === method)];
+      return next;
+    });
+  }
+
+  const empty = allowed.length === 0;
+  const defaultOutside = !allowed.includes(defaultMethod);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (empty || defaultOutside) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await updateRepoMergePolicy(token, repoName, allowed, defaultMethod);
+      toast("Merge settings saved", { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save merge settings");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <SectionHeader
+        title="Pull requests"
+        description="Which merge methods the merge box offers, and which one it preselects."
+      />
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+          <Skeleton className="h-5 w-1/3" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      ) : (
+        <form onSubmit={save} className="bg-fh-surface border border-fh-border rounded-md">
+          <div className="divide-y divide-fh-border">
+            {ALL_METHODS.map((m) => (
+              <label key={m} className="flex items-start gap-2.5 px-4 py-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1 accent-[var(--fh-accent-emphasis,currentColor)]"
+                  checked={allowed.includes(m)}
+                  disabled={!isOwner}
+                  onChange={() => toggle(m)}
+                />
+                <span className="min-w-0">
+                  <span className="block text-fh-base font-semibold text-fh-fg">{MERGE_METHOD_LABEL[m].label}</span>
+                  <span className="block text-fh-sm text-fh-fg-muted">{MERGE_METHOD_LABEL[m].hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-3 flex-wrap px-4 py-3 border-t border-fh-border bg-fh-canvas rounded-b-md">
+            <label className="text-fh-sm font-semibold text-fh-fg" htmlFor="default-merge-method">
+              Default method
+            </label>
+            <Select
+              id="default-merge-method"
+              value={defaultMethod}
+              disabled={!isOwner}
+              onChange={(e) => setDefaultMethod(e.target.value as MergeMethod)}
+              className="w-56"
+            >
+              {ALL_METHODS.filter((m) => allowed.includes(m)).map((m) => (
+                <option key={m} value={m}>{MERGE_METHOD_LABEL[m].label.replace(/^Allow /, "").replace(/^./, (c) => c.toUpperCase())}</option>
+              ))}
+            </Select>
+            {isOwner ? (
+              <Button type="submit" variant="primary" size="sm" className="ml-auto" loading={saving} disabled={empty || defaultOutside}>
+                Save
+              </Button>
+            ) : (
+              <span className="ml-auto text-fh-xs text-fh-fg-subtle">Only the repository owner can change these.</span>
+            )}
+          </div>
+          {(empty || defaultOutside) && (
+            <p className="px-4 pb-3 text-fh-sm text-fh-danger-fg">
+              {empty ? "At least one merge method must stay enabled." : "The default method must be one of the enabled methods."}
+            </p>
+          )}
+          {error && <p className="px-4 pb-3 text-fh-sm text-fh-danger-fg">{error}</p>}
+        </form>
+      )}
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
-type SectionKey = "general" | "topics" | "collaborators" | "branches" | "tags" | "labels" | "webhooks" | "deploy-keys" | "danger";
+type SectionKey = "general" | "topics" | "collaborators" | "pulls" | "branches" | "tags" | "labels" | "webhooks" | "deploy-keys" | "danger";
 
 export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
@@ -1639,6 +1769,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
     { key: "general", label: "General", icon: GEAR },
     { key: "topics", label: "Topics", icon: BOOKMARK },
     { key: "collaborators", label: "Collaborators", icon: PEOPLE },
+    { key: "pulls", label: "Pull requests", icon: MERGE },
     { key: "branches", label: "Branches", icon: BRANCH },
     { key: "tags", label: "Tags", icon: TAG },
     { key: "labels", label: "Labels", icon: LABEL },
@@ -1686,6 +1817,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
         {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
+        {section === "pulls" && <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "tags" && <TagsSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}

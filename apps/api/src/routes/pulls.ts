@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, performRebaseMerge, performRevert, performSquashMerge, resolveBranchSha, type CommitAuthor, type MergeMethod } from "../git-utils.js";
+import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
@@ -14,20 +14,30 @@ import { computeReviewSummary } from "../review-summary.js";
 import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } from "../branch-protection.js";
+import { executePullMerge, resolveActorIdentity } from "../pull-merge.js";
+import { maybeAutoMergePr } from "../auto-merge.js";
+import { isMergeMethod, repoMergePolicy } from "../merge-policy.js";
 import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { reactionRollupFor, reactionRollups, emptyRollup } from "../reactions-service.js";
 
-const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
-
-/** Resolve the git author identity for a user performing a merge/revert. */
-async function resolveActorIdentity(userId: string): Promise<CommitAuthor> {
+/**
+ * The auto-merge fields of a PR payload: null until armed, and null again once
+ * the PR leaves OPEN — auto-merge can only fire on an open PR, so reporting an
+ * armed intent on a merged/closed one would be stale (a merge and a close both
+ * clear the columns; the state check also covers rows written before that).
+ */
+async function autoMergePayload(pr: {
+  state?: string;
+  autoMergeMethod?: string | null;
+  autoMergeById?: string | null;
+}): Promise<{ method: string; by: string } | null> {
+  if (pr.state !== undefined && pr.state !== "OPEN") return null;
+  if (!pr.autoMergeMethod || !pr.autoMergeById) return null;
   const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { handle: true, displayName: true, email: true },
+    where: { id: pr.autoMergeById },
+    select: { handle: true },
   });
-  const name = user?.displayName?.trim() || user?.handle || "ForgeHub";
-  const email = user?.email || "merge@forgehub.io";
-  return { name, email };
+  return { method: pr.autoMergeMethod, by: user?.handle ?? "ghost" };
 }
 
 /**
@@ -330,6 +340,10 @@ export async function pullRoutes(app: FastifyInstance) {
       headSha,
       reviewSummary,
       protection,
+      // Owner merge policy (issue #119): which methods the merge box may offer.
+      mergePolicy: repoMergePolicy(repo),
+      // Armed auto-merge intent (issue #119); null when not armed.
+      autoMerge: await autoMergePayload(pr),
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
@@ -368,6 +382,11 @@ export async function pullRoutes(app: FastifyInstance) {
       repoId: repo.id, event: "pull_request", action: "ready_for_review", senderId: userId,
       subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open", isDraft: false },
     });
+
+    // Auto-merge signal (issue #119): the draft flag is one of the auto-merge
+    // gates, so clearing it can be the last thing standing between an armed PR
+    // and its merge. Best-effort, like the review-submit / CI-completion hooks.
+    void maybeAutoMergePr(pr.id, request.log).catch((err) => request.log.error({ err }, "auto-merge after ready for review"));
 
     return { id: updated.id, number: updated.number, state: updated.state.toLowerCase(), isDraft: updated.isDraft };
   });
@@ -513,9 +532,17 @@ export async function pullRoutes(app: FastifyInstance) {
     if (pr.isDraft) return reply.status(409).send({ error: "Pull request is a draft — mark it ready for review before merging", draft: true });
 
     const { commitMessage, mergeMethod: rawMethod, override } = (request.body ?? {}) as { commitMessage?: string; mergeMethod?: string; override?: boolean };
-    const mergeMethod: MergeMethod = (rawMethod ?? "merge") as MergeMethod;
-    if (!MERGE_METHODS.includes(mergeMethod)) {
-      return reply.status(400).send({ error: `mergeMethod must be one of: ${MERGE_METHODS.join(", ")}` });
+    // The repo's merge policy (issue #119) picks the fallback method and gates
+    // which methods this endpoint accepts at all.
+    const policy = repoMergePolicy(repo);
+    const mergeMethod: MergeMethod = (rawMethod ?? policy.defaultMethod) as MergeMethod;
+    if (!isMergeMethod(mergeMethod)) {
+      return reply.status(400).send({ error: "mergeMethod must be one of: merge, squash, rebase" });
+    }
+    if (!policy.allowedMethods.includes(mergeMethod)) {
+      return reply.status(400).send({
+        error: `mergeMethod '${mergeMethod}' is not allowed for this repository (allowed: ${policy.allowedMethods.join(", ")})`,
+      });
     }
 
     // Resolve the head SHA once — drives review staleness AND the check-summary lookup.
@@ -534,33 +561,25 @@ export async function pullRoutes(app: FastifyInstance) {
     if (gate.blocked) {
       return reply.status(409).send({ error: changesRequestedError(gate.changesRequested), changesRequested: true });
     }
-    const message = commitMessage?.trim() || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number})`;
 
-    // Capture the toBranch SHA before merge for ingestion range
-    const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
+    // Execution + merge side effects live in the shared executor (issue #119),
+    // so the interactive endpoint and auto-merge can never drift apart.
+    const outcome = await executePullMerge({
+      repo: { id: repo.id, storageKey: repo.storageKey },
+      pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch },
+      actorId: userId,
+      mergeMethod,
+      commitMessage,
+      log: request.log,
+    });
 
-    let result: Awaited<ReturnType<typeof performMerge>>;
-    try {
-      if (mergeMethod === "squash") {
-        // Single squashed commit authored as the merger: "<title> (!N)" + subjects.
-        const prCommits = await listMergeBaseCommits(repo.storageKey, pr.toBranch, pr.fromBranch);
-        const subjects = prCommits.map((c) => `* ${c.subject}`).join("\n");
-        const subject = commitMessage?.trim() || `${pr.title} (!${pr.number})`;
-        const squashMessage = subjects ? `${subject}\n\n${subjects}\n` : `${subject}\n`;
-        const author = await resolveActorIdentity(userId);
-        result = await performSquashMerge(repo.storageKey, pr.fromBranch, pr.toBranch, squashMessage, author);
-      } else if (mergeMethod === "rebase") {
-        result = await performRebaseMerge(repo.storageKey, pr.fromBranch, pr.toBranch);
-      } else {
-        result = await performMerge(repo.storageKey, pr.fromBranch, pr.toBranch, message);
-      }
-    } catch (err) {
-      app.log.error({ err }, "merge threw unexpectedly");
+    if (outcome.status === "error") {
       return reply.status(500).send({ error: "Merge failed due to a server error" });
     }
-
-    if (!result.ok) {
-      if ("alreadyMerged" in result) return reply.status(409).send({ error: "Branch is already merged" });
+    if (outcome.status === "alreadyMerged") {
+      return reply.status(409).send({ error: "Branch is already merged" });
+    }
+    if (outcome.status === "conflict") {
       const conflictError =
         mergeMethod === "rebase" ? "Rebase conflict — commits could not be replayed cleanly onto the base branch"
         : mergeMethod === "squash" ? "Squash conflict — cannot auto-merge"
@@ -568,38 +587,82 @@ export async function pullRoutes(app: FastifyInstance) {
       return reply.status(409).send({ error: conflictError, resolvable: true });
     }
 
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
-      data: { state: "MERGED", mergedAt: new Date(), mergeMethod, mergeCommitSha: result.sha },
-    });
+    return { merged: true, sha: outcome.sha, method: mergeMethod };
+  });
 
-    await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
-      .catch((err) => request.log.error({ err }, "recordEvent merged"));
-    void emitRepoEvent({
-      repoId: repo.id, event: "pull_request", action: "merged", senderId: userId,
-      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "merged", mergeCommitSha: result.sha },
-    });
-    // The target branch tip moved via a direct-to-bare merge push (which sets
-    // FORGEHUB_INTERNAL_PUSH=1 and so bypasses the git-http post-receive path):
-    // fire the same `push` webhook + push CI a client push to `toBranch` would,
-    // so a merge commit isn't invisible to hooks/CI (issues #86/#87).
-    emitPushEvents(repo.id, repo.storageKey, userId, [
-      { branch: pr.toBranch, oldSha: beforeSha ?? ZERO_SHA, newSha: result.sha },
-    ]);
-    await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: userId })
-      .catch((err) => request.log.error({ err }, "closeIssuesForMergedPull"));
+  // POST /repos/:handle/:name/pulls/:number/auto-merge — arm auto-merge (issue #119)
+  //
+  // Records the intent (method + arming user) and immediately evaluates the
+  // gates once: a PR whose review gate and check summary are ALREADY green
+  // merges on the spot (there would be no later signal to fire on). Otherwise
+  // the PR stays armed and fires from the review-submit / CI-completion hooks.
+  app.post("/repos/:handle/:name/pulls/:number/auto-merge", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
 
-    // Fire-and-forget: ingest any new .gltf files introduced by the merge
-    if (beforeSha && result.sha) {
-      const repoPath = bareRepoPathFromKey(repo.storageKey);
-      const repoId = repo.id;
-      const afterSha = result.sha;
-      setImmediate(() => {
-        ingestCommitRange(repoId, repoPath, beforeSha, afterSha).catch(() => {});
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "No git storage" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+    if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+
+    const policy = repoMergePolicy(repo);
+    const { mergeMethod: rawMethod } = (request.body ?? {}) as { mergeMethod?: string };
+    const mergeMethod: MergeMethod = (rawMethod ?? policy.defaultMethod) as MergeMethod;
+    if (!isMergeMethod(mergeMethod)) {
+      return reply.status(400).send({ error: "mergeMethod must be one of: merge, squash, rebase" });
+    }
+    if (!policy.allowedMethods.includes(mergeMethod)) {
+      return reply.status(400).send({
+        error: `mergeMethod '${mergeMethod}' is not allowed for this repository (allowed: ${policy.allowedMethods.join(", ")})`,
       });
     }
 
-    return { merged: true, sha: result.sha, method: mergeMethod };
+    await prisma.pullRequest.update({
+      where: { id: pr.id },
+      data: { autoMergeMethod: mergeMethod, autoMergeById: userId },
+    });
+    await recordEvent({
+      repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+      kind: "auto_merge_enabled", actorId: userId, data: { method: mergeMethod },
+    }).catch((err) => request.log.error({ err }, "recordEvent auto_merge_enabled"));
+
+    const result = await maybeAutoMergePr(pr.id, request.log);
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { handle: true } });
+    return {
+      autoMerge: { method: mergeMethod, by: user?.handle ?? "ghost" },
+      merged: result.fired,
+      ...(result.fired ? { sha: result.sha } : {}),
+    };
+  });
+
+  // DELETE /repos/:handle/:name/pulls/:number/auto-merge — disarm auto-merge.
+  // Any writer may cancel (same audience that could merge/arm), not just the armer.
+  app.delete("/repos/:handle/:name/pulls/:number/auto-merge", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+    if (!pr.autoMergeMethod) return reply.status(409).send({ error: "Auto-merge is not enabled on this pull request" });
+
+    await prisma.pullRequest.update({
+      where: { id: pr.id },
+      data: { autoMergeMethod: null, autoMergeById: null },
+    });
+    await recordEvent({
+      repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+      kind: "auto_merge_disabled", actorId: userId,
+    }).catch((err) => request.log.error({ err }, "recordEvent auto_merge_disabled"));
+
+    return { autoMerge: null };
   });
 
   // POST /repos/:handle/:name/pulls/:number/merge-resolve — resolve a conflict with ours/theirs
@@ -823,7 +886,50 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
     const files = await getMergeBaseFileList(repo.storageKey, pr.toBranch, pr.fromBranch);
-    return { files };
+
+    // Per-user viewed state (issue #119): stamp each entry for the signed-in
+    // viewer. Anonymous readers get plain `viewed: false` everywhere.
+    let viewedPaths = new Set<string>();
+    if (userId && files.length > 0) {
+      const rows = await prisma.pullRequestFileView.findMany({
+        where: { pullRequestId: pr.id, userId },
+        select: { filePath: true },
+      });
+      viewedPaths = new Set(rows.map((r) => r.filePath));
+    }
+
+    return { files: files.map((f) => ({ ...f, viewed: viewedPaths.has(f.path) })) };
+  });
+
+  // PUT /repos/:handle/:name/pulls/:number/viewed-files — set one file's viewed
+  // state for the CALLING user (issue #119). Pure per-user bookkeeping: any
+  // authenticated reader may track their own progress; nothing is gated on it.
+  app.put("/repos/:handle/:name/pulls/:number/viewed-files", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const { path: filePath, viewed } = (request.body ?? {}) as { path?: string; viewed?: boolean };
+    if (!filePath?.trim()) return reply.status(400).send({ error: "path is required" });
+    if (typeof viewed !== "boolean") return reply.status(400).send({ error: "viewed must be a boolean" });
+
+    const key = { pullRequestId: pr.id, userId, filePath: filePath.trim() };
+    if (viewed) {
+      await prisma.pullRequestFileView.upsert({
+        where: { pullRequestId_userId_filePath: key },
+        create: key,
+        update: { viewedAt: new Date() },
+      });
+    } else {
+      await prisma.pullRequestFileView.deleteMany({ where: key });
+    }
+
+    return { path: key.filePath, viewed };
   });
 
   // GET /repos/:handle/:name/pulls/:number/diff
@@ -911,6 +1017,9 @@ export async function pullRoutes(app: FastifyInstance) {
       where: { id: pr.id },
       data: {
         ...(state !== undefined ? { state: state === "open" ? "OPEN" : "CLOSED" } : {}),
+        // Closing disarms auto-merge (issue #119) — a later reopen must never
+        // resurrect a stale intent and merge behind everyone's back.
+        ...(state === "closed" ? { autoMergeMethod: null, autoMergeById: null } : {}),
         ...(nextMilestoneId !== undefined ? { milestoneId: nextMilestoneId } : {}),
       },
       include: { milestone: { select: { id: true, number: true, title: true, state: true } } },
