@@ -10,6 +10,7 @@ import {
   setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
+import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import { DesignsSection } from "./DesignsSection";
 import type { Issue, IssueComment, Label, Milestone, TimelineEvent, User } from "../../../types";
@@ -403,6 +404,17 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             ) : (
               <p className="text-fh-sm text-fh-fg-muted italic">No description provided.</p>
             )}
+            {/* Emoji reactions on the issue body (#90). */}
+            <ReactionBar
+              token={token}
+              handle={handle}
+              repoName={repoName}
+              subjectType="issue"
+              subjectId={issue.id}
+              reactions={issue.reactions}
+              viewerReacted={issue.viewerReacted}
+              className="mt-3"
+            />
           </TimelineCard>
 
           {/* Designs (#121): attach + version design files, with FHR semantic diffs. */}
@@ -420,6 +432,16 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             item.kind === "comment" ? (
               <TimelineCard key={`c-${item.comment.id}`} author={item.comment.author} date={item.comment.createdAt}>
                 <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+                <ReactionBar
+                  token={token}
+                  handle={handle}
+                  repoName={repoName}
+                  subjectType="issue_comment"
+                  subjectId={item.comment.id}
+                  reactions={item.comment.reactions}
+                  viewerReacted={item.comment.viewerReacted}
+                  className="mt-3"
+                />
               </TimelineCard>
             ) : (
               <TimelineEventRow key={`e-${item.event.id}`} event={item.event} repo={repoRef} />
