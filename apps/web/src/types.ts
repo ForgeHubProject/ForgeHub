@@ -380,6 +380,19 @@ export type ReviewSummary = {
   unresolvedThreads: number;
 };
 
+/** GitHub's fixed reaction set (issue #90), by shortcode. */
+export type ReactionEmoji = "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+
+/**
+ * Grouped reaction state riding on issue/PR/comment payloads: per-emoji counts
+ * (only reacted-to emoji appear) plus which of them the viewer used. Both fields
+ * are optional on the payload types so older/partial payloads still parse.
+ */
+export type ReactionState = {
+  reactions: Record<string, number>;
+  viewerReacted: string[];
+};
+
 /** A position a review comment is anchored to. */
 export type ReviewCommentPosition =
   | { type: "text"; line: number; side: "base" | "incoming" }
@@ -401,6 +414,9 @@ export type ReviewComment = {
   pending: boolean;
   createdAt: string;
   updatedAt: string;
+  // Emoji reactions (#90) — optional so older payloads still parse.
+  reactions?: Record<string, number>;
+  viewerReacted?: string[];
 };
 
 /** A submitted or pending pull-request review. */
@@ -476,6 +492,9 @@ export type PullRequest = {
   author: string;
   createdAt: string;
   updatedAt: string;
+  // Emoji reactions (#90) — optional so older payloads still parse.
+  reactions?: Record<string, number>;
+  viewerReacted?: string[];
 };
 
 /** Display status of a commit's git signature (Verified badge — issue #117). */
@@ -583,6 +602,9 @@ export type Issue = {
   lockReason?: string | null;
   // Milestone association (#83) — optional so older list payloads still parse.
   milestone?: MilestoneRef | null;
+  // Emoji reactions (#90) — optional so older payloads still parse.
+  reactions?: Record<string, number>;
+  viewerReacted?: string[];
 };
 
 // ─── Projects: board + table over issues/PRs (issue #84) ─────────────────────
@@ -663,6 +685,9 @@ export type IssueComment = {
   author: string;
   createdAt: string;
   updatedAt: string;
+  // Emoji reactions (#90) — optional so older payloads still parse.
+  reactions?: Record<string, number>;
+  viewerReacted?: string[];
 };
 
 export type ReleaseAsset = {

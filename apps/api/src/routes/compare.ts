@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import {
@@ -8,6 +9,7 @@ import {
 import type { StructuredDiff, DiffChange } from "../handlers/types.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { activeFormatsAtCommit, resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
+import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 
@@ -53,47 +55,100 @@ export async function compareRoutes(app: FastifyInstance) {
 
       const storageKey = repo.storageKey;
 
-      // Handler resolution is scoped to the repo's opt-in formats at the
-      // target commit. If the format has since been disabled, the fast path
-      // is skipped and the snapshot-based fallback below still serves the
-      // already-ingested data.
-      const handler =
-        storageKey && targetSnap.gitCommitSha
-          ? firstHandlerForPathAndFormats(
-              baseSnap.sourceFile,
-              await activeFormatsAtCommit(storageKey, targetSnap.gitCommitSha),
-            )
-          : undefined;
-
       // ── Fast path: blob-level diff with cache ─────────────────────────────────
-      if (handler && storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
-        const [baseBlobSha, headBlobSha] = await Promise.all([
-          resolveBlobSha(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
-          resolveBlobSha(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
-        ]);
+      // Engine selection (#74 slice 2): when the FHR manifest maps this file's
+      // extension to an official handler, the official wasm build is the ONLY
+      // engine on this path — the built-in registry is not consulted for it.
+      // The registry still serves the plain-text catch-all, the one format FHR
+      // does not publish. Resolution is scoped to the repo's opt-in formats at the
+      // target commit; if the format has since been disabled, the fast path is
+      // skipped and the snapshot-based fallback below still serves the
+      // already-ingested data.
+      if (storageKey && baseSnap.gitCommitSha && targetSnap.gitCommitSha) {
+        const activeExts = await activeFormatsAtCommit(storageKey, targetSnap.gitCommitSha);
+        const ext = extname(baseSnap.sourceFile).toLowerCase();
 
-        if (baseBlobSha && headBlobSha) {
-          const cached = await prisma.diffCache.findUnique({
-            where: { handlerId_baseBlobSha_headBlobSha: { handlerId: handler.id, baseBlobSha, headBlobSha } },
-          });
+        let officialId: string | null = null;
+        if (activeExts.has(ext)) {
+          try {
+            officialId = await officialHandlerId(ext);
+          } catch {
+            // Manifest unreachable with no cached copy. This is NOT "no official
+            // handler for this extension" — we cannot tell which engine is
+            // authoritative, so we may neither consult the built-in registry nor
+            // name a cache key. Refuse, exactly as /filediff does (#74 slice 1);
+            // silently answering with the built-in blob engine is the
+            // substitution this slice exists to remove.
+            return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
+          }
+        }
+        const localHandler = officialId
+          ? undefined
+          : registryFallbackFor(baseSnap.sourceFile, activeExts);
+        const engineId = officialId ?? localHandler?.id;
 
-          const [baseBuffer, headBuffer] = await Promise.all([
-            readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
-            readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
+        if (engineId) {
+          const [baseBlobSha, headBlobSha] = await Promise.all([
+            resolveBlobSha(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
+            resolveBlobSha(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
           ]);
 
-          if (baseBuffer && headBuffer) {
-            let diff: StructuredDiff;
-            if (cached) {
-              diff = JSON.parse(cached.result) as StructuredDiff;
-            } else {
-              diff = await handler.diff(baseBuffer, headBuffer);
-              prisma.diffCache.create({
-                data: { handlerId: handler.id, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
-              }).catch(() => undefined);
-            }
+          if (baseBlobSha && headBlobSha) {
+            const cached = await prisma.diffCache.findUnique({
+              where: { handlerId_baseBlobSha_headBlobSha: { handlerId: engineId, baseBlobSha, headBlobSha } },
+            });
 
-            return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
+            const [baseBuffer, headBuffer] = await Promise.all([
+              readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
+              readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
+            ]);
+
+            if (baseBuffer && headBuffer) {
+              let diff: StructuredDiff | undefined;
+              // The id of the engine that actually produced `diff`, checked
+              // against the selection-time `engineId` before anything is
+              // cached (see the write below). A result that was not produced
+              // on this request (or not produced at all) is never written.
+              let producedBy: string | undefined;
+              if (cached) {
+                diff = JSON.parse(cached.result) as StructuredDiff;
+              } else if (officialId) {
+                // Official wasm engine. Null means it can't run right now
+                // (release unreachable, oversized or rejected input) — fall
+                // through to the snapshot fallback rather than substituting a
+                // different engine's answer (#74).
+                const official = await officialWasmDiff(baseSnap.sourceFile, activeExts, baseBuffer, headBuffer);
+                diff = official?.diff;
+                producedBy = official?.handlerId;
+              } else if (localHandler) {
+                diff = await localHandler.diff(baseBuffer, headBuffer);
+                producedBy = localHandler.id;
+              }
+
+              if (diff) {
+                // Rows are written under the same key the lookup above reads,
+                // and only when the engine that ran reports that id — so a
+                // result is never filed under another engine's namespace, and
+                // never under a key no reader looks up. The two agree by
+                // construction today (officialWasmDiff re-derives its id from
+                // the same officialHandlerId call); a divergence would be an
+                // FHR contract change, so log it instead of silently missing
+                // the cache on every request from then on (#74).
+                if (!cached && producedBy) {
+                  if (producedBy === engineId) {
+                    prisma.diffCache.create({
+                      data: { handlerId: engineId, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+                    }).catch(() => undefined);
+                  } else {
+                    request.log.warn(
+                      { selectedEngineId: engineId, producedBy },
+                      "diff cache write skipped: engine id disagrees with selection",
+                    );
+                  }
+                }
+                return buildNormalizedResponse(diff, base, target, baseSnap.snapshotBody, targetSnap.snapshotBody, baseBuffer, headBuffer);
+              }
+            }
           }
         }
       }
@@ -146,6 +201,24 @@ export async function compareRoutes(app: FastifyInstance) {
       });
     },
   );
+}
+
+/**
+ * The built-in engine allowed to serve the blob fast path: the plain-text
+ * catch-all and nothing else (#74).
+ *
+ * `firstHandlerForPathAndFormats` resolves any registered handler, so a repo
+ * that opted `.gltf` in would get the built-in gltf-scene engine whenever the
+ * manifest fails to map the extension — not only during an outage (that throws
+ * and 503s above) but whenever a reachable manifest simply has no entry for it:
+ * a partially-updated, re-keyed, forked or self-hosted registry. That is the
+ * substitution this slice removes, and its output would be written into the very
+ * DiffCache namespace the wasm path reads back. /filediff refuses the same file
+ * with a 404; here the fast path is skipped and the snapshot fallback serves.
+ */
+function registryFallbackFor(sourceFile: string, activeExts: Set<string>) {
+  const handler = firstHandlerForPathAndFormats(sourceFile, activeExts);
+  return handler?.id === PLAIN_TEXT_HANDLER_ID ? handler : undefined;
 }
 
 function buildTextResponse(base: string, target: string, baseBody: string, targetBody: string) {
