@@ -4,11 +4,14 @@ import {
   ApiError,
   fetchRawBlob,
   getFileSemanticDiff,
+  isFormatNotEnabled,
   isFormatNotSupported,
   type FileDiffMeta,
+  type FormatNotEnabled,
   type SemanticFileDiff,
 } from "../../api";
 import { loadRendererBundle, type RendererInstance } from "../../lib/rendererBundle";
+import { notEnabledScopeKey } from "../../lib/notEnabledFormats";
 import { browserWasmDiff } from "../../lib/browserWasm";
 import {
   TIER_S_SLOW_MS,
@@ -24,8 +27,9 @@ import {
   useFileDiffMeta,
 } from "./computeTierUi";
 import { resolveBaseFileDiffViewer } from "../fileDiffViewerRegistry";
+import { FormatNotEnabledCard } from "./FormatNotEnabledCard";
 
-type Status = "loading" | "ready" | "empty" | "error" | "fallback";
+type Status = "loading" | "ready" | "empty" | "error" | "fallback" | "not-enabled";
 
 // The blob envelope a renderer receives (SPEC-RENDERING §2b, @fhr/types
 // RendererBlobs). Declared locally so the web app needs no build-time dep on
@@ -53,10 +57,14 @@ type RendererBlobs = { base?: BlobRef; head?: BlobRef };
  *   L — local: no compute at all — a copyable `forge diff --web` command hands
  *       the diff to the user's own forge; zero bytes leave ForgeHub.
  *
- * Graceful degradation: if the repo hasn't opted this format in / no handler is
- * registered, /filediff answers 404 and we render exactly what the file would
- * have shown WITHOUT semantic support — its base text/binary viewer — instead of
- * an error. Only genuine failures (500, network) surface the error line.
+ * Graceful degradation splits in two (#73):
+ * - "format-not-enabled" (200): an official handler EXISTS, the repo just
+ *   hasn't opted the extension into .forge/formats — an actionable card shows
+ *   the exact `forge formats add/ignore` commands (aggregated across the
+ *   view's files), above the file's base text/binary viewer.
+ * - 404: no official handler for the extension at all — render exactly what
+ *   the file would have shown WITHOUT semantic support (its base viewer), no
+ *   CTA. Only genuine failures (500, network) surface the error line.
  *
  * The renderer's optional geometry/"View in 3D" scene needs the actual file
  * bytes, so the server path also fetches the base/head raw blobs (auth-aware)
@@ -80,6 +88,7 @@ export function FhrFileDiffViewer({
   const [slow, setSlow] = useState(false);
   // Tier B computes only after the honest-cost gate is clicked (per mount).
   const [browserConsented, setBrowserConsented] = useState(false);
+  const [notEnabled, setNotEnabled] = useState<FormatNotEnabled | null>(null);
 
   const path = file.status === "deleted" ? file.oldPath : file.newPath;
   const filename = path.split("/").pop() ?? path;
@@ -130,6 +139,7 @@ export function FhrFileDiffViewer({
     setStatus("loading");
     setMessage("");
     setSlow(false);
+    setNotEnabled(null);
     // The nudge replaces the spinner only for the server tier — a slow browser
     // compute is the user's own machine, with its cost already consented to.
     const slowTimer =
@@ -166,8 +176,19 @@ export function FhrFileDiffViewer({
           }
         } else {
           // Tier S: the canonical server-computed diff (the record for review).
-          diff = await getFileSemanticDiff(token, handle, repoName, path, headRef);
-          if (cancelled) return;
+          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef);
+          if (cancelled) return revokeAll();
+          // Official handler exists but the repo hasn't opted the format in —
+          // show the actionable card instead of a silent fallback (#73). Only
+          // the server tier can see this: /filediff-meta applies the same
+          // opt-in gate and 404s, so a client tier never gets this far.
+          if (isFormatNotEnabled(result)) {
+            revokeAll();
+            setNotEnabled(result);
+            setStatus("not-enabled");
+            return;
+          }
+          diff = result;
           // Best-effort: the change tree renders even if the blobs are missing;
           // only the on-demand geometry scene needs them.
           blobs = await loadRendererBlobs(token, handle, repoName, path, diff, objectUrls);
@@ -193,9 +214,10 @@ export function FhrFileDiffViewer({
         setStatus("ready");
       } catch (e) {
         if (cancelled) return;
-        // The repo hasn't opted this format in (no handler / not enabled): show
-        // exactly what the file would have shown without semantic support,
-        // rather than an error. Server tier only — a 404 reaching here from a
+        // No official handler for this extension at all (404 — the not-enabled
+        // case answers 200 and is handled above): show exactly what the file
+        // would have shown without semantic support, rather than an error.
+        // Server tier only — a 404 reaching here from a
         // browser compute cannot mean that (filediff-meta already answered 200,
         // which is the same gate), so silently swapping in a raw text diff
         // would hide a real failure behind a plausible-looking one.
@@ -225,6 +247,18 @@ export function FhrFileDiffViewer({
   if (status === "fallback") {
     const BaseViewer = resolveBaseFileDiffViewer(filename);
     return <BaseViewer file={file} repoBase={repoBase} headRef={headRef} token={token} />;
+  }
+
+  // Not enabled (#73): the actionable card on top, then everything the file
+  // would have shown without semantic support, so no information is lost.
+  if (status === "not-enabled" && notEnabled) {
+    const BaseViewer = resolveBaseFileDiffViewer(filename);
+    return (
+      <div>
+        <FormatNotEnabledCard payload={notEnabled} scope={notEnabledScopeKey(repoBase, headRef)} />
+        <BaseViewer file={file} repoBase={repoBase} headRef={headRef} token={token} />
+      </div>
+    );
   }
 
   // Tier L: the forge hand-off (needs meta for the SHAs in the command).
