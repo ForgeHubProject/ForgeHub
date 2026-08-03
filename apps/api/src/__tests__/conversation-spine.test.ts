@@ -20,6 +20,8 @@ vi.mock("../prisma.js", () => ({
     notification: { upsert: vi.fn(), findUnique: vi.fn() },
     crossReference: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
     timelineEvent: { create: vi.fn(), findMany: vi.fn() },
+    // Reactions (#90) ride on issue/PR/comment payloads — default to "none".
+    reaction: { findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), deleteMany: vi.fn() },
     $transaction: vi.fn(),
   },
 }));

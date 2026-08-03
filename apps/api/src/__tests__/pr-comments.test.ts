@@ -43,7 +43,9 @@ vi.mock("../prisma.js", () => ({
       delete: vi.fn(),
     },
     pullRequestReviewComment: {
-      findMany: vi.fn(),
+      // Default: none — the review/review-comment DELETE handlers gather ids for
+      // their reaction sweep (#90), so this must resolve even when unset.
+      findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -56,6 +58,12 @@ vi.mock("../prisma.js", () => ({
     personalAccessToken: {
       findUnique: vi.fn(),
       update: vi.fn(),
+    },
+    // Reactions (#90) ride on comment payloads — default to "none".
+    reaction: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(),
+      deleteMany: vi.fn(),
     },
   },
 }));

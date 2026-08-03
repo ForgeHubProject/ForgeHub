@@ -7,12 +7,18 @@
 import { useState } from "react";
 import { Avatar, Badge, Button, RelativeTime, Textarea, cx } from "../../../ui";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
+import { ReactionBar } from "../../../components/ReactionBar";
 import type { RepoRef } from "../../../lib/autolink";
 import type { Review, ReviewComment, ReviewCommentPosition } from "../../../types";
+
+/** What ReactionBar needs to toggle reactions on review comments (#90). */
+export type ReactionCtx = { token: string; handle: string; repoName: string };
 
 /** The review mutation surface threaded down to the diff/thread widgets. */
 export type ReviewInteraction = {
   currentUser: string;
+  /** Set to enable reaction pills on review-thread comments (#90). */
+  reactionCtx?: ReactionCtx;
   /** The viewer has an unsubmitted draft review in progress. */
   hasPendingReview: boolean;
   /** The viewer may open new inline comments (logged in, not the PR author, PR open). */
@@ -162,7 +168,7 @@ export function InlineComposer({
 
 export type ReviewThreadData = { root: ReviewComment; replies: ReviewComment[] };
 
-function CommentCard({ comment, repo }: { comment: ReviewComment; repo: RepoRef }) {
+function CommentCard({ comment, repo, reactionCtx }: { comment: ReviewComment; repo: RepoRef; reactionCtx?: ReactionCtx }) {
   return (
     <div className="px-3 py-2.5">
       <div className="flex items-center gap-2 text-fh-sm mb-1.5">
@@ -173,6 +179,19 @@ function CommentCard({ comment, repo }: { comment: ReviewComment; repo: RepoRef 
       </div>
       <div className="pl-7 text-fh-sm">
         <MarkdownRenderer content={comment.body} repo={repo} />
+        {/* Reactions (#90) — drafts are private, so no pills until submitted. */}
+        {reactionCtx && !comment.pending && (
+          <ReactionBar
+            token={reactionCtx.token}
+            handle={reactionCtx.handle}
+            repoName={reactionCtx.repoName}
+            subjectType="pr_review_comment"
+            subjectId={comment.id}
+            reactions={comment.reactions}
+            viewerReacted={comment.viewerReacted}
+            className="mt-2"
+          />
+        )}
       </div>
     </div>
   );
@@ -186,6 +205,7 @@ export function ReviewThread({
   busy,
   onReply,
   onToggleResolve,
+  reactionCtx,
   /** Compact framing for anchoring under a diff line. */
   anchored,
 }: {
@@ -196,6 +216,7 @@ export function ReviewThread({
   busy?: boolean;
   onReply: (rootId: string, body: string) => void;
   onToggleResolve: (rootId: string, resolved: boolean) => void;
+  reactionCtx?: ReactionCtx;
   anchored?: boolean;
 }) {
   const { root, replies } = thread;
@@ -246,8 +267,8 @@ export function ReviewThread({
         </div>
       )}
       <div className="divide-y divide-fh-border">
-        <CommentCard comment={root} repo={repo} />
-        {replies.map((r) => <CommentCard key={r.id} comment={r} repo={repo} />)}
+        <CommentCard comment={root} repo={repo} reactionCtx={reactionCtx} />
+        {replies.map((r) => <CommentCard key={r.id} comment={r} repo={repo} reactionCtx={reactionCtx} />)}
       </div>
 
       <div className="flex items-center gap-2 px-3 py-2 border-t border-fh-border bg-fh-canvas">
@@ -466,6 +487,7 @@ export function FileThreadList({
           busy={review.busy}
           onReply={review.onReply}
           onToggleResolve={review.onToggleResolve}
+          reactionCtx={review.reactionCtx}
           anchored
         />
       ))}

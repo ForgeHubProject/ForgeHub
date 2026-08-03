@@ -7,6 +7,7 @@ import { syncBodyReferences } from "../references-service.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { resolveMilestoneFilter } from "../milestone-filter.js";
+import { deleteSubjectReactions, reactionRollupFor, reactionRollups, type ReactionRollup } from "../reactions-service.js";
 
 function formatIssue(issue: {
   id: string;
@@ -29,7 +30,7 @@ function formatIssue(issue: {
   lockReason?: string | null;
   // Milestone association (#83) — optional so mocked/legacy rows still format.
   milestone?: { id: string; number: number; title: string; state: string } | null;
-}) {
+}, rollup?: ReactionRollup) {
   return {
     id: issue.id,
     number: issue.number,
@@ -56,6 +57,10 @@ function formatIssue(issue: {
     milestone: issue.milestone
       ? { id: issue.milestone.id, number: issue.milestone.number, title: issue.milestone.title, state: issue.milestone.state.toLowerCase() }
       : null,
+    // Emoji reactions (#90): grouped counts + which emoji the viewer used.
+    // Empty when the response didn't fetch a rollup (e.g. a just-created issue).
+    reactions: rollup?.reactions ?? {},
+    viewerReacted: rollup?.viewerReacted ?? [],
   };
 }
 
@@ -68,13 +73,16 @@ function formatComment(comment: {
   author: { handle: string };
   createdAt: Date;
   updatedAt: Date;
-}) {
+}, rollup?: ReactionRollup) {
   return {
     id: comment.id,
     body: comment.body,
     author: comment.author.handle,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
+    // Emoji reactions (#90) — empty when no rollup was fetched (new comments).
+    reactions: rollup?.reactions ?? {},
+    viewerReacted: rollup?.viewerReacted ?? [],
   };
 }
 
@@ -135,7 +143,9 @@ export async function issueRoutes(app: FastifyInstance) {
       include: issueInclude,
     });
 
-    return { issues: issues.map(formatIssue) };
+    // Reactions ride along, batched: ONE grouped query for the whole page (#90).
+    const rollups = await reactionRollups("ISSUE", issues.map((i) => i.id), userId);
+    return { issues: issues.map((i) => formatIssue(i, rollups.get(i.id))) };
   });
 
   // POST /repos/:handle/:name/issues
@@ -226,7 +236,7 @@ export async function issueRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Issue not found" });
     }
 
-    return formatIssue(issue);
+    return formatIssue(issue, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // PATCH /repos/:handle/:name/issues/:number
@@ -322,7 +332,8 @@ export async function issueRoutes(app: FastifyInstance) {
       }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue edit)"));
     }
 
-    return formatIssue(updated);
+    // Include the rollup so a client that replaces its copy keeps the pills.
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // DELETE /repos/:handle/:name/issues/:number
@@ -341,7 +352,18 @@ export async function issueRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Only the author or repository owner can delete this issue" });
     }
 
+    // Reactions can't FK-cascade off the polymorphic subject pair (#90), so
+    // sweep the issue's AND its (about-to-cascade) comments' reactions here.
+    const commentIds = (
+      await prisma.issueComment.findMany({ where: { issueId: issue.id }, select: { id: true } })
+    ).map((c) => c.id);
+
     await prisma.issue.delete({ where: { id: issue.id } });
+
+    await deleteSubjectReactions([
+      { subjectType: "ISSUE", subjectIds: [issue.id] },
+      { subjectType: "ISSUE_COMMENT", subjectIds: commentIds },
+    ]);
 
     return reply.status(204).send();
   });
@@ -365,7 +387,9 @@ export async function issueRoutes(app: FastifyInstance) {
       include: { author: { select: { handle: true } } },
     });
 
-    return { comments: comments.map(formatComment) };
+    // Reactions ride along, batched: ONE grouped query for the whole list (#90).
+    const rollups = await reactionRollups("ISSUE_COMMENT", comments.map((c) => c.id), userId);
+    return { comments: comments.map((c) => formatComment(c, rollups.get(c.id))) };
   });
 
   // POST /repos/:handle/:name/issues/:number/comments
@@ -486,7 +510,7 @@ export async function issueRoutes(app: FastifyInstance) {
       body: updated.body,
     }).catch((err) => request.log.error({ err }, "syncBodyReferences (issue comment edit)"));
 
-    return formatComment(updated);
+    return formatComment(updated, await reactionRollupFor("ISSUE_COMMENT", comment.id, userId));
   });
 
   // DELETE /repos/:handle/:name/issues/:number/comments/:commentId
@@ -511,6 +535,9 @@ export async function issueRoutes(app: FastifyInstance) {
     }
 
     await prisma.issueComment.delete({ where: { id: comment.id } });
+
+    // Explicit reaction sweep — the polymorphic subject FK can't cascade (#90).
+    await deleteSubjectReactions([{ subjectType: "ISSUE_COMMENT", subjectIds: [comment.id] }]);
 
     return reply.status(204).send();
   });
@@ -609,7 +636,7 @@ export async function issueRoutes(app: FastifyInstance) {
       data: { estimateMinutes: Math.round(minutes) },
       include: issueInclude,
     });
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // PUT /repos/:handle/:name/issues/:number/spent  { minutes }
@@ -634,7 +661,7 @@ export async function issueRoutes(app: FastifyInstance) {
       data: { spentMinutes: Math.round(minutes) },
       include: issueInclude,
     });
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // ─── Pinned issues (#120) ─────────────────────────────────────────────────────
@@ -669,7 +696,7 @@ export async function issueRoutes(app: FastifyInstance) {
         .catch((err) => request.log.error({ err }, "recordEvent pinned"));
     }
 
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // DELETE /repos/:handle/:name/issues/:number/pin — writer-gated unpin.
@@ -695,7 +722,7 @@ export async function issueRoutes(app: FastifyInstance) {
         .catch((err) => request.log.error({ err }, "recordEvent unpinned"));
     }
 
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // ─── Locked conversations (#120) ──────────────────────────────────────────────
@@ -728,7 +755,7 @@ export async function issueRoutes(app: FastifyInstance) {
       }).catch((err) => request.log.error({ err }, "recordEvent locked"));
     }
 
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // DELETE /repos/:handle/:name/issues/:number/lock — writer-gated unlock.
@@ -755,7 +782,7 @@ export async function issueRoutes(app: FastifyInstance) {
         .catch((err) => request.log.error({ err }, "recordEvent unlocked"));
     }
 
-    return formatIssue(updated);
+    return formatIssue(updated, await reactionRollupFor("ISSUE", issue.id, userId));
   });
 
   // ─── Issue transfer (#120) ────────────────────────────────────────────────────
