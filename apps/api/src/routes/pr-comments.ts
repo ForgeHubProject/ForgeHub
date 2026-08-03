@@ -157,6 +157,19 @@ export async function prCommentRoutes(app: FastifyInstance) {
     return { repo, pr };
   }
 
+  /**
+   * Mark the reviewer's active review request fulfilled (issue #82): a submitted
+   * review satisfies an open "please review" pointing at its author. Dismissed or
+   * already-fulfilled requests are untouched, so a later re-request can flip the
+   * reviewer back to "requested". Best-effort — never fails the submission.
+   */
+  async function fulfillReviewerRequest(pullRequestId: string, reviewerId: string): Promise<void> {
+    await prisma.pullRequestReviewerRequest.updateMany({
+      where: { pullRequestId, userId: reviewerId, fulfilledAt: null, dismissedAt: null },
+      data: { fulfilledAt: new Date() },
+    });
+  }
+
   /** Current head (`fromBranch`) SHA, for recording/computing review staleness. */
   async function headShaOf(
     repo: { storageKey: string | null },
@@ -405,6 +418,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
 
       // Notify + record a spine event when a review is actually submitted.
       if (submittedAt) {
+        await fulfillReviewerRequest(ctx.pr.id, userId)
+          .catch((err) => request.log.error({ err }, "fulfillReviewerRequest (create review)"));
         void notifyUser(ctx.pr.authorId, { actorId: userId, repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectId: ctx.pr.id, subjectTitle: ctx.pr.title, reason: "COMMENT" });
         await recordEvent({
           repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectNumber: ctx.pr.number,
@@ -507,6 +522,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
         },
       });
 
+      await fulfillReviewerRequest(ctx.pr.id, userId)
+        .catch((err) => request.log.error({ err }, "fulfillReviewerRequest (submit review)"));
       void notifyUser(ctx.pr.authorId, { actorId: userId, repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectId: ctx.pr.id, subjectTitle: ctx.pr.title, reason: "COMMENT" });
       await recordEvent({
         repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectNumber: ctx.pr.number,

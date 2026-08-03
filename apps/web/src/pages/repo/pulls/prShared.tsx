@@ -23,6 +23,12 @@ export const GitPullRequestIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const GitPullRequestDraftIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z" />
+  </Svg>
+);
+
 export const GitMergeIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M5.45 5.154A4.25 4.25 0 0 0 9.25 9.25v2.378a2.251 2.251 0 1 1-1.5 0V9.25A2.75 2.75 0 0 1 5.45 6.659l-.776-.776a.75.75 0 0 1 1.06-1.06l.716.716v-.385zm.01 5.096a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0zM9.25 5.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-3a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" />
@@ -77,8 +83,14 @@ export const CheckCircleIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** The state glyph, tinted in the state's semantic token color. */
-export function PRStateIcon({ state, size = 16, className }: { state: PRState; size?: number; className?: string }) {
+/**
+ * The state glyph, tinted in the state's semantic token color. A draft open PR
+ * (issue #82) renders the dashed draft mark in muted gray.
+ */
+export function PRStateIcon({ state, draft, size = 16, className }: { state: PRState; draft?: boolean; size?: number; className?: string }) {
+  if (draft && state === "open") {
+    return <GitPullRequestDraftIcon size={size} className={cx("shrink-0 text-fh-fg-muted", className)} />;
+  }
   const tone =
     state === "open" ? "text-fh-success-fg" : state === "merged" ? "text-fh-purple-fg" : "text-fh-danger-fg";
   const Icon = state === "merged" ? GitMergeIcon : GitPullRequestIcon;
@@ -92,8 +104,19 @@ const STATE_SOLID: Record<PRState, string> = {
   closed: "bg-fh-danger-emphasis",
 };
 
-/** The prominent solid status pill for the PR header. */
-export function StatePill({ state }: { state: PRState }) {
+/**
+ * The prominent solid status pill for the PR header. `draft` (only meaningful
+ * while open, issue #82) swaps the green Open pill for a muted gray Draft one.
+ */
+export function StatePill({ state, draft }: { state: PRState; draft?: boolean }) {
+  if (draft && state === "open") {
+    return (
+      <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-fh-sm font-semibold bg-fh-neutral-muted text-fh-fg-muted">
+        <GitPullRequestDraftIcon size={15} />
+        Draft
+      </span>
+    );
+  }
   const Icon = state === "merged" ? GitMergeIcon : GitPullRequestIcon;
   return (
     <span
@@ -104,6 +127,22 @@ export function StatePill({ state }: { state: PRState }) {
     >
       <Icon size={15} />
       {STATE_LABEL[state]}
+    </span>
+  );
+}
+
+/** Compact "Draft" chip for PR list rows (issue #82). */
+export function DraftBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-fh-xs font-medium",
+        "bg-fh-neutral-muted text-fh-fg-muted",
+        className,
+      )}
+    >
+      <GitPullRequestDraftIcon size={12} />
+      Draft
     </span>
   );
 }
