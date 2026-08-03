@@ -11,6 +11,9 @@ vi.mock("../prisma.js", () => ({
     notification: { findUnique: vi.fn(), upsert: vi.fn().mockResolvedValue(undefined) },
     user: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue(undefined) },
     repo: { findUnique: vi.fn() },
+    // No watch row ⇒ notifyUser's IGNORE-mute check (issue #88) passes through;
+    // the delivery-time read check is fed by the repo.findUnique mock below.
+    watch: { findUnique: vi.fn().mockResolvedValue(null) },
     issue: { findUnique: vi.fn() },
     pullRequest: { findUnique: vi.fn() },
     release: { findUnique: vi.fn() },
@@ -51,7 +54,12 @@ function wireRecipient(emailNotifications: boolean): void {
     if (args.where.id === "actor-2") return Promise.resolve({ handle: "actor2" });
     return Promise.resolve(null);
   }) as never);
-  vi.mocked(prisma.repo.findUnique).mockResolvedValue({ name: "widget", owner: { handle: "alice" } } as never);
+  // Superset row: the email render needs name/owner, notifyUser's delivery-time
+  // read check (issue #88) needs the access fields — PUBLIC lets it through.
+  vi.mocked(prisma.repo.findUnique).mockResolvedValue({
+    name: "widget", owner: { handle: "alice" },
+    visibility: "PUBLIC", ownerId: "owner-1", collaborators: [],
+  } as never);
   vi.mocked(prisma.issue.findUnique).mockResolvedValue({ number: 12 } as never);
 }
 

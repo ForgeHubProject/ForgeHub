@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { ApiError, createBranch, forkRepo, getRepo, listBranches, listIssues, listProjects, listPulls, syncFork } from "../api";
+import { ApiError, createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { NotFoundPage } from "./NotFoundPage";
-import { Badge, Button, Spinner, TabNav, TabItem, useToast } from "../ui";
-import type { BranchInfo, Repo, SyncForkResult, User } from "../types";
+import { Badge, Button, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, TabNav, TabItem, useToast } from "../ui";
+import { BellIcon, CheckIcon, ChevronDownIcon } from "../ui/icons";
+import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } from "../types";
 
 function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   if (!splat.startsWith("tree/")) return null;
@@ -129,6 +130,14 @@ function StarIcon() {
   );
 }
 
+function StarFillIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="text-fh-warning-fg">
+      <path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z" />
+    </svg>
+  );
+}
+
 function ForkIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -176,6 +185,11 @@ export function RepoPage({ token, user, onLogout }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncForkResult | null>(null);
 
+  // Star/watch state (issue #88). Loaded separately from the repo so a failure
+  // here never blocks the page; null keeps the buttons in a neutral state.
+  const [social, setSocial] = useState<RepoSocial | null>(null);
+  const [starBusy, setStarBusy] = useState(false);
+
   const { toast } = useToast();
 
   const h = handle!;
@@ -213,6 +227,10 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .then((d) => setOpenPrCount(d.pulls.length))
       .catch(() => {});
 
+    getRepoSocial(token, h, r)
+      .then(setSocial)
+      .catch(() => {});
+
     refreshProjectCount();
   }, [token, h, r]);
 
@@ -244,6 +262,33 @@ export function RepoPage({ token, user, onLogout }: Props) {
       toast(e instanceof Error ? e.message : "Could not fork this repository", { tone: "danger" });
     } finally {
       setForking(false);
+    }
+  }
+
+  async function handleToggleStar() {
+    if (!social || starBusy) return;
+    setStarBusy(true);
+    try {
+      const res = social.viewerStarred ? await unstarRepo(token, h, r) : await starRepo(token, h, r);
+      setSocial({ ...social, viewerStarred: res.starred, starCount: res.starCount });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update the star", { tone: "danger" });
+    } finally {
+      setStarBusy(false);
+    }
+  }
+
+  async function handleSetWatch(level: WatchLevel) {
+    if (!social) return;
+    const previous = social.watchLevel;
+    setSocial({ ...social, watchLevel: level }); // optimistic — the menu closes immediately
+    try {
+      const res = await setWatchLevel(token, h, r, level);
+      // The server's count is authoritative; the level was already applied.
+      setSocial((s) => (s ? { ...s, watcherCount: res.watcherCount } : s));
+    } catch (e) {
+      setSocial((s) => (s ? { ...s, watchLevel: previous } : s));
+      toast(e instanceof Error ? e.message : "Could not update watching", { tone: "danger" });
     }
   }
 
@@ -375,6 +420,39 @@ export function RepoPage({ token, user, onLogout }: Props) {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              {/* Watch — the three-level subscription (issue #88). */}
+              <DropdownMenu
+                width={220}
+                trigger={
+                  <Button
+                    variant="default"
+                    size="sm"
+                    leadingIcon={<BellIcon size={14} />}
+                    trailingIcon={<ChevronDownIcon size={10} />}
+                    disabled={!social}
+                    title="Choose how you're notified about this repository"
+                  >
+                    {social?.watchLevel === "all" ? "Watching" : social?.watchLevel === "ignore" ? "Ignoring" : "Watch"}
+                    <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted tabular-nums">
+                      {social?.watcherCount ?? 0}
+                    </span>
+                  </Button>
+                }
+              >
+                {([
+                  ["participating", "Participating", "Only when mentioned, assigned, or review-requested"],
+                  ["all", "All activity", "Everything happening in this repository"],
+                  ["ignore", "Ignore", "Mute this repository, even mentions"],
+                ] as Array<[WatchLevel, string, string]>).map(([level, label, hint]) => (
+                  <DropdownItem
+                    key={level}
+                    onSelect={() => void handleSetWatch(level)}
+                    trailing={social?.watchLevel === level ? <CheckIcon size={14} /> : undefined}
+                  >
+                    <span title={hint}>{label}</span>
+                  </DropdownItem>
+                ))}
+              </DropdownMenu>
               {/* Sync fork — owner of a fork can pull upstream changes (issue #113). */}
               {repo.parent && user.handle === h && (
                 <Button
@@ -410,10 +488,20 @@ export function RepoPage({ token, user, onLogout }: Props) {
                   {repo.forkCount ?? 0}
                 </Link>
               </div>
-              {/* Starring is not yet wired to a backend. */}
-              <Button variant="default" size="sm" leadingIcon={<StarIcon />} title="Starring is not available yet" disabled>
-                Star
-                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted">0</span>
+              {/* Star toggle + grouped count (issue #88). */}
+              <Button
+                variant="default"
+                size="sm"
+                leadingIcon={social?.viewerStarred ? <StarFillIcon /> : <StarIcon />}
+                loading={starBusy}
+                disabled={!social}
+                onClick={handleToggleStar}
+                title={social?.viewerStarred ? "Remove this repository from your stars" : "Star this repository"}
+              >
+                {social?.viewerStarred ? "Starred" : "Star"}
+                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-fh-neutral-muted text-fh-xs font-semibold text-fh-fg-muted tabular-nums">
+                  {social?.starCount ?? repo.starCount ?? 0}
+                </span>
               </Button>
             </div>
           </div>

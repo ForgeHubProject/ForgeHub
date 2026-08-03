@@ -36,11 +36,12 @@ export async function searchRoutes(app: FastifyInstance) {
     "/search",
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
-      const { q, type = "repos", regex: regexQ, case: caseQ } = request.query as {
+      const { q, type = "repos", regex: regexQ, case: caseQ, sort: sortQ } = request.query as {
         q?: string;
         type?: string;
         regex?: string;
         case?: string;
+        sort?: string;
       };
 
       if (!q || q.trim().length < 2) {
@@ -258,13 +259,20 @@ export async function searchRoutes(app: FastifyInstance) {
         repoConditions.push({ OR: [{ name: { contains: textTerm } }, { description: { contains: textTerm } }] });
       }
 
+      // `sort=stars` orders by the grouped star count (issue #88); the default
+      // stays recency so existing search links keep their behavior.
+      const orderBy = sortQ === "stars"
+        ? { stars: { _count: "desc" as const } }
+        : { updatedAt: "desc" as const };
+
       const repos = await prisma.repo.findMany({
         where: { AND: repoConditions },
         include: {
           owner: { select: { handle: true } },
           topics: { orderBy: { topic: "asc" }, select: { topic: true } },
+          _count: { select: { stars: true } },
         },
-        orderBy: { updatedAt: "desc" },
+        orderBy,
         take: 25,
       });
 
@@ -277,6 +285,7 @@ export async function searchRoutes(app: FastifyInstance) {
           visibility: r.visibility === "PUBLIC" ? "public" : "private",
           ownerHandle: r.owner.handle,
           topics: r.topics.map((t) => t.topic),
+          starCount: r._count?.stars ?? 0,
           createdAt: r.createdAt.toISOString(),
           updatedAt: r.updatedAt.toISOString(),
         })),

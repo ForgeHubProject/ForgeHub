@@ -601,6 +601,30 @@ export async function readFileAtBranchExact(
   }
 }
 
+/**
+ * Read a UTF-8 file at a ref WITHOUT trimming (null if missing).
+ *
+ * The same reasoning as {@link readFileAtBranchExact}, arrived at independently
+ * for a different caller: an issue/PR template's leading blank line and trailing
+ * newline are part of the authored text (issue #89), so the trimming read would
+ * hand a user back something they did not write. Kept separate because it takes
+ * an arbitrary ref rather than a branch; the two are candidates for merging into
+ * one helper, which is a tidy-up rather than a behaviour change.
+ */
+export async function readFileAtRefExact(
+  storageKey: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  try {
+    const { stdout } = await execFile("git", ["show", `${ref}:${filePath}`], { cwd, maxBuffer: MAX });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
 // ─── commits ─────────────────────────────────────────────────────────────────────────────
 
 // ─── commit signatures (Verified badge — issue #117) ──────────────────────────

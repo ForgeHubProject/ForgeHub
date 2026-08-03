@@ -5,6 +5,7 @@ import { cloneMirror, syncForkBranch } from "../git-utils.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { ingestCommitRange } from "../ingest.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
+import { ensureImplicitWatch } from "../watch-service.js";
 import { randomBytes } from "node:crypto";
 
 /**
@@ -61,6 +62,9 @@ export async function forkRoutes(app: FastifyInstance) {
         forkedFromId: repo.id,
       },
     });
+
+    // The fork's owner implicitly watches it at ALL (issue #88).
+    await ensureImplicitWatch(fork.id, userId);
 
     const owner = await prisma.user.findUnique({ where: { id: userId }, select: { handle: true } });
 
