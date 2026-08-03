@@ -224,6 +224,30 @@ export async function createRepo(
   });
 }
 
+/**
+ * Update a repository's description (null clears it) and/or visibility. The
+ * server route addresses the caller's own personal repo by name — Settings is
+ * only reachable by the owning user, so no handle is sent.
+ */
+export async function updateRepo(
+  token: string,
+  repoName: string,
+  patch: { description?: string | null; visibility?: "public" | "private" },
+): Promise<Repo> {
+  return req(`/repos/${repoName}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/**
+ * Permanently delete a repository (DB rows + git storage), addressed by owning
+ * handle and name like {@link getRepo}. The owner has to be part of the address:
+ * a bare name resolves against the *caller's* namespace server-side, so deleting
+ * from someone else's repo page would otherwise hit the caller's same-named repo.
+ * Resolves only on the server's 204 — any other status throws.
+ */
+export async function deleteRepo(token: string, handle: string, repoName: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}`, { method: "DELETE", token });
+}
+
 // ─── composition ─────────────────────────────────────────────────────────────
 
 /** Byte-share per format/domain at a ref (default branch when omitted). */
@@ -713,18 +737,23 @@ export async function forkRepo(
 
 // ─── commits ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * List commits on a ref, forwarding the query params the server actually reads
+ * (issue #109): `page`/`per_page` for pagination and `path` for per-path
+ * history (only commits touching that file or directory).
+ */
 export async function listCommits(
   token: string | null,
   handle: string,
   repoName: string,
   ref?: string,
-  path?: string,
-  limit?: number,
-): Promise<{ commits: CommitInfo[] }> {
+  opts: { path?: string; page?: number; perPage?: number } = {},
+): Promise<{ commits: CommitInfo[]; branch: string; path: string | null; page: number; perPage: number }> {
   const qs = new URLSearchParams();
   if (ref) qs.set("branch", ref);
-  if (path) qs.set("path", path);
-  if (limit) qs.set("limit", String(limit));
+  if (opts.path) qs.set("path", opts.path);
+  if (opts.page) qs.set("page", String(opts.page));
+  if (opts.perPage) qs.set("per_page", String(opts.perPage));
   const q = qs.toString() ? `?${qs}` : "";
   return req(`/repos/${handle}/${repoName}/commits${q}`, { token: token ?? undefined });
 }

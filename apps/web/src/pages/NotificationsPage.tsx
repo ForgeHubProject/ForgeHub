@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { deleteNotification, listNotifications, markAllNotificationsRead, markNotificationRead, setEmailNotifications } from "../api";
 import { Header } from "../components/Header";
+import { RepoIcon } from "./listShared";
 import type { Notification, User } from "../types";
 import {
-  Avatar, Badge, Button, EmptyState, PageHeading, RelativeTime, Skeleton,
+  Badge, Button, EmptyState, PageHeading, RelativeTime, Skeleton,
   TabNav, TabItem, Tooltip, cx, useToast,
 } from "../ui";
 import type { BadgeTone } from "../ui";
@@ -210,7 +211,8 @@ export function NotificationsPage({ token, user, onLogout, onUserChange }: Props
               return (
                 <section key={repo}>
                   <div className="flex items-center gap-2 mb-2 px-0.5">
-                    <Avatar name={name || repo} size={18} square />
+                    {/* The repo octicon — the one repo mark used everywhere (issue #109). */}
+                    <RepoIcon size={16} className="shrink-0 text-fh-fg-muted" />
                     <Link to={`/${h}/${name}`} className="text-fh-sm font-semibold text-fh-fg hover:text-fh-accent-fg no-underline hover:underline">
                       {repo}
                     </Link>
