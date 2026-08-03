@@ -47,8 +47,26 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         // Manifest unreachable with no cached copy — can't authorize a diff.
         return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
       }
-      if (!activeExts.has(ext) || !handlerId) {
+      if (!handlerId) {
+        // Genuinely unsupported: no official handler exists for this extension
+        // at all — nothing to opt into, so the honest 404 stands and the client
+        // falls back to its raw/text diff.
         return reply.status(404).send({ error: "No semantic handler for this file" });
+      }
+      if (!activeExts.has(ext)) {
+        // Fixable: an official handler exists, the repo just hasn't opted the
+        // extension into .forge/formats at this commit. Not an error — answer
+        // 200 with a structured call-to-action payload the web view renders as
+        // "run this to enable it" instead of a dead-end (#73). The hint lists
+        // both verbs: `add` opts in, `ignore` records a deliberate opt-out and
+        // silences the nudge (forge#31).
+        return {
+          status: "format-not-enabled",
+          path: filePath,
+          ext,
+          message: `Format ${ext} is not added to this repo's .forge/formats.`,
+          hint: [`forge formats add ${ext}`, `forge formats ignore ${ext}`],
+        };
       }
 
       // Base defaults to the commit's first parent; absent (root commit or an
