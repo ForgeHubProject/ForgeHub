@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
+import { ApiError, createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
+import { NotFoundPage } from "./NotFoundPage";
 import { Badge, Button, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, TabNav, TabItem, useToast } from "../ui";
 import { BellIcon, CheckIcon, ChevronDownIcon } from "../ui/icons";
 import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } from "../types";
@@ -16,7 +17,7 @@ function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   }
   return null;
 }
-import { TopicChips } from "./listShared";
+import { LockIcon, RepoIcon, TopicChips } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
@@ -113,22 +114,6 @@ function SettingsIcon() {
   );
 }
 
-function LockIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path fillRule="evenodd" d="M4 4v2h-.25A1.75 1.75 0 002 7.75v5.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0014 13.25v-5.5A1.75 1.75 0 0012.25 6H12V4a4 4 0 10-8 0zm6.5 2V4a2.5 2.5 0 00-5 0v2h5zM12 7.5h.25a.25.25 0 01.25.25v5.5a.25.25 0 01-.25.25h-8.5a.25.25 0 01-.25-.25v-5.5a.25.25 0 01.25-.25H12z" />
-    </svg>
-  );
-}
-
-function RepoIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
-      <path fillRule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8z" />
-    </svg>
-  );
-}
-
 function LawIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -193,6 +178,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
   const [openProjectCount, setOpenProjectCount] = useState<number | null>(null);
 
   const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [forking, setForking] = useState(false);
@@ -211,6 +197,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
   useEffect(() => {
     setLoading(true);
+    setNotFound(false);
     setError(null);
     Promise.all([
       getRepo(token, h, r),
@@ -224,7 +211,12 @@ export function RepoPage({ token, user, onLogout }: Props) {
         const refFromUrl = refFromSplat(splat, branchData.branches);
         setCurrentRef(refFromUrl ?? branchData.defaultBranch);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .catch((e) => {
+        // A missing (or invisible-to-the-viewer) repo is the shared 404 page;
+        // anything else is a genuine load failure and keeps the inline error.
+        if (e instanceof ApiError && e.status === 404) setNotFound(true);
+        else setError(e instanceof Error ? e.message : "Failed to load");
+      })
       .finally(() => setLoading(false));
 
     listIssues(token, h, r, "open")
@@ -340,13 +332,18 @@ export function RepoPage({ token, user, onLogout }: Props) {
     );
   }
 
+  // Missing repository → the shared 404 page (issue #109); the greedy
+  // /:handle/:repoName route shadows the router's catch-all, so this is where
+  // an unknown repo path lands.
+  if (notFound) return <NotFoundPage />;
+
   if (error || !repo) {
     return (
       <div className="min-h-screen flex flex-col bg-fh-canvas">
         <Header user={user} onLogout={onLogout} token={token} />
         <div className="flex-1 max-w-4xl mx-auto px-4 py-16 text-center">
-          <p className="text-fh-xl font-semibold text-fh-fg">Repository not found</p>
-          <p className="text-fh-fg-muted mt-2">{error ?? "This repository does not exist or you do not have access."}</p>
+          <p className="text-fh-xl font-semibold text-fh-fg">Couldn't load this repository</p>
+          <p className="text-fh-fg-muted mt-2">{error ?? "Something went wrong while loading this repository."}</p>
           <Link to="/" className="inline-block mt-4">
             <Button variant="default">Back to dashboard</Button>
           </Link>
@@ -368,7 +365,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <RepoIcon />
+                <RepoIcon className="text-fh-fg-muted shrink-0" />
                 <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-fh-xl min-w-0">
                   <Link to={`/${h}`} className="font-normal text-fh-accent-fg hover:underline truncate">
                     {h}
@@ -378,8 +375,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
                     {repo.name}
                   </Link>
                 </nav>
-                <Badge tone={isPrivate ? "warning" : "neutral"} className="ml-0.5 border-fh-border">
-                  {isPrivate ? <><LockIcon /> Private</> : "Public"}
+                <Badge variant="outline" tone={isPrivate ? "warning" : "neutral"} className="ml-0.5">
+                  {isPrivate ? <><LockIcon size={14} /> Private</> : "Public"}
                 </Badge>
                 {repo.license && (
                   <Link

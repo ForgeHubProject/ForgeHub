@@ -497,6 +497,30 @@ describe("notifyUser (direct reasons)", () => {
     expect(prisma.notification.upsert).not.toHaveBeenCalled();
   });
 
+  // Regression (#88 × #82): IGNORE mutes *subscriptions*, not questions put to
+  // you by name. A review request blocks the PR until the reviewer acts, so
+  // muting the repo must not swallow it and strand the requester.
+  it("IGNORE does NOT mute a direct review request", async () => {
+    vi.mocked(prisma.watch.findUnique).mockResolvedValue({ level: "IGNORE" } as never);
+    await notifyUser("user-9", { ...EVENT, subjectType: "PULL_REQUEST", reason: "REVIEW_REQUESTED" });
+    expect(prisma.notification.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("IGNORE still mutes an assignment on the same subject", async () => {
+    vi.mocked(prisma.watch.findUnique).mockResolvedValue({ level: "IGNORE" } as never);
+    await notifyUser("user-9", { ...EVENT, reason: "ASSIGNED" });
+    expect(prisma.notification.upsert).not.toHaveBeenCalled();
+  });
+
+  // The read-access gate still wins: an unmutable reason is not a licence to
+  // leak a private repo's PR title to someone whose access is gone.
+  it("suppresses even a review request when the target cannot read the repo", async () => {
+    vi.mocked(prisma.repo.findUnique).mockResolvedValue(PRIVATE_REPO as never);
+    vi.mocked(prisma.watch.findUnique).mockResolvedValue({ level: "IGNORE" } as never);
+    await notifyUser("user-9", { ...EVENT, subjectType: "PULL_REQUEST", reason: "REVIEW_REQUESTED" });
+    expect(prisma.notification.upsert).not.toHaveBeenCalled();
+  });
+
   // Regression (adversarial review): a direct reason must not leak a private
   // repo's subject title to someone whose read access is gone.
   it("suppresses a mention when the target cannot read the repo", async () => {

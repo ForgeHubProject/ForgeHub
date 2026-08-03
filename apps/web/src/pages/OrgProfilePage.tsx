@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getMyOrgs, getOrg } from "../api";
+import { ApiError, getMyOrgs, getOrg } from "../api";
 import { CreateRepoDialog } from "../components/CreateRepoDialog";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
+import { NotFoundPage } from "./NotFoundPage";
 import type { Organization, OrgProfile, Repo, User } from "../types";
 import { Avatar, Button, EmptyState, Icons, Skeleton, TextInput } from "../ui";
 import { CalendarIcon, PersonIcon, RepoIcon, RepoRow, RowList } from "./listShared";
@@ -31,6 +32,7 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
   const [data, setData] = useState<OrgProfile | null>(null);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [myOrg, setMyOrg] = useState<Organization | null>(null);
@@ -38,11 +40,17 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
   useEffect(() => {
     if (!handle) return;
     setLoading(true);
+    setNotFound(false);
     setError(null);
     setFilter("");
     getOrg(token, handle)
       .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "Organization not found"))
+      .catch((e) => {
+        // The /:handle route already probed the user namespace, so an org 404
+        // means the handle exists nowhere — show the shared 404 page (#109).
+        if (e instanceof ApiError && e.status === 404) setNotFound(true);
+        else setError(e instanceof Error ? e.message : "Failed to load organization");
+      })
       .finally(() => setLoading(false));
     // Learn whether the caller may create repos here (any membership qualifies).
     getMyOrgs(token)
@@ -68,6 +76,8 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
     );
   }, [filter, repos]);
 
+  if (notFound) return <NotFoundPage />;
+
   return (
     <div className="flex min-h-screen flex-col bg-fh-canvas">
       <Header user={user} onLogout={onLogout} token={token} />
@@ -90,8 +100,8 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
 
         {!loading && (error || !org) && (
           <div className="rounded-md border border-fh-border bg-fh-surface px-6 py-16 text-center">
-            <p className="text-fh-lg font-semibold text-fh-fg">Organization not found</p>
-            <p className="mt-1 text-fh-base text-fh-fg-muted">{error ?? "This organization does not exist."}</p>
+            <p className="text-fh-lg font-semibold text-fh-fg">Couldn't load this organization</p>
+            <p className="mt-1 text-fh-base text-fh-fg-muted">{error ?? "Something went wrong while loading this organization."}</p>
             <Link to="/" className="mt-4 inline-block no-underline">
               <Button variant="default">Back to dashboard</Button>
             </Link>

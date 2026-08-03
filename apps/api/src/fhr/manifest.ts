@@ -16,7 +16,7 @@ const FHR_MANIFEST_URL =
 // does not hit GitHub.
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** The three lookups ForgeHub derives from the manifest — nothing format-specific. */
+/** The four lookups ForgeHub derives from the manifest — nothing format-specific. */
 export type ParsedManifest = {
   /** lowercased file extension (".gltf") → official handler id ("gltf-scene"). */
   formats: Map<string, string>;
@@ -24,6 +24,13 @@ export type ParsedManifest = {
   wasmUrls: Map<string, string>;
   /** handler id → renderer ESM bundle URL. */
   rendererUrls: Map<string, string>;
+  /**
+   * handler id → content-hash build stamped on the current release (the build
+   * the server executes). Compared against a repo's `.forge/handlers` pin so a
+   * client tier can surface a mismatch rather than silently render a diff a
+   * different build produced (SPEC-RENDERING §4 invariants).
+   */
+  builds: Map<string, string>;
 };
 
 type CacheEntry = { manifest: ParsedManifest; fetchedAt: number };
@@ -41,7 +48,7 @@ let inflight: Promise<ParsedManifest> | null = null;
  */
 export function parseManifest(toml: string): ParsedManifest {
   const raw = parseToml(toml) as {
-    formats?: Record<string, { handler?: unknown }>;
+    formats?: Record<string, { handler?: unknown; build?: unknown }>;
     assets?: {
       handlers?: Record<string, Record<string, unknown>>;
       renderers?: Record<string, unknown>;
@@ -49,9 +56,15 @@ export function parseManifest(toml: string): ParsedManifest {
   };
 
   const formats = new Map<string, string>();
+  // Backend, wasm and renderer are released together under ONE content-hash
+  // build per handler (SPEC-RENDERING §2c), stamped on each [formats] entry.
+  const builds = new Map<string, string>();
   for (const [ext, entry] of Object.entries(raw.formats ?? {})) {
     const handler = entry?.handler;
-    if (typeof handler === "string") formats.set(ext.toLowerCase(), handler);
+    if (typeof handler === "string") {
+      formats.set(ext.toLowerCase(), handler);
+      if (typeof entry?.build === "string") builds.set(handler, entry.build);
+    }
   }
 
   const wasmUrls = new Map<string, string>();
@@ -65,7 +78,7 @@ export function parseManifest(toml: string): ParsedManifest {
     if (typeof url === "string") rendererUrls.set(id, url);
   }
 
-  return { formats, wasmUrls, rendererUrls };
+  return { formats, wasmUrls, rendererUrls, builds };
 }
 
 /**
@@ -116,6 +129,15 @@ export async function rendererUrl(handlerId: string): Promise<string | null> {
 /** The handler ids the manifest declares a renderer bundle for. */
 export async function rendererIds(): Promise<string[]> {
   return [...(await getManifest()).rendererUrls.keys()];
+}
+
+/**
+ * The content-hash build the manifest currently stamps for a handler id, or
+ * null if unstamped. This is the build the server executes; clients compare it
+ * against the repo's `.forge/handlers` pin to surface skew.
+ */
+export async function handlerBuild(handlerId: string): Promise<string | null> {
+  return (await getManifest()).builds.get(handlerId) ?? null;
 }
 
 /** Test hook: install a manifest directly from TOML, bypassing the fetch. */
