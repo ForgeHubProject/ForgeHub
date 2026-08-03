@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { loadActiveFormats } from "./forge-formats.js";
+import { loadHandlerPins } from "./forge-handlers.js";
 import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 
 const execFile = promisify(execFileCb);
@@ -162,6 +163,31 @@ const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forg
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
 export async function activeFormatsAtCommit(storageKey: string, commitIsh: string): Promise<Set<string>> {
   return loadActiveFormats(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+// The repo's handler-build pins (.forge/handlers) at a commit, for surfacing
+// build skew between a client compute tier and the server's official build.
+export async function handlerPinsAtCommit(storageKey: string, commitIsh: string): Promise<Map<string, string | null>> {
+  return loadHandlerPins(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+/**
+ * Size in bytes of a file's blob at a commit, or null when the path is not in
+ * that commit's tree. Answered without materializing the blob, so a client can
+ * be told the honest download cost of browser-side compute before it fetches
+ * anything.
+ *
+ * `ls-tree -l` rather than `cat-file -s` on purpose: it exits 0 with no output
+ * for an absent path, so "the blob isn't there" (an added/deleted/renamed file
+ * — legitimately zero bytes to download) stays distinguishable from a git
+ * failure, which throws. "Cost unknown" must never be reported as "free".
+ */
+export async function blobSizeAtCommit(storageKey: string, commitIsh: string, filePath: string): Promise<number | null> {
+  const out = await git(storageKey, ["ls-tree", "-l", commitIsh, "--", filePath]);
+  // "<mode> blob <sha> <size>\t<path>" — trees and submodules carry "-" and are
+  // not blobs to download either way.
+  const m = /^\S+ blob \S+ +(\d+)\t/.exec(out);
+  return m ? Number(m[1]) : null;
 }
 
 function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<Buffer | null> {
@@ -718,23 +744,88 @@ async function annotateSignatures(storageKey: string, raws: RawCommit[]): Promis
   }));
 }
 
+/**
+ * Wall-clock bound on one per-path history read, in milliseconds. Override with
+ * `PATH_HISTORY_TIMEOUT_MS`.
+ *
+ * Without a pathspec `git log` stops after `skip + perPage` commits, so a page
+ * costs what it returns. With one it keeps walking until it has found that many
+ * *matching* commits, so a rare or unknown path can walk the whole DAG — on a
+ * route that is unauthenticated for public repos. That is the thing to contain.
+ *
+ * It is bounded by *time* rather than by commit count on purpose. Every count
+ * bound we tried buys its cheapness by changing which commit git names for a
+ * path, and a header commit that is fast and wrong is worse than one that is
+ * occasionally missing. A timeout cannot produce a wrong answer: the read either
+ * finishes and is exactly what `git log <ref> -- <path>` says, or it is killed
+ * and returns nothing.
+ */
+export const PATH_HISTORY_DEFAULT_TIMEOUT_MS = 5000;
+
+/** Effective per-path read timeout, read per call so it can be set at runtime. */
+function pathHistoryTimeoutMs(): number {
+  const raw = Number(process.env["PATH_HISTORY_TIMEOUT_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : PATH_HISTORY_DEFAULT_TIMEOUT_MS;
+}
+
+/**
+ * Path-filtered commit lines: exactly what `git log <ref> -- <pathspec>` names,
+ * bounded by {@link PATH_HISTORY_DEFAULT_TIMEOUT_MS} of wall clock.
+ *
+ * This is a plain walk, so git's own history simplification applies: at a merge,
+ * git follows a parent the tree is TREESAME to and prunes the rest, which is why
+ * a change that was merged away (a merge resolved in favour of the other side)
+ * is not reported for the path — git and GitHub both name the commit whose
+ * content is actually in the tree. Nothing here may substitute a cheaper rule
+ * for that one; `RepoCodeTab` reads element 0 of this list as the directory's
+ * header commit, and any rule that puts a different commit there names a commit
+ * whose change never landed.
+ *
+ * `--` disambiguates the pathspec, so a path that looks like a ref is safe. A
+ * walk killed at the timeout rejects, which {@link listCommits} turns into an
+ * empty page.
+ */
+async function pathFilteredCommitLines(
+  storageKey: string,
+  ref: string,
+  pathspec: string,
+  skip: number,
+  perPage: number,
+  format: string,
+): Promise<string[]> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  const { stdout } = await execFile(
+    "git",
+    ["log", ref, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
+    { cwd, maxBuffer: MAX, timeout: pathHistoryTimeoutMs(), killSignal: "SIGKILL" },
+  );
+  return stdout.trim().split("\n").filter(Boolean);
+}
+
 export async function listCommits(
   storageKey: string,
   ref: string,
-  options: { page?: number; perPage?: number } = {},
+  options: { page?: number; perPage?: number; path?: string } = {},
 ): Promise<CommitInfo[]> {
   const page = Math.max(1, options.page ?? 1);
   const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
   const skip = (page - 1) * perPage;
+  // \x1f (unit separator) won't appear in git metadata fields
+  const format = `%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`;
   try {
-    // \x1f (unit separator) won't appear in git metadata fields
-    const out = await git(storageKey, [
-      "log", ref,
-      `--skip=${skip}`, `-n`, String(perPage),
-      `--format=%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`,
-    ]);
-    if (!out) return [];
-    const raws = out.split("\n").filter(Boolean).map(parseCommitLine);
+    let lines: string[];
+    if (options.path) {
+      lines = await pathFilteredCommitLines(storageKey, ref, options.path, skip, perPage, format);
+    } else {
+      // No pathspec: `git log` already stops after skip + perPage commits, so
+      // the page costs what it returns and needs no bound.
+      const out = await git(storageKey, [
+        "log", ref, `--skip=${skip}`, `-n`, String(perPage), `--format=${format}`,
+      ]);
+      lines = out.split("\n").filter(Boolean);
+    }
+    if (!lines.length) return [];
+    const raws = lines.map(parseCommitLine);
     return annotateSignatures(storageKey, raws);
   } catch {
     return [];

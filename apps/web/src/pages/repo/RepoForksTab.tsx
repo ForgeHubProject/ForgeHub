@@ -31,7 +31,7 @@ function ForkRow({ fork }: { fork: ForkSummary }) {
             {fork.fullName}
           </Link>
           {fork.visibility === "private" && (
-            <Badge tone="warning" pill={false} className="text-fh-xs">Private</Badge>
+            <Badge variant="outline" tone="warning" pill={false} className="text-fh-xs">Private</Badge>
           )}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-fh-xs text-fh-fg-subtle min-w-0">
