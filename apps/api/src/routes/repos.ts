@@ -4,6 +4,7 @@ import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeB
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import { canRead, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
+import { ensureImplicitWatch, pruneWatchOnAccessLoss } from "../watch-service.js";
 import {
   addCollaboratorBodySchema,
   createRepoBodySchema,
@@ -89,6 +90,9 @@ export function repoResponse(
     orgId?: string | null;
     org?: { handle: string } | null;
     topics?: Array<{ topic: string }>;
+    // Grouped star count (issue #88) — populated when the query includes
+    // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
+    _count?: { stars: number };
   },
   lineage?: ForkLineage,
 ) {
@@ -106,6 +110,8 @@ export function repoResponse(
     fullName: ownerHandle ? `${ownerHandle}/${r.name}` : undefined,
     // Sorted topic slugs; empty when the relation wasn't included or none set.
     topics: (r.topics ?? []).map((t) => t.topic),
+    // Star count (issue #88): a grouped count, no denormalized column.
+    starCount: r._count?.stars ?? 0,
     // Fork lineage — populated only on the repo detail payload (issue #113).
     parent: lineage?.parent ?? null,
     source: lineage?.source ?? null,
@@ -127,6 +133,8 @@ export const repoCardInclude = {
   owner: { select: { handle: true } },
   org: { select: { handle: true } },
   ...topicsInclude,
+  // Grouped star count for the card/detail payloads (issue #88).
+  _count: { select: { stars: true } },
 } as const;
 
 /**
@@ -236,6 +244,8 @@ export async function repoRoutes(app: FastifyInstance) {
           },
           include: { owner: { select: { handle: true } }, org: { select: { handle: true } } },
         });
+        // The creator implicitly watches their new repo at ALL (issue #88).
+        await ensureImplicitWatch(repo.id, ownerId);
         return reply.status(201).send(repoResponse(repo));
       } catch (e: unknown) {
         if (bareRepoCreated) {
@@ -290,7 +300,12 @@ export async function repoRoutes(app: FastifyInstance) {
       // include so org owners + team members can see private org repos (issue #114).
       const repo = await prisma.repo.findFirst({
         where: repoByOwningHandleWhere(handleParam, name),
-        include: { ...repoAccessInclude, owner: { select: { handle: true } }, ...topicsInclude },
+        include: {
+          ...repoAccessInclude,
+          owner: { select: { handle: true } },
+          ...topicsInclude,
+          _count: { select: { stars: true } },
+        },
       });
       const viewer = viewerId(request);
       if (!repo || !canRead(repo, viewer)) {
@@ -528,6 +543,10 @@ export async function repoRoutes(app: FastifyInstance) {
         },
       });
 
+      // New collaborators implicitly watch the repo at ALL (issue #88); an
+      // explicit level they already chose is preserved.
+      await ensureImplicitWatch(repo.id, collaboratorUser.id);
+
       return reply.status(201).send({
         id: collaborator.id,
         role: fromDbCollaboratorRole(collaborator.role),
@@ -567,6 +586,11 @@ export async function repoRoutes(app: FastifyInstance) {
       await prisma.repoCollaborator.delete({
         where: { repoId_userId: { repoId: repo.id, userId: user.id } },
       });
+
+      // The implicit ALL watch must not outlive the grant that created it: drop
+      // it when the removal actually costs them read access (issue #88).
+      await pruneWatchOnAccessLoss(repo.id, user.id);
+
       return reply.status(204).send();
     },
   );

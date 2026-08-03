@@ -59,13 +59,19 @@ export function Header({ user, onLogout, token }: Props) {
         <ForgeLogo size={28} />
       </Link>
 
-      {/* Owner crumb */}
+      {/* Owner crumb + feed */}
       <nav className="hidden md:flex items-center flex-shrink-0">
         <Link
           to={`/${user.handle}`}
           className="text-fh-sm font-semibold px-2 py-1 rounded-md text-fh-header-text/90 hover:bg-white/10 transition-colors"
         >
           {user.handle}
+        </Link>
+        <Link
+          to="/feed"
+          className="text-fh-sm font-semibold px-2 py-1 rounded-md text-fh-header-text/90 hover:bg-white/10 transition-colors"
+        >
+          Feed
         </Link>
       </nav>
 
@@ -124,6 +130,7 @@ export function Header({ user, onLogout, token }: Props) {
           </div>
           <DropdownItem onSelect={() => navigate(`/${user.handle}`)}>Your profile</DropdownItem>
           <DropdownItem onSelect={() => navigate("/")}>Your repositories</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/feed")}>Your feed</DropdownItem>
           <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
           <DropdownItem onSelect={() => navigate("/notifications")}>
             Notifications

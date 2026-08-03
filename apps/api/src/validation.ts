@@ -66,6 +66,14 @@ export const addCollaboratorBodySchema = z.object({
   role: collaboratorRoleSchema.optional().default("reader"),
 });
 
+// ─── Stars + watching (issue #88) ─────────────────────────────────────────────
+
+/** PUT /repos/:handle/:name/watch — the three-level subscription choice. */
+export const watchLevelSchema = z.enum(["all", "participating", "ignore"]);
+export const setWatchBodySchema = z.object({
+  level: watchLevelSchema,
+});
+
 /**
  * A single repo topic: GitHub-style lowercase-kebab (letters/digits/hyphens, no
  * leading/trailing hyphen, no doubled hyphens), 1–35 chars. Validated on the way
