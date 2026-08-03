@@ -126,6 +126,8 @@ export type Repo = {
   source?: ForkRef | null;
   /** Number of direct forks the viewer is allowed to see. */
   forkCount?: number;
+  /** Grouped star count (issue #88); absent on payloads that predate it. */
+  starCount?: number;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
@@ -770,6 +772,47 @@ export type Notification = {
   read: boolean;
   repo: string;
   updatedAt: string;
+};
+
+// ─── Stars + watching + feed (issue #88) ─────────────────────────────────────────
+
+/** The three-level watch subscription; see the Watch model for semantics. */
+export type WatchLevel = "all" | "participating" | "ignore";
+
+/** GET /repos/:h/:n/social — the viewer's star/watch state for the repo header. */
+export type RepoSocial = {
+  starCount: number;
+  /** Users the repo-wide fan-out reaches (explicit ALL + implicit members). */
+  watcherCount: number;
+  viewerStarred: boolean;
+  /** Effective level: the explicit choice, else the implicit default. */
+  watchLevel: WatchLevel;
+};
+
+/** One entry of GET /feed; `type` discriminates which optional fields are set. */
+export type FeedItem = {
+  type: "issue_opened" | "pr_opened" | "release" | "timeline";
+  id: string;
+  repo: { ownerHandle: string; name: string };
+  actor: string;
+  createdAt: string;
+  /** issue_opened / pr_opened / timeline */
+  number?: number;
+  title?: string;
+  /** timeline */
+  kind?: string;
+  subjectType?: "issue" | "pull_request";
+  /** release */
+  tagName?: string;
+  releaseName?: string;
+};
+
+export type FeedPage = {
+  items: FeedItem[];
+  perPage: number;
+  /** Opaque cursor for the next page; null when the feed is exhausted. */
+  nextCursor: string | null;
+  hasMore: boolean;
 };
 
 /** One slice of the format/domain composition bar. */
