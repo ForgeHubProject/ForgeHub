@@ -6,6 +6,7 @@ import {
   listReviews, replyToReviewThread, setReviewThreadResolved, submitReview,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
+import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import type {
   CommitInfo, IssueComment, PRFileEntry, PullRequest, Review, ReviewComment,
@@ -272,6 +273,8 @@ export function PullDetail({
 
   const reviewInteraction: ReviewInteraction = {
     currentUser: user.handle,
+    // Enables reaction pills on review-thread comments (#90).
+    reactionCtx: { token, handle, repoName },
     hasPendingReview,
     canComment,
     canResolve: (author) => isOwner || author === user.handle,
@@ -337,6 +340,17 @@ export function PullDetail({
               ) : (
                 <p className="text-fh-sm text-fh-fg-subtle italic">No description provided.</p>
               )}
+              {/* Emoji reactions on the PR body (#90). */}
+              <ReactionBar
+                token={token}
+                handle={handle}
+                repoName={repoName}
+                subjectType="pull_request"
+                subjectId={pr.id}
+                reactions={pr.reactions}
+                viewerReacted={pr.viewerReacted}
+                className="mt-3"
+              />
             </div>
           </div>
 
@@ -351,6 +365,16 @@ export function PullDetail({
                 </div>
                 <div className="px-5 py-4">
                   <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+                  <ReactionBar
+                    token={token}
+                    handle={handle}
+                    repoName={repoName}
+                    subjectType="pr_comment"
+                    subjectId={item.comment.id}
+                    reactions={item.comment.reactions}
+                    viewerReacted={item.comment.viewerReacted}
+                    className="mt-3"
+                  />
                 </div>
               </div>
             ) : item.kind === "review" ? (
