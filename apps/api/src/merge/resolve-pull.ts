@@ -1,9 +1,10 @@
 import type { Entity } from "@prisma/client";
 import { prisma } from "../prisma.js";
-import { gltfSceneHandler } from "../handlers/gltf-scene/handler.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
 import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "../handlers/types.js";
+import { officialWasmDiff } from "../fhr/official-handlers.js";
 import {
+  activeFormatsAtCommit,
   branchShas,
   listFilesDifferingBetweenBranches,
   performMerge,
@@ -68,6 +69,10 @@ export async function materializeResolvedFiles(
   fileResolutions: MergeFileResolution[],
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
+  // The repo's opt-in extension set at the merge target, resolved lazily (only
+  // gltf files need it) and once per call — it scopes the official wasm diff
+  // below the same way compare/filediff scope theirs.
+  let activeExts: Set<string> | undefined;
 
   for (const fileRes of fileResolutions) {
     const { sourceFile } = fileRes;
@@ -94,7 +99,18 @@ export async function materializeResolvedFiles(
       const incJson = await readFileAtBranch(storageKey, fromBranch, sourceFile);
       if (!baseJson || !incJson) continue;
 
-      const diff = await gltfSceneHandler.diff(Buffer.from(baseJson), Buffer.from(incJson));
+      // The official FHR wasm handler is the only diff engine here (#74 slice
+      // 2) — the same engine that produced the diff the resolver UI showed, so
+      // the field-change map below lines up with the picks the user made. When
+      // it can't run (release unreachable, oversized or rejected input, format
+      // opted out since) the resolution fails loudly rather than recomputing
+      // with a different engine whose answer could silently disagree.
+      activeExts ??= await activeFormatsAtCommit(storageKey, toBranch);
+      const official = await officialWasmDiff(sourceFile, activeExts, Buffer.from(baseJson), Buffer.from(incJson));
+      if (!official) {
+        throw new Error(`Official FHR handler unavailable for '${sourceFile}' — cannot compute the merge diff`);
+      }
+      const diff = official.diff;
       const entitySides: Record<string, MergeSide> = {};
       const fieldSides: Record<string, MergeSide> = {};
       for (const e of fileRes.entities ?? []) entitySides[e.entityId] = e.side;
