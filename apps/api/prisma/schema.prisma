@@ -62,6 +62,7 @@ model User {
   sessions         Session[]
   orgMemberships   OrgMembership[]
   teamMemberships  TeamMembership[]
+  prFileViews      PullRequestFileView[]      @relation("PRFileViewUser")
   stars            Star[]
   watches          Watch[]
   reactions        Reaction[]
@@ -118,6 +119,17 @@ model Repo {
 
   projects        Project[]
   deployKeys      DeployKey[]
+
+  // ─── Merge policy (issue #119) ────────────────────────────────────────────────
+  // Owner-managed merge-method policy for the repo's pull requests. Both are
+  // string-encoded ("merge" | "squash" | "rebase", comma-separated for the set),
+  // matching the repo's existing string-encoded-enum convention (Webhook.event,
+  // WorkflowRun.status). `allowedMergeMethods` gates the merge endpoint and drives
+  // which buttons the merge box shows; `defaultMergeMethod` preselects one and is
+  // the method auto-merge arms with when none is given. Invariant (route-enforced):
+  // the default is always a member of the allowed set, and the set is non-empty.
+  allowedMergeMethods String @default("merge,squash,rebase")
+  defaultMergeMethod  String @default("merge")
 
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
@@ -246,6 +258,19 @@ model PullRequest {
   mergeMethod    String?
   /** SHA of the resulting merge/squash/rebase commit on the base branch. Null until merged. Needed to revert. */
   mergeCommitSha String?
+
+  // ─── Auto-merge intent (issue #119) ───────────────────────────────────────────
+  // Non-null `autoMergeMethod` ("merge" | "squash" | "rebase") means auto-merge is
+  // ARMED: the PR merges itself — as `autoMergeById` — the moment the review gate
+  // and the CI check summary are both green (src/auto-merge.ts, hooked into review
+  // submission and CI run completion). `autoMergeById` is a plain column, not a
+  // relation (the Issue.lockedById pattern), so deleting the arming user never
+  // touches the PR; the firing path treats a missing user as a disarm. Both
+  // columns are cleared when the PR reaches a terminal state (merged or closed),
+  // so an armed intent only ever exists on an OPEN pull request.
+  autoMergeMethod String?
+  autoMergeById   String?
+
   authorId    String
   // Milestone association (issue #83). Nullable; SetNull on milestone delete so
   // removing a milestone never deletes the PR. Writer-gated via the PATCH route.
@@ -260,8 +285,31 @@ model PullRequest {
   reviews          PullRequestReview[]
   reviewComments   PullRequestReviewComment[]
   reviewerRequests PullRequestReviewerRequest[]
+  fileViews        PullRequestFileView[]
 
   @@unique([repoId, number])
+}
+
+// ─── Per-user viewed-file state on a PR's files view (issue #119) ─────────────────
+//
+// One row per (PR, user, file) the user has ticked "Viewed" on. Purely a review
+// bookkeeping aid — never gates anything. Rows are DELETED (not flagged) when the
+// file changes on a new head push (src/pull-file-views.ts, hooked into the shared
+// post-receive effects and the apply-suggestion internal push), so a re-changed
+// file naturally reverts to unviewed and the file list's progress count stays
+// honest. userId cascades so removing a user drops only their bookkeeping.
+model PullRequestFileView {
+  id            String   @id @default(cuid())
+  pullRequestId String
+  userId        String
+  filePath      String
+  viewedAt      DateTime @default(now())
+
+  pullRequest PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  user        User        @relation("PRFileViewUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pullRequestId, userId, filePath])
+  @@index([pullRequestId, userId])
 }
 
 // ─── Requested reviewers (issue #82) ─────────────────────────────────────────────
@@ -777,6 +825,21 @@ model PullRequestReviewComment {
   inReplyToId   String?
   resolvedAt    DateTime?
   resolvedById  String?
+
+  /**
+   * Suggested change (issue #119): replacement text for the anchored line. Only
+   * meaningful on comments with a text position on the `incoming` side (validated
+   * at create time). Applying commits the replacement to the PR head branch and
+   * stamps the three fields below; a null `suggestionAppliedAt` means the "Apply
+   * suggestion" affordance is still live. `suggestionAppliedById` is a plain
+   * column (Issue.lockedById pattern) so user deletion never touches the record.
+   */
+  suggestion            String?
+  suggestionAppliedAt   DateTime?
+  suggestionAppliedById String?
+  /** SHA of the head-branch commit the apply produced; null until applied. */
+  suggestionCommitSha   String?
+
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 

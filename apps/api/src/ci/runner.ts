@@ -12,6 +12,7 @@ import {
 import { prisma } from "../prisma.js";
 import { parseWorkflow, defaultWorkflowName, type WorkflowStep } from "./workflows.js";
 import { git } from "../git-utils.js";
+import { maybeAutoMergeForCommit } from "../auto-merge.js";
 
 /**
  * ⚠️  SECURITY — READ BEFORE TOUCHING THIS FILE  ⚠️
@@ -231,6 +232,15 @@ async function executeRun(runId: string): Promise<void> {
       completedAt: new Date(),
     },
   });
+
+  // Auto-merge signal (issue #119): a run completing GREEN is the only CI event
+  // that can turn a head commit's check summary green, so evaluate any armed PR
+  // at this commit now. Best-effort — an auto-merge failure never fails the run.
+  if (!anyFailed) {
+    void maybeAutoMergeForCommit(run.repoId, run.commitSha).catch((err) =>
+      console.error("[ci-runner] auto-merge evaluation failed", err),
+    );
+  }
 }
 
 type RunCtx = { id: string; commitSha: string; workflowPath: string; storageKey: string };

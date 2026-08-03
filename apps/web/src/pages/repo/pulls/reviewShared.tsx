@@ -25,10 +25,14 @@ export type ReviewInteraction = {
   canComment: boolean;
   /** Whether the viewer may resolve/unresolve a thread rooted by the given author. */
   canResolve: (rootAuthor: string) => boolean;
+  /** The viewer may apply suggestions (repo writer, PR open) — issue #119. */
+  canApplySuggestion: boolean;
   busy: boolean;
-  onCreate: (filePath: string, position: ReviewCommentPosition, body: string, mode: ComposeMode) => void;
+  onCreate: (filePath: string, position: ReviewCommentPosition, body: string, mode: ComposeMode, suggestion?: string) => void;
   onReply: (rootId: string, body: string) => void;
   onToggleResolve: (rootId: string, resolved: boolean) => void;
+  /** Commit a comment's suggested change to the PR head branch (issue #119). */
+  onApplySuggestion: (commentId: string) => void;
 };
 
 type IconProps = { size?: number; className?: string };
@@ -88,6 +92,8 @@ export function InlineComposer({
   autoFocus,
   placeholder = "Leave a comment",
   submitLabelSingle = "Add single comment",
+  /** Current text of the anchored line — enables the "Suggest a change" affordance (issue #119). */
+  suggestionSeed,
   onSubmit,
   onCancel,
 }: {
@@ -97,19 +103,55 @@ export function InlineComposer({
   autoFocus?: boolean;
   placeholder?: string;
   submitLabelSingle?: string;
-  onSubmit: (body: string, mode: ComposeMode) => void;
+  suggestionSeed?: string | null;
+  onSubmit: (body: string, mode: ComposeMode, suggestion?: string) => void;
   onCancel?: () => void;
 }) {
   const [body, setBody] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState("");
   const trimmed = body.trim();
+  // A suggestion rides along only while the toggle is on (it may be empty —
+  // that deletes the line — so the toggle, not the text, is the signal).
+  const payload = suggesting ? suggestion : undefined;
+
+  function toggleSuggesting() {
+    if (!suggesting) setSuggestion(suggestionSeed ?? "");
+    setSuggesting((s) => !s);
+  }
 
   return (
     <div className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-fh-border bg-fh-canvas text-fh-sm">
         <Avatar name={currentUser} size={20} />
         <span className="font-semibold text-fh-fg">{currentUser}</span>
+        {suggestionSeed != null && (
+          <button
+            type="button"
+            className={cx(
+              "ml-auto text-fh-xs bg-transparent border-none cursor-pointer",
+              suggesting ? "text-fh-danger-fg hover:underline" : "text-fh-accent-fg hover:underline",
+            )}
+            onClick={toggleSuggesting}
+          >
+            {suggesting ? "Remove suggestion" : "Suggest a change"}
+          </button>
+        )}
       </div>
-      <div className="p-2.5">
+      <div className="p-2.5 space-y-2">
+        {suggesting && (
+          <div className="rounded-md border border-fh-border overflow-hidden">
+            <p className="px-2.5 py-1 text-fh-xs text-fh-fg-muted bg-fh-canvas border-b border-fh-border">
+              Suggested replacement for this line
+            </p>
+            <Textarea
+              rows={2}
+              className="font-mono rounded-none border-none"
+              value={suggestion}
+              onChange={(e) => setSuggestion(e.target.value)}
+            />
+          </div>
+        )}
         <Textarea
           rows={3}
           autoFocus={autoFocus}
@@ -130,7 +172,7 @@ export function InlineComposer({
               size="sm"
               loading={busy}
               disabled={!trimmed}
-              onClick={() => onSubmit(trimmed, "review")}
+              onClick={() => onSubmit(trimmed, "review", payload)}
             >
               Add review comment
             </Button>
@@ -142,7 +184,7 @@ export function InlineComposer({
                 size="sm"
                 loading={busy}
                 disabled={!trimmed}
-                onClick={() => onSubmit(trimmed, "single")}
+                onClick={() => onSubmit(trimmed, "single", payload)}
               >
                 {submitLabelSingle}
               </Button>
@@ -152,7 +194,7 @@ export function InlineComposer({
                 size="sm"
                 loading={busy}
                 disabled={!trimmed}
-                onClick={() => onSubmit(trimmed, "review")}
+                onClick={() => onSubmit(trimmed, "review", payload)}
               >
                 Start a review
               </Button>
@@ -168,7 +210,21 @@ export function InlineComposer({
 
 export type ReviewThreadData = { root: ReviewComment; replies: ReviewComment[] };
 
-function CommentCard({ comment, repo, reactionCtx }: { comment: ReviewComment; repo: RepoRef; reactionCtx?: ReactionCtx }) {
+function CommentCard({
+  comment,
+  repo,
+  canApplySuggestion,
+  busy,
+  onApplySuggestion,
+  reactionCtx,
+}: {
+  comment: ReviewComment;
+  repo: RepoRef;
+  canApplySuggestion?: boolean;
+  busy?: boolean;
+  onApplySuggestion?: (commentId: string) => void;
+  reactionCtx?: ReactionCtx;
+}) {
   return (
     <div className="px-3 py-2.5">
       <div className="flex items-center gap-2 text-fh-sm mb-1.5">
@@ -177,8 +233,16 @@ function CommentCard({ comment, repo, reactionCtx }: { comment: ReviewComment; r
         <span className="text-fh-fg-muted">commented <RelativeTime date={comment.createdAt} /></span>
         {comment.pending && <Badge tone="warning" pill={false}>Pending</Badge>}
       </div>
-      <div className="pl-7 text-fh-sm">
+      <div className="pl-7 text-fh-sm space-y-2">
         <MarkdownRenderer content={comment.body} repo={repo} />
+        {comment.suggestion != null && (
+          <SuggestionBlock
+            comment={comment}
+            canApply={canApplySuggestion === true && !comment.pending}
+            busy={busy}
+            onApply={onApplySuggestion}
+          />
+        )}
         {/* Reactions (#90) — drafts are private, so no pills until submitted. */}
         {reactionCtx && !comment.pending && (
           <ReactionBar
@@ -197,14 +261,64 @@ function CommentCard({ comment, repo, reactionCtx }: { comment: ReviewComment; r
   );
 }
 
+/**
+ * A comment's suggested change (issue #119): the replacement text in a
+ * monospace block, an Applied badge once committed, and — for repo writers on
+ * an open PR — the "Apply suggestion" action that commits it to the head branch.
+ */
+function SuggestionBlock({
+  comment,
+  canApply,
+  busy,
+  onApply,
+}: {
+  comment: ReviewComment;
+  canApply: boolean;
+  busy?: boolean;
+  onApply?: (commentId: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-fh-border overflow-hidden">
+      <div className="flex items-center gap-2 px-2.5 py-1 bg-fh-canvas border-b border-fh-border text-fh-xs">
+        <span className="font-semibold text-fh-fg">Suggested change</span>
+        {comment.suggestionApplied && <Badge tone="success" pill={false}>Applied</Badge>}
+        {comment.suggestionApplied && comment.suggestionCommitSha && (
+          <span className="font-mono text-fh-fg-subtle">{comment.suggestionCommitSha.slice(0, 7)}</span>
+        )}
+        {canApply && !comment.suggestionApplied && onApply && (
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="ml-auto"
+            loading={busy}
+            onClick={() => onApply(comment.id)}
+          >
+            Apply suggestion
+          </Button>
+        )}
+      </div>
+      <pre className="m-0 px-3 py-2 bg-fh-success-muted/30 text-fh-fg overflow-x-auto" style={{ fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+        {comment.suggestion === "" ? (
+          <span className="italic text-fh-fg-subtle">(remove this line)</span>
+        ) : (
+          comment.suggestion
+        )}
+      </pre>
+    </div>
+  );
+}
+
 export function ReviewThread({
   thread,
   repo,
   currentUser,
   canResolve,
+  canApplySuggestion,
   busy,
   onReply,
   onToggleResolve,
+  onApplySuggestion,
   reactionCtx,
   /** Compact framing for anchoring under a diff line. */
   anchored,
@@ -213,9 +327,11 @@ export function ReviewThread({
   repo: RepoRef;
   currentUser: string;
   canResolve: boolean;
+  canApplySuggestion?: boolean;
   busy?: boolean;
   onReply: (rootId: string, body: string) => void;
   onToggleResolve: (rootId: string, resolved: boolean) => void;
+  onApplySuggestion?: (commentId: string) => void;
   reactionCtx?: ReactionCtx;
   anchored?: boolean;
 }) {
@@ -267,8 +383,10 @@ export function ReviewThread({
         </div>
       )}
       <div className="divide-y divide-fh-border">
-        <CommentCard comment={root} repo={repo} reactionCtx={reactionCtx} />
-        {replies.map((r) => <CommentCard key={r.id} comment={r} repo={repo} reactionCtx={reactionCtx} />)}
+        <CommentCard comment={root} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} reactionCtx={reactionCtx} />
+        {replies.map((r) => (
+          <CommentCard key={r.id} comment={r} repo={repo} canApplySuggestion={canApplySuggestion} busy={busy} onApplySuggestion={onApplySuggestion} reactionCtx={reactionCtx} />
+        ))}
       </div>
 
       <div className="flex items-center gap-2 px-3 py-2 border-t border-fh-border bg-fh-canvas">
@@ -484,9 +602,11 @@ export function FileThreadList({
           repo={repo}
           currentUser={review.currentUser}
           canResolve={review.canResolve(t.root.author)}
+          canApplySuggestion={review.canApplySuggestion}
           busy={review.busy}
           onReply={review.onReply}
           onToggleResolve={review.onToggleResolve}
+          onApplySuggestion={review.onApplySuggestion}
           reactionCtx={review.reactionCtx}
           anchored
         />

@@ -4,9 +4,17 @@ import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifyUser } from "../notifications-service.js";
 import { syncBodyReferences } from "../references-service.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
-import { recordEvent } from "../timeline-service.js";
-import { resolveBranchSha } from "../git-utils.js";
+import { recordEvent, emitHeadPushedForPush } from "../timeline-service.js";
+import { commitFileToBranch, readFileAtBranchExact, resolveBranchSha } from "../git-utils.js";
 import { isReviewStale } from "../review-summary.js";
+import { maybeAutoMergePr } from "../auto-merge.js";
+import { applySuggestionToContent } from "../suggestions.js";
+import { resolveActorIdentity } from "../pull-merge.js";
+import { emitPushEvents, ZERO_SHA } from "../push-events.js";
+import { triggerWorkflowsForPrSync } from "../ci/trigger.js";
+import { resetViewedFilesForPush } from "../pull-file-views.js";
+import { ingestCommitRange } from "../ingest.js";
+import { bareRepoPathFromKey } from "../git-storage.js";
 import { deleteSubjectReactions, reactionRollupFor, reactionRollups, type ReactionRollup } from "../reactions-service.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -69,6 +77,9 @@ function formatReviewComment(comment: {
   resolvedAt?: Date | null;
   resolvedBy?: { handle: string } | null;
   review?: { state: string } | null;
+  suggestion?: string | null;
+  suggestionAppliedAt?: Date | null;
+  suggestionCommitSha?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }, rollup?: ReactionRollup) {
@@ -84,12 +95,39 @@ function formatReviewComment(comment: {
     resolvedAt: comment.resolvedAt?.toISOString() ?? null,
     resolvedBy: comment.resolvedBy?.handle ?? null,
     pending: comment.review ? comment.review.state === "PENDING" : false,
+    // Suggested change (issue #119): the replacement text plus applied state.
+    suggestion: comment.suggestion ?? null,
+    suggestionApplied: comment.suggestionAppliedAt != null,
+    suggestionCommitSha: comment.suggestionCommitSha ?? null,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
     // Emoji reactions (#90) — empty when no rollup was fetched (new comments).
     reactions: rollup?.reactions ?? {},
     viewerReacted: rollup?.viewerReacted ?? [],
   };
+}
+
+/**
+ * Validate an optional suggested-change payload against the comment's position
+ * (issue #119). A suggestion replaces the anchored line at the PR head, so it
+ * only makes sense on a text-position comment anchored to the `incoming` side —
+ * a base-side (deleted) line no longer exists at head to be replaced.
+ */
+function validateSuggestion(
+  suggestion: unknown,
+  position: { type?: unknown; side?: unknown },
+): { valid: true; value: string | null } | { valid: false; error: string } {
+  if (suggestion === undefined || suggestion === null) return { valid: true, value: null };
+  if (typeof suggestion !== "string") {
+    return { valid: false, error: "suggestion must be a string" };
+  }
+  if (position.type !== "text") {
+    return { valid: false, error: "suggestion requires a text position" };
+  }
+  if (position.side !== "incoming") {
+    return { valid: false, error: "suggestion requires an incoming-side text position (the line must exist at the PR head)" };
+  }
+  return { valid: true, value: suggestion };
 }
 
 type PositionPayload = Record<string, unknown>;
@@ -426,6 +464,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
           kind: "reviewed", actorId: userId,
           data: { state: dbState.toLowerCase(), reviewId: review.id, commentCount: review._count?.comments ?? 0 },
         }).catch((err) => request.log.error({ err }, "recordEvent reviewed"));
+        // Auto-merge signal (issue #119): a submitted review recomputes the
+        // review gate — evaluate any armed intent now. Best-effort.
+        void maybeAutoMergePr(ctx.pr.id, request.log).catch((err) => request.log.error({ err }, "auto-merge after review"));
       }
 
       return reply.status(201).send(formatReview(review, { currentHeadSha: commitSha }));
@@ -530,6 +571,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
         kind: "reviewed", actorId: userId,
         data: { state: state.toLowerCase(), reviewId: updated.id, commentCount: updated._count?.comments ?? 0 },
       }).catch((err) => request.log.error({ err }, "recordEvent reviewed"));
+      // Auto-merge signal (issue #119): same hook as the direct-submit path.
+      void maybeAutoMergePr(ctx.pr.id, request.log).catch((err) => request.log.error({ err }, "auto-merge after review"));
 
       return formatReview(updated, { currentHeadSha: commitSha });
     },
@@ -628,10 +671,11 @@ export async function prCommentRoutes(app: FastifyInstance) {
         return reply.status(422).send({ error: "Authors cannot post review comments on their own pull request" });
       }
 
-      const { body, filePath, position } = request.body as {
+      const { body, filePath, position, suggestion } = request.body as {
         body?: string;
         filePath?: string;
         position?: unknown;
+        suggestion?: unknown;
       };
 
       if (!body?.trim()) return reply.status(400).send({ error: "body is required" });
@@ -639,6 +683,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
 
       const posResult = validatePosition(position);
       if (!posResult.valid) return reply.status(400).send({ error: posResult.error });
+
+      const sugResult = validateSuggestion(suggestion, (position ?? {}) as { type?: unknown; side?: unknown });
+      if (!sugResult.valid) return reply.status(400).send({ error: sugResult.error });
 
       // Find or create a PENDING review for this user on this PR
       let review = await prisma.pullRequestReview.findFirst({
@@ -669,6 +716,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
           body: body.trim(),
           filePath: filePath.trim(),
           position: posResult.serialized,
+          suggestion: sugResult.value,
         },
         include: { author: { select: { handle: true } } },
       });
@@ -796,11 +844,16 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
       if (!ctx) return;
 
-      const { body } = request.body as { body?: string };
+      const { body, suggestion } = request.body as { body?: string; suggestion?: unknown };
       if (!body?.trim()) return reply.status(400).send({ error: "body is required" });
 
       const root = await findThreadRoot(commentId, ctx.pr.id);
       if (!root) return reply.status(404).send({ error: "Comment not found" });
+
+      // A reply may carry its own suggestion (a counter-proposal); it anchors to
+      // the ROOT's position, so it validates against that.
+      const sugResult = validateSuggestion(suggestion, JSON.parse(root.position) as { type?: unknown; side?: unknown });
+      if (!sugResult.valid) return reply.status(400).send({ error: sugResult.error });
 
       const created = await prisma.pullRequestReviewComment.create({
         data: {
@@ -811,6 +864,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
           filePath: root.filePath,
           position: root.position,
           inReplyToId: root.id,
+          suggestion: sugResult.value,
         },
         include: {
           author: { select: { handle: true } },
@@ -879,5 +933,143 @@ export async function prCommentRoutes(app: FastifyInstance) {
     "/repos/:handle/:name/pulls/:number/review-comments/:commentId/resolve",
     { preHandler: [app.authenticate] },
     async (request, reply) => setResolution(request, reply, false),
+  );
+
+  // ─── Suggested changes: apply (issue #119) ────────────────────────────────────
+
+  // POST /repos/:handle/:name/pulls/:number/review-comments/:commentId/apply-suggestion
+  //
+  // Commit the comment's suggested replacement to the PR HEAD branch, authored
+  // as the applying user. Writer-gated (it writes to the branch), guarded
+  // against a concurrent head push by a compare-and-swap on the head SHA, and
+  // followed by the same push fan-out an ordinary client push to the head
+  // branch would fire — so CI, webhooks, review staleness, and the viewed-file
+  // reset all see the new commit.
+  app.post(
+    "/repos/:handle/:name/pulls/:number/review-comments/:commentId/apply-suggestion",
+    { preHandler: [app.authenticate, write] },
+    async (request, reply) => {
+      const { handle, name, number, commentId } = request.params as {
+        handle: string; name: string; number: string; commentId: string;
+      };
+      const userId = request.user.sub;
+
+      const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
+      if (!ctx) return;
+      if (!canWrite(ctx.repo, userId)) {
+        return reply.status(403).send({ error: "Write access is required to apply a suggestion" });
+      }
+      if (!ctx.repo.storageKey) return reply.status(400).send({ error: "Repository has no git storage" });
+      if (ctx.pr.state !== "OPEN") {
+        return reply.status(409).send({ error: `Pull request is ${ctx.pr.state.toLowerCase()}` });
+      }
+
+      const comment = await prisma.pullRequestReviewComment.findFirst({
+        where: { id: commentId, pullRequestId: ctx.pr.id },
+        include: { review: { select: { state: true } } },
+      });
+      if (!comment) return reply.status(404).send({ error: "Comment not found" });
+      // A PENDING review is a private draft: its suggestions do not exist for
+      // anyone else yet, so they must not be applicable server-side either (the
+      // web UI hides them, which is presentation, not a gate).
+      if (comment.review?.state === "PENDING") {
+        return reply.status(409).send({ error: "This suggestion is part of a pending review — submit the review first" });
+      }
+      if (comment.suggestion == null) return reply.status(400).send({ error: "This comment carries no suggestion" });
+      if (comment.suggestionAppliedAt != null) {
+        return reply.status(409).send({ error: "This suggestion was already applied" });
+      }
+
+      const position = JSON.parse(comment.position) as { type?: string; side?: string; line?: number };
+      if (position.type !== "text" || position.side !== "incoming" || typeof position.line !== "number") {
+        return reply.status(409).send({ error: "This suggestion is not anchored to an applyable line" });
+      }
+
+      const storageKey = ctx.repo.storageKey;
+
+      // Branch protection (#85) on the HEAD branch. The commit below goes to the
+      // bare repo with FORGEHUB_INTERNAL_PUSH=1, which bypasses the pre-receive
+      // hook — so the rule the hook would have enforced has to be enforced here,
+      // exactly as the merge endpoints enforce their own protection rules.
+      // `requirePullRequest` is the flag that blocks direct pushes to a branch;
+      // an apply IS a direct push, and (unlike a merge) nothing else sanctions it.
+      const headRule = await prisma.protectedBranch.findFirst({
+        where: { repoId: ctx.repo.id, branch: ctx.pr.fromBranch },
+      });
+      if (headRule?.requirePullRequest) {
+        return reply.status(409).send({
+          error: `Branch protection: "${ctx.pr.fromBranch}" is protected — direct pushes are blocked, so a suggestion cannot be applied to it.`,
+          protection: true,
+        });
+      }
+
+      const headSha = await resolveBranchSha(storageKey, ctx.pr.fromBranch);
+      if (!headSha) return reply.status(409).send({ error: `Branch '${ctx.pr.fromBranch}' not found` });
+
+      // Byte-exact read: the trimming `readFileAtBranch` inherits from `git()`
+      // would strip the file's trailing newline / leading blank line AND shift
+      // the anchored line number before the splice (issue #119).
+      const content = await readFileAtBranchExact(storageKey, ctx.pr.fromBranch, comment.filePath);
+      if (content === null) {
+        return reply.status(409).send({ error: `'${comment.filePath}' no longer exists on '${ctx.pr.fromBranch}'` });
+      }
+
+      const applied = applySuggestionToContent(content, position.line, comment.suggestion);
+      if (!applied.ok) return reply.status(409).send({ error: applied.error });
+
+      const author = await resolveActorIdentity(userId);
+      const message = `Apply suggestion to ${comment.filePath} (!${ctx.pr.number})`;
+      let commit;
+      try {
+        commit = await commitFileToBranch(
+          storageKey, ctx.pr.fromBranch, comment.filePath, applied.content, message, author, headSha,
+        );
+      } catch (err) {
+        request.log.error({ err }, "commitFileToBranch threw unexpectedly");
+        return reply.status(500).send({ error: "Applying the suggestion failed due to a server error" });
+      }
+      if (!commit.ok) {
+        return reply.status(409).send({ error: "The head branch moved while applying — refresh and try again" });
+      }
+
+      const updated = await prisma.pullRequestReviewComment.update({
+        where: { id: comment.id },
+        data: { suggestionAppliedAt: new Date(), suggestionAppliedById: userId, suggestionCommitSha: commit.sha },
+        include: {
+          author: { select: { handle: true } },
+          resolvedBy: { select: { handle: true } },
+          review: { select: { state: true } },
+        },
+      });
+
+      await recordEvent({
+        repoId: ctx.repo.id, subjectType: "PULL_REQUEST", subjectNumber: ctx.pr.number,
+        kind: "suggestion_applied", actorId: userId,
+        data: { filePath: comment.filePath, sha: commit.sha, commentId: comment.id },
+      }).catch((err) => request.log.error({ err }, "recordEvent suggestion_applied"));
+
+      // The head branch moved via an internal direct-to-bare push (bypasses
+      // post-receive) — mirror a client push to `fromBranch`: push webhook +
+      // push CI, head_pushed timeline event, pull_request CI re-run, viewed
+      // reset, and artifact ingestion (issues #86/#87/#119).
+      const changed = [{ branch: ctx.pr.fromBranch, oldSha: headSha ?? ZERO_SHA, newSha: commit.sha }];
+      emitPushEvents(ctx.repo.id, storageKey, userId, changed);
+      emitHeadPushedForPush(ctx.repo.id, userId, changed)
+        .catch((err) => request.log.error({ err }, "head_pushed after suggestion apply"));
+      void triggerWorkflowsForPrSync(ctx.repo.id, storageKey, changed)
+        .catch((err) => request.log.error({ err }, "pull_request CI after suggestion apply"));
+      void resetViewedFilesForPush(ctx.repo.id, storageKey, changed)
+        .catch((err) => request.log.error({ err }, "viewed reset after suggestion apply"));
+      {
+        const repoPath = bareRepoPathFromKey(storageKey);
+        const repoId = ctx.repo.id;
+        const afterSha = commit.sha;
+        setImmediate(() => {
+          ingestCommitRange(repoId, repoPath, headSha, afterSha).catch(() => {});
+        });
+      }
+
+      return { ...formatReviewComment(updated), sha: commit.sha };
+    },
   );
 }

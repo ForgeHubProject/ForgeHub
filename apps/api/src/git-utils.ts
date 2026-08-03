@@ -555,7 +555,14 @@ export async function resolveBranchSha(storageKey: string, branch: string): Prom
   } catch { return null; }
 }
 
-/** Read a UTF-8 file at the tip of a branch (null if missing). */
+/**
+ * Read a UTF-8 file at the tip of a branch (null if missing).
+ *
+ * Goes through {@link git}, so the content comes back TRIMMED — fine for the
+ * display/detection callers (README rendering, license detection, file views),
+ * but NOT for anything that writes the result back. Use
+ * {@link readFileAtBranchExact} on any read-modify-write path.
+ */
 export async function readFileAtBranch(
   storageKey: string,
   branch: string,
@@ -569,13 +576,40 @@ export async function readFileAtBranch(
 }
 
 /**
+ * Byte-exact read of a UTF-8 file at the tip of a branch (null if missing).
+ *
+ * Deliberately bypasses {@link git}, whose `stdout.trim()` is load-bearing for
+ * its many parsing callers (SHAs, ref lists, `--name-only` output) but silently
+ * eats a file's leading whitespace and trailing newline. A read-modify-write
+ * path (applying a suggestion, issue #119) must round-trip those bytes: losing
+ * them both damages the file and shifts every 1-based line number the caller
+ * splices against.
+ */
+export async function readFileAtBranchExact(
+  storageKey: string,
+  branch: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const cwd = bareRepoPathFromKey(storageKey);
+    const { stdout } = await execFile("git", ["show", `${branch}:${filePath}`], {
+      cwd, maxBuffer: MAX, encoding: "buffer",
+    });
+    return stdout.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read a UTF-8 file at a ref WITHOUT trimming (null if missing).
  *
- * `git()` — and therefore `readFileAtBranch` — returns `stdout.trim()`, which is
- * harmless for the line lists most callers parse but destructive for content
- * that is handed back to a user verbatim: an issue/PR template's leading blank
- * line and trailing newline are part of the authored text. Use this whenever the
- * exact bytes matter; use `readFileAtBranch` when only the lines do.
+ * The same reasoning as {@link readFileAtBranchExact}, arrived at independently
+ * for a different caller: an issue/PR template's leading blank line and trailing
+ * newline are part of the authored text (issue #89), so the trimming read would
+ * hand a user back something they did not write. Kept separate because it takes
+ * an arbitrary ref rather than a branch; the two are candidates for merging into
+ * one helper, which is a tidy-up rather than a behaviour change.
  */
 export async function readFileAtRefExact(
   storageKey: string,
@@ -1176,6 +1210,83 @@ export async function listBlobSizes(storageKey: string, ref: string): Promise<Bl
     return result;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Paths whose content differs between two commits (`git diff --name-only`).
+ * Drives the viewed-file reset on a head push (issue #119): a rename without -M
+ * lists both the old and new path, so both sides drop their viewed state. Empty
+ * on any error (unresolvable shas after a force-push GC, etc.).
+ */
+export async function listChangedPaths(
+  storageKey: string,
+  oldSha: string,
+  newSha: string,
+): Promise<string[]> {
+  try {
+    const out = await git(storageKey, ["diff", "--name-only", oldSha, newSha]);
+    return out.split("\n").map((p) => p.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export type CommitFileResult =
+  | { ok: true; sha: string }
+  | { ok: false; conflict: true };
+
+/**
+ * Commit a full replacement of one file onto the tip of `branch` and push,
+ * authored as `author` — the write behind "Apply suggestion" (issue #119).
+ * When `expectedHeadSha` is given the push is abandoned if the branch tip moved
+ * since the caller computed the new content (compare-and-swap against a
+ * concurrent push), returning a conflict instead of clobbering the newer tip.
+ */
+export async function commitFileToBranch(
+  storageKey: string,
+  branch: string,
+  filePath: string,
+  content: string,
+  message: string,
+  author: CommitAuthor,
+  expectedHeadSha?: string | null,
+): Promise<CommitFileResult> {
+  const repoPath = bareRepoPathFromKey(storageKey);
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "fh-suggest-"));
+
+  try {
+    await execFile("git", ["clone", "--no-local", repoPath, tmpDir], { maxBuffer: MAX });
+    await execFile("git", ["checkout", branch], { cwd: tmpDir, maxBuffer: MAX });
+
+    if (expectedHeadSha) {
+      const { stdout: tip } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+      if (tip.trim() !== expectedHeadSha) return { ok: false, conflict: true };
+    }
+
+    const full = path.join(tmpDir, filePath);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, content, "utf8");
+    await execFile("git", ["add", "--", filePath], { cwd: tmpDir, maxBuffer: MAX });
+
+    try {
+      await execFile("git", [...identityArgs(author), "commit", "-m", message], { cwd: tmpDir, maxBuffer: MAX });
+    } catch {
+      // Nothing staged — the replacement matches the current content.
+      return { ok: false, conflict: true };
+    }
+
+    try {
+      await execFile("git", ["push", "origin", branch], { cwd: tmpDir, maxBuffer: MAX, env: INTERNAL_PUSH_ENV });
+    } catch {
+      // A concurrent push moved the tip between clone and push.
+      return { ok: false, conflict: true };
+    }
+
+    const { stdout: sha } = await execFile("git", ["rev-parse", "HEAD"], { cwd: tmpDir, maxBuffer: MAX });
+    return { ok: true, sha: sha.trim() };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
   }
 }
 

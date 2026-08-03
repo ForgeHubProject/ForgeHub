@@ -83,6 +83,10 @@ const review: ReviewInteraction = {
   onCreate: () => {},
   onReply: () => {},
   onToggleResolve: () => {},
+  // Suggested changes (issue #119) are part of the review interaction contract;
+  // this fixture is about diff-meta laziness, so both are inert here.
+  canApplySuggestion: false,
+  onApplySuggestion: () => {},
 };
 
 const noComments: ReviewComment[] = [];

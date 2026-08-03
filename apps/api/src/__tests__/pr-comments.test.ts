@@ -22,7 +22,8 @@ vi.mock("../prisma.js", () => ({
       delete: vi.fn(),
     },
     pullRequest: {
-      findMany: vi.fn(),
+      // Default [] so the viewed-reset scan after an applied suggestion no-ops.
+      findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -50,6 +51,17 @@ vi.mock("../prisma.js", () => ({
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+    },
+    // Auto-merge gates (#119) — default "not protected" / "no runs" (green).
+    protectedBranch: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    workflowRun: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    // Viewed-file reset after an applied suggestion moves the head (#119).
+    pullRequestFileView: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     // Requested reviewers (#82): review submission fulfills an active request.
     pullRequestReviewerRequest: {
@@ -98,9 +110,17 @@ vi.mock("../git-utils.js", () => ({
   resolveBranchSha: vi.fn().mockResolvedValue("abc1234"),
   performMerge: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
   performMergeWithResolvedFiles: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
+  performSquashMerge: vi.fn().mockResolvedValue({ ok: true, sha: "5qua5h00" }),
+  performRebaseMerge: vi.fn().mockResolvedValue({ ok: true, sha: "reba5e00" }),
+  performRevert: vi.fn().mockResolvedValue({ ok: true, branch: "revert-pr-1", sha: "revert00" }),
+  listMergeBaseCommits: vi.fn().mockResolvedValue([]),
+  commitFileToBranch: vi.fn().mockResolvedValue({ ok: true, sha: "sugg0001" }),
+  listChangedPaths: vi.fn().mockResolvedValue([]),
+  getMergeBaseFileList: vi.fn().mockResolvedValue([]),
   branchShas: vi.fn().mockResolvedValue([]),
   listFilesDifferingBetweenBranches: vi.fn().mockResolvedValue([]),
   readFileAtBranch: vi.fn().mockResolvedValue(null),
+  readFileAtBranchExact: vi.fn().mockResolvedValue(null),
   listBranches: vi.fn().mockResolvedValue([]),
   createBranch: vi.fn(),
   deleteBranch: vi.fn(),
@@ -117,6 +137,13 @@ vi.mock("../merge/resolve-pull.js", () => ({
 
 vi.mock("../ingest.js", () => ({
   ingestCommitRange: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Applying a suggestion mirrors a client push to the head branch through this
+// helper (issue #119); mock it so the fan-out wiring can be asserted.
+vi.mock("../push-events.js", () => ({
+  emitPushEvents: vi.fn(),
+  ZERO_SHA: "0".repeat(40),
 }));
 
 vi.mock("bcryptjs", () => ({
@@ -964,6 +991,408 @@ describe("POST/DELETE /repos/:handle/:name/pulls/:number/review-comments/:commen
     expect(vi.mocked(prisma.pullRequestReviewComment.update)).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ resolvedAt: null, resolvedById: null }) }),
     );
+  });
+});
+
+// ─── Suggested changes (issue #119) ────────────────────────────────────────────
+
+describe("review-comment suggestions (issue #119)", () => {
+  let app: FastifyInstance;
+  let aliceToken: string;
+
+  const textPosition = JSON.stringify({ type: "text", line: 2, side: "incoming" });
+
+  function suggestionComment(overrides = {}) {
+    return makeReviewComment({
+      id: "sugg-comment-1",
+      filePath: "src/a.ts",
+      position: textPosition,
+      suggestion: "const x = 2;",
+      suggestionAppliedAt: null,
+      suggestionAppliedById: null,
+      suggestionCommitSha: null,
+      ...overrides,
+    });
+  }
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    aliceToken = await authHeader(app, ALICE_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReview.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(makePendingReview() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+    const { resolveBranchSha, commitFileToBranch, readFileAtBranchExact } = await import("../git-utils.js");
+    vi.mocked(resolveBranchSha).mockResolvedValue("abc1234");
+    vi.mocked(commitFileToBranch).mockResolvedValue({ ok: true, sha: "sugg0001" });
+    vi.mocked(readFileAtBranchExact).mockResolvedValue("const a = 0;\nconst x = 1;\nconst z = 3;\n");
+  });
+
+  it("stores a suggestion on an incoming-side text comment and returns it", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.create).mockResolvedValue(
+      suggestionComment() as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments",
+      headers: { authorization: aliceToken },
+      payload: {
+        body: "Prefer 2 here",
+        filePath: "src/a.ts",
+        position: { type: "text", line: 2, side: "incoming" },
+        suggestion: "const x = 2;",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().suggestion).toBe("const x = 2;");
+    expect(res.json().suggestionApplied).toBe(false);
+    expect(vi.mocked(prisma.pullRequestReviewComment.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ suggestion: "const x = 2;" }) }),
+    );
+  });
+
+  it("400s a suggestion on a base-side (deleted) line", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments",
+      headers: { authorization: aliceToken },
+      payload: {
+        body: "x",
+        filePath: "src/a.ts",
+        position: { type: "text", line: 2, side: "base" },
+        suggestion: "nope",
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/incoming/i);
+  });
+
+  it("400s a suggestion on a gltf position", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments",
+      headers: { authorization: aliceToken },
+      payload: {
+        body: "x",
+        filePath: "assembly.gltf",
+        position: { type: "gltf", entityId: "assembly.part-a" },
+        suggestion: "nope",
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/text position/i);
+  });
+
+  it("apply commits the replacement to the HEAD branch and stamps the comment", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(
+      suggestionComment({ suggestionAppliedAt: new Date(), suggestionAppliedById: ALICE_ID, suggestionCommitSha: "sugg0001" }) as never,
+    );
+    const { commitFileToBranch } = await import("../git-utils.js");
+    const { emitPushEvents } = await import("../push-events.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sha).toBe("sugg0001");
+    expect(res.json().suggestionApplied).toBe(true);
+
+    // Line 2 replaced, other lines untouched; compare-and-swap on the head SHA.
+    expect(vi.mocked(commitFileToBranch)).toHaveBeenCalledWith(
+      "alice/my-repo.git", "feature", "src/a.ts",
+      "const a = 0;\nconst x = 2;\nconst z = 3;\n",
+      expect.stringMatching(/Apply suggestion/),
+      expect.objectContaining({ name: expect.any(String), email: expect.any(String) }),
+      "abc1234",
+    );
+    expect(vi.mocked(prisma.pullRequestReviewComment.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ suggestionAppliedById: ALICE_ID, suggestionCommitSha: "sugg0001" }),
+      }),
+    );
+    // Mirrors a client push to the head branch.
+    expect(vi.mocked(emitPushEvents)).toHaveBeenCalledWith(
+      "repo-prc-1", "alice/my-repo.git", ALICE_ID,
+      [{ branch: "feature", oldSha: "abc1234", newSha: "sugg0001" }],
+    );
+  });
+
+  it("409s applying an already-applied suggestion", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ suggestionAppliedAt: new Date() }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already applied/i);
+  });
+
+  it("400s applying a comment that has no suggestion", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ suggestion: null }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("409s when the anchored line is out of range at the current head", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ position: JSON.stringify({ type: "text", line: 99, side: "incoming" }) }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/out of range/i);
+  });
+
+  it("409s when the head branch moves mid-apply (compare-and-swap)", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    const { commitFileToBranch } = await import("../git-utils.js");
+    vi.mocked(commitFileToBranch).mockResolvedValue({ ok: false, conflict: true });
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/moved/i);
+  });
+
+  it("403s a non-writer applying a suggestion", async () => {
+    const otherToken = await authHeader(app, OTHER_ID);
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: otherToken },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("409s applying on a non-open PR", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({ state: "MERGED" }) as never);
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  // Regression: the apply used to read through `readFileAtBranch`, whose `git()`
+  // trim ate the file's leading blank line and trailing newline — corrupting the
+  // committed content AND shifting the 1-based line the splice targets.
+  it("applies against the BYTE-EXACT head content, preserving surrounding whitespace", async () => {
+    const exact = "\n  const a = 0;\nconst x = 1;\nconst z = 3;\n\n";
+    const { readFileAtBranch, readFileAtBranchExact, commitFileToBranch } = await import("../git-utils.js");
+    vi.mocked(readFileAtBranchExact).mockResolvedValue(exact);
+    // In the exact content `const x = 1;` is line 3 (the leading blank line is line 1).
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ position: JSON.stringify({ type: "text", line: 3, side: "incoming" }) }) as never,
+    );
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(
+      suggestionComment({ suggestionAppliedAt: new Date(), suggestionCommitSha: "sugg0001" }) as never,
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(commitFileToBranch).mock.calls[0]?.[3]).toBe(
+      "\n  const a = 0;\nconst x = 2;\nconst z = 3;\n\n",
+    );
+    // The trimming helper must not be on this path at all.
+    expect(vi.mocked(readFileAtBranch)).not.toHaveBeenCalled();
+  });
+
+  // Regression: the apply pushes with FORGEHUB_INTERNAL_PUSH=1, which bypasses
+  // the pre-receive protection hook — the rule has to be enforced in the route.
+  it("409s applying to a protected head branch that blocks direct pushes", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(
+      { id: "pb-1", repoId: "repo-prc-1", branch: "feature", requirePullRequest: true, requiredApprovals: 0, requireGreenChecks: false, blockForcePush: false } as never,
+    );
+    const { commitFileToBranch } = await import("../git-utils.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().protection).toBe(true);
+    expect(res.json().error).toMatch(/direct pushes are blocked/i);
+    expect(vi.mocked(prisma.protectedBranch.findFirst)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { repoId: "repo-prc-1", branch: "feature" } }),
+    );
+    expect(vi.mocked(commitFileToBranch)).not.toHaveBeenCalled();
+  });
+
+  it("applies normally when the head branch is protected WITHOUT a direct-push rule", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(suggestionComment() as never);
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(suggestionComment() as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(
+      { id: "pb-1", repoId: "repo-prc-1", branch: "feature", requirePullRequest: false, requiredApprovals: 2, requireGreenChecks: true, blockForcePush: true } as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // Regression: a PENDING review is a private draft — its suggestions must not
+  // be applyable server-side before the review is submitted.
+  it("409s applying a suggestion that belongs to a pending (draft) review", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ review: { state: "PENDING" } }) as never,
+    );
+    const { commitFileToBranch } = await import("../git-utils.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/pending review/i);
+    expect(vi.mocked(commitFileToBranch)).not.toHaveBeenCalled();
+  });
+
+  it("applies a suggestion on a SUBMITTED review", async () => {
+    vi.mocked(prisma.pullRequestReviewComment.findFirst).mockResolvedValue(
+      suggestionComment({ review: { state: "COMMENTED" } }) as never,
+    );
+    vi.mocked(prisma.pullRequestReviewComment.update).mockResolvedValue(suggestionComment() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments/sugg-comment-1/apply-suggestion",
+      headers: { authorization: aliceToken },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ─── Auto-merge fires from the review-submit signal (issue #119) ───────────────
+
+describe("auto-merge review-submit signal (issue #119)", () => {
+  let app: FastifyInstance;
+  let aliceToken: string;
+
+  function armedPR(overrides = {}) {
+    return makePR({ autoMergeMethod: "merge", autoMergeById: BOB_ID, ...overrides });
+  }
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    aliceToken = await authHeader(app, ALICE_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Bob armed the PR, so he must hold write access — the firing path
+    // re-checks it (a revoked armer must not merge).
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+      makeRepo({ collaborators: [{ userId: BOB_ID, role: "WRITER" }] }) as never,
+    );
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(armedPR({ state: "MERGED" }) as never);
+    vi.mocked(prisma.protectedBranch.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.workflowRun.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.pullRequestReviewComment.findMany).mockResolvedValue([] as never);
+    // The user lookup feeds the squash identity / arm payload; any handle works.
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ handle: "bob", displayName: "Bob", email: "bob@x.io" } as never);
+    const { performMerge, resolveBranchSha } = await import("../git-utils.js");
+    vi.mocked(resolveBranchSha).mockResolvedValue("abc1234");
+    vi.mocked(performMerge).mockResolvedValue({ ok: true, sha: "deadbeef" });
+  });
+
+  it("an APPROVED submission on an armed PR fires the merge as the arming user", async () => {
+    // computeReviewSummary sees the (just-created) approval against the head.
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([
+      makePRReview({ commitSha: "abc1234" }),
+    ] as never);
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(makePRReview() as never);
+    const { performMerge } = await import("../git-utils.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { state: "approved" },
+    });
+    expect(res.statusCode).toBe(201);
+
+    // The signal is fire-and-forget; wait for the async evaluation to land.
+    await vi.waitFor(() => expect(vi.mocked(performMerge)).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ state: "MERGED", mergeMethod: "merge" }) }),
+      ),
+    );
+  });
+
+  it("a CHANGES_REQUESTED submission does NOT fire", async () => {
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([
+      makePRReview({ state: "CHANGES_REQUESTED", commitSha: "abc1234" }),
+    ] as never);
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(
+      makePRReview({ state: "CHANGES_REQUESTED" }) as never,
+    );
+    const { performMerge } = await import("../git-utils.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { state: "changes_requested" },
+    });
+    expect(res.statusCode).toBe(201);
+
+    // Give the fire-and-forget evaluation a beat, then assert it stayed put.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+  });
+
+  it("a submission on an UNARMED PR does not merge anything", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([makePRReview({ commitSha: "abc1234" })] as never);
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(makePRReview() as never);
+    const { performMerge } = await import("../git-utils.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { state: "approved" },
+    });
+    expect(res.statusCode).toBe(201);
+    await new Promise((r) => setTimeout(r, 25));
+    expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
   });
 });
 

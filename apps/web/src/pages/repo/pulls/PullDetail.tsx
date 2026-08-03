@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  createPullComment, createReview, createReviewComment, deleteReview, getPull,
+  applySuggestion, createPullComment, createReview, createReviewComment, deleteReview, getPull,
   listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
-  listReviews, replyToReviewThread, setReviewThreadResolved, submitReview,
+  listReviews, replyToReviewThread, setPRFileViewed, setReviewThreadResolved, submitReview,
 } from "../../../api";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
@@ -17,6 +17,7 @@ import { SignatureBadge } from "../commitUi";
 import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
 import { PRFileRow } from "./PRFileRow";
+import { PRFileTree } from "./PRFileTree";
 import { ReviewersPanel } from "./ReviewersPanel";
 import {
   ReviewCard,
@@ -194,11 +195,12 @@ export function PullDetail({
     position: ReviewCommentPosition,
     body: string,
     mode: ComposeMode,
+    suggestion?: string,
   ) {
     setReviewBusy(true);
     setError(null);
     try {
-      const c = await createReviewComment(token, handle, repoName, number, { body, filePath, position });
+      const c = await createReviewComment(token, handle, repoName, number, { body, filePath, position, suggestion });
       // "Add single comment" submits a one-comment COMMENTED review immediately.
       if (mode === "single") await submitReview(token, handle, repoName, number, c.reviewId, { state: "commented" });
       refreshReviews();
@@ -208,6 +210,35 @@ export function PullDetail({
       setError(err instanceof Error ? err.message : "Failed to add comment");
     } finally {
       setReviewBusy(false);
+    }
+  }
+
+  /** Apply a suggested change (issue #119): commits to the head branch, so the diff + head SHA move. */
+  async function onApplySuggestion(commentId: string) {
+    setReviewBusy(true);
+    setError(null);
+    try {
+      await applySuggestion(token, handle, repoName, number, commentId);
+      refreshReviews();
+      refreshPr();
+      refreshTimeline();
+      // The head moved: re-fetch files so diffs, stats, and viewed ticks are honest.
+      setPrFiles(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to apply suggestion");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  /** Optimistically tick/untick a file's Viewed state (issue #119). */
+  async function onToggleViewed(path: string, viewed: boolean) {
+    setPrFiles((prev) => prev?.map((f) => (f.path === path ? { ...f, viewed } : f)) ?? prev);
+    try {
+      await setPRFileViewed(token, handle, repoName, number, path, viewed);
+    } catch {
+      // Roll the optimistic flip back on failure.
+      setPrFiles((prev) => prev?.map((f) => (f.path === path ? { ...f, viewed: !viewed } : f)) ?? prev);
     }
   }
 
@@ -278,10 +309,15 @@ export function PullDetail({
     hasPendingReview,
     canComment,
     canResolve: (author) => isOwner || author === user.handle,
+    // Applying writes to the head branch. The server enforces the real writer
+    // gate; the UI offers the action to the owner and the PR author (the usual
+    // appliers) rather than advertising it to every signed-in visitor.
+    canApplySuggestion: pr.state === "open" && (isOwner || isAuthor),
     busy: reviewBusy,
     onCreate: onCreateReviewComment,
     onReply: onReplyThread,
     onToggleResolve,
+    onApplySuggestion,
   };
 
   // Comments, non-comment events, and submitted reviews, interleaved chronologically.
@@ -497,22 +533,29 @@ export function PullDetail({
                     </span>
                   )}
                 </div>
-                <div className="space-y-2">
-                  {prFiles.map((file) => (
-                    <PRFileRow
-                      key={file.path}
-                      token={token}
-                      handle={handle}
-                      repoName={repoName}
-                      prNumber={number}
-                      file={file}
-                      base={base}
-                      headRef={pr.fromBranch}
-                      repoRef={repoRef}
-                      comments={reviewComments}
-                      review={reviewInteraction}
-                    />
-                  ))}
+                {/* File-tree navigator (issue #119) beside the diff cards. */}
+                <div className="flex flex-col md:flex-row gap-4 items-start">
+                  <div className="w-full md:w-56 shrink-0 md:sticky md:top-4 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
+                    <PRFileTree files={prFiles} />
+                  </div>
+                  <div className="flex-1 min-w-0 space-y-2">
+                    {prFiles.map((file) => (
+                      <PRFileRow
+                        key={file.path}
+                        token={token}
+                        handle={handle}
+                        repoName={repoName}
+                        prNumber={number}
+                        file={file}
+                        base={base}
+                        headRef={pr.fromBranch}
+                        repoRef={repoRef}
+                        comments={reviewComments}
+                        review={reviewInteraction}
+                        onToggleViewed={onToggleViewed}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
             ) : null)}

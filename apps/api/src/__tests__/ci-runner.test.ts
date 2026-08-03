@@ -17,8 +17,15 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+// Auto-merge (#119): the runner signals green completions into this module;
+// mock it so the hook's wiring is assertable without the whole gate machinery.
+vi.mock("../auto-merge.js", () => ({
+  maybeAutoMergeForCommit: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { prisma } from "../prisma.js";
 import { cancelRun, currentRunId, enqueueRun, whenCiIdle } from "../ci/runner.js";
+import { maybeAutoMergeForCommit } from "../auto-merge.js";
 import { createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
 
 type CheckFixture = { id: string; jobId: string; jobName: string };
@@ -64,6 +71,7 @@ async function runWorkflow(
   const runId = `run-${Math.random().toString(36).slice(2)}`;
   vi.mocked(prisma.workflowRun.findUnique).mockResolvedValue({
     id: runId,
+    repoId: "repo-ci-1",
     commitSha,
     workflowPath: ".forgehub/workflows/ci.yml",
     repo: { storageKey: repo.storageKey },
@@ -345,4 +353,30 @@ describe("runner cancel", () => {
       .mock.calls.some((c) => (c[0] as { where: { id: string } }).where.id === "chk-q");
     expect(queuedStarted).toBe(false); // queued job never started
   }, 15_000);
+});
+
+// ─── Auto-merge completion signal (issue #119) ─────────────────────────────────
+
+describe("runner auto-merge signal", () => {
+  it("a GREEN run completion evaluates auto-merge for its commit", async () => {
+    const { runConclusion } = await runWorkflow(
+      ["on: [push]", "jobs:", "  ok:", "    steps:", "      - run: echo fine"].join("\n"),
+      [{ id: "chk-ok", jobId: "ok", jobName: "ok" }],
+    );
+    expect(runConclusion).toBe("success");
+    await waitFor(() => vi.mocked(maybeAutoMergeForCommit).mock.calls.length > 0);
+    expect(vi.mocked(maybeAutoMergeForCommit)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(maybeAutoMergeForCommit)).toHaveBeenCalledWith("repo-ci-1", expect.stringMatching(/^[0-9a-f]{40}$/));
+  });
+
+  it("a FAILED run does NOT signal auto-merge (it cannot turn the summary green)", async () => {
+    const { runConclusion } = await runWorkflow(
+      ["on: [push]", "jobs:", "  bad:", "    steps:", "      - run: exit 1"].join("\n"),
+      [{ id: "chk-bad", jobId: "bad", jobName: "bad" }],
+    );
+    expect(runConclusion).toBe("failure");
+    // Give any stray fire-and-forget call a beat to land, then assert silence.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(maybeAutoMergeForCommit)).not.toHaveBeenCalled();
+  });
 });

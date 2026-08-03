@@ -4,6 +4,7 @@ import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeB
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import { canRead, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
+import { repoMergePolicy } from "../merge-policy.js";
 import { ensureImplicitWatch, pruneWatchOnAccessLoss } from "../watch-service.js";
 import {
   addCollaboratorBodySchema,
@@ -90,6 +91,9 @@ export function repoResponse(
     orgId?: string | null;
     org?: { handle: string } | null;
     topics?: Array<{ topic: string }>;
+    // Merge policy columns (issue #119); absent on narrower selects ⇒ defaults.
+    allowedMergeMethods?: string | null;
+    defaultMergeMethod?: string | null;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -98,6 +102,7 @@ export function repoResponse(
 ) {
   // Owning handle: the org's when org-owned, otherwise the creating user's.
   const ownerHandle = r.org?.handle ?? r.owner?.handle;
+  const mergePolicy = repoMergePolicy(r);
   return {
     id: r.id,
     name: r.name,
@@ -116,6 +121,9 @@ export function repoResponse(
     parent: lineage?.parent ?? null,
     source: lineage?.source ?? null,
     forkCount: lineage?.forkCount ?? 0,
+    // Owner merge policy (issue #119): drives the merge box's method menu.
+    allowedMergeMethods: mergePolicy.allowedMethods,
+    defaultMergeMethod: mergePolicy.defaultMethod,
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -372,16 +380,36 @@ export async function repoRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Repository not found" });
       }
 
-      const { description, visibility } = parsed.data;
+      const { description, visibility, allowedMergeMethods, defaultMergeMethod } = parsed.data;
       const descriptionValue =
         description === undefined ? undefined : description === null ? null : description.trim() || null;
 
-      const data: { description?: string | null; visibility?: RepoVisibility } = {};
+      const data: {
+        description?: string | null;
+        visibility?: RepoVisibility;
+        allowedMergeMethods?: string;
+        defaultMergeMethod?: string;
+      } = {};
       if (descriptionValue !== undefined) {
         data.description = descriptionValue;
       }
       if (visibility !== undefined) {
         data.visibility = fromApiVisibility(visibility);
+      }
+
+      // Merge policy (issue #119): cross-field rule — the effective default must
+      // stay inside the effective allowed set, whichever of the two arrived.
+      if (allowedMergeMethods !== undefined || defaultMergeMethod !== undefined) {
+        const current = repoMergePolicy(existing);
+        const nextAllowed = allowedMergeMethods ?? current.allowedMethods;
+        const nextDefault = defaultMergeMethod ?? current.defaultMethod;
+        if (!nextAllowed.includes(nextDefault)) {
+          return reply.status(400).send({
+            error: `defaultMergeMethod '${nextDefault}' must be one of the allowed methods (${nextAllowed.join(", ")})`,
+          });
+        }
+        if (allowedMergeMethods !== undefined) data.allowedMergeMethods = [...new Set(nextAllowed)].join(",");
+        if (defaultMergeMethod !== undefined) data.defaultMergeMethod = nextDefault;
       }
 
       if (Object.keys(data).length === 0) {
