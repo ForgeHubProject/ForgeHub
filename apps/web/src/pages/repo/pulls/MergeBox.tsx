@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, mergePull, resolveMergePr, revertPull } from "../../../api";
+import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, markPullReady, mergePull, resolveMergePr, revertPull } from "../../../api";
 import type { PullRequest } from "../../../types";
 import { Button, ConfirmDialog, DropdownMenu, Icons, RelativeTime, cx } from "../../../ui";
-import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, PRStateIcon } from "./prShared";
+import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, GitPullRequestDraftIcon, PRStateIcon } from "./prShared";
 import {
   allowedMergeOptions,
   mergeMethodOption,
@@ -43,22 +43,27 @@ function browserStorage(): Storage | null {
  * merge-conflict resolution flow (the /merge-resolve API) inline. A merged PR
  * gains a Revert action that opens a reverting PR. The conflict-resolution
  * wiring (resolveMergePr) is unchanged — only merge/revert chrome is added.
+ * A draft PR (issue #82) replaces the merge affordances with a "Ready for
+ * review" step — `canMarkReady` gates the button to the author / repo owner.
  */
 export function MergeBox({
   token,
   handle,
   repoName,
   pr,
+  canMarkReady,
   onUpdate,
 }: {
   token: string;
   handle: string;
   repoName: string;
   pr: PullRequest;
+  canMarkReady: boolean;
   onUpdate: (next: PullRequest) => void;
 }) {
   const navigate = useNavigate();
   const [merging, setMerging] = useState(false);
+  const [readying, setReadying] = useState(false);
   const [closing, setClosing] = useState(false);
   const [resolving, setResolving] = useState<null | "ours" | "theirs">(null);
   const [reverting, setReverting] = useState(false);
@@ -126,6 +131,20 @@ export function MergeBox({
       setError(err instanceof Error ? err.message : "Resolution failed");
     } finally {
       setResolving(null);
+    }
+  }
+
+  /** Leave draft (issue #82): one-way flip to a normal, mergeable open PR. */
+  async function doReady() {
+    setReadying(true);
+    setError(null);
+    try {
+      await markPullReady(token, handle, repoName, pr.number);
+      onUpdate({ ...pr, isDraft: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to mark ready for review");
+    } finally {
+      setReadying(false);
     }
   }
 
@@ -254,6 +273,74 @@ export function MergeBox({
     );
   }
 
+  // Armed auto-merge (issue #119). Rendered on a ready PR *and* on a draft one:
+  // arming a draft is legal ("merge this once it's ready"), it just cannot fire
+  // while the draft flag is set (#82), so the strip has to stay reachable —
+  // otherwise there would be no way to see or cancel the intent from a draft.
+  const autoMergeStrip = autoMerge && (
+    <div className="flex items-center gap-2 flex-wrap px-4 py-2 border-b border-fh-border bg-fh-accent-muted/30 text-fh-sm">
+      <GitMergeIcon size={14} className="shrink-0 text-fh-accent-fg" />
+      <span className="text-fh-fg">
+        <span className="font-semibold">Auto-merge enabled</span> by{" "}
+        <span className="font-semibold">{autoMerge.by}</span>{" "}
+        <span className="text-fh-fg-muted">
+          ({mergeMethodOption(autoMerge.method).menuLabel.toLowerCase()}) —{" "}
+          {pr.isDraft
+            ? "merges once this is marked ready for review and reviews and checks are green"
+            : "merges when reviews and checks go green"}
+        </span>
+      </span>
+      <Button
+        variant="default"
+        size="sm"
+        className="ml-auto"
+        loading={autoMergeBusy}
+        disabled={busy && !autoMergeBusy}
+        onClick={doCancelAutoMerge}
+      >
+        Cancel auto-merge
+      </Button>
+    </div>
+  );
+
+  // ── Open draft (issue #82): no merge affordances until "Ready for review" ──
+  if (pr.isDraft) {
+    return (
+      <div className="rounded-md border border-fh-border bg-fh-surface">
+        <div className="flex items-start gap-2.5 px-4 py-3 border-b border-fh-border rounded-t-md bg-fh-neutral-muted/40">
+          <GitPullRequestDraftIcon size={16} className="mt-0.5 shrink-0 text-fh-fg-muted" />
+          <div className="min-w-0">
+            <p className="text-fh-base font-semibold text-fh-fg">This pull request is still a work in progress</p>
+            <p className="mt-0.5 text-fh-sm text-fh-fg-muted">Draft pull requests cannot be merged.</p>
+          </div>
+        </div>
+        {autoMergeStrip}
+        <div className="px-4 py-3">
+          {error && (
+            <p className="mb-3 text-fh-sm text-fh-danger-fg flex items-start gap-1.5">
+              <AlertIcon size={14} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            {canMarkReady ? (
+              <Button variant="primary" loading={readying} disabled={busy} onClick={doReady}>
+                Ready for review
+              </Button>
+            ) : (
+              <p className="text-fh-sm text-fh-fg-muted">
+                Only the author or repository owner can mark this ready for review.
+              </p>
+            )}
+            <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy || readying} onClick={doClose}>
+              Close pull request
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const activeOption = mergeMethodOption(method);
 
   // ── Open PR ────────────────────────────────────────────────────────────────
@@ -296,28 +383,7 @@ export function MergeBox({
       <ProtectionPanel protection={protection} />
 
       {/* Armed auto-merge (issue #119) */}
-      {autoMerge && (
-        <div className="flex items-center gap-2 flex-wrap px-4 py-2 border-b border-fh-border bg-fh-accent-muted/30 text-fh-sm">
-          <GitMergeIcon size={14} className="shrink-0 text-fh-accent-fg" />
-          <span className="text-fh-fg">
-            <span className="font-semibold">Auto-merge enabled</span> by{" "}
-            <span className="font-semibold">{autoMerge.by}</span>{" "}
-            <span className="text-fh-fg-muted">
-              ({mergeMethodOption(autoMerge.method).menuLabel.toLowerCase()}) — merges when reviews and checks go green
-            </span>
-          </span>
-          <Button
-            variant="default"
-            size="sm"
-            className="ml-auto"
-            loading={autoMergeBusy}
-            disabled={busy && !autoMergeBusy}
-            onClick={doCancelAutoMerge}
-          >
-            Cancel auto-merge
-          </Button>
-        </div>
-      )}
+      {autoMergeStrip}
 
       <div className="px-4 py-3">
         {error && (

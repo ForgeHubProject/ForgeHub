@@ -14,21 +14,25 @@ function findReadmeEntry(entries: Array<{ name: string; path: string; type: stri
 }
 
 export async function commitRoutes(app: FastifyInstance) {
-  // GET /repos/:handle/:name/commits?branch=X&page=N&per_page=N
+  // GET /repos/:handle/:name/commits?branch=X&path=Y&page=N&per_page=N
   app.get("/repos/:handle/:name/commits", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
-    if (!repo.storageKey) return reply.send({ commits: [], branch: "main", page: 1, perPage: 20 });
+    if (!repo.storageKey) return reply.send({ commits: [], branch: "main", path: null, page: 1, perPage: 20 });
 
-    const { branch: branchQ, ref: refQ, page: pageQ, per_page: perPageQ } = request.query as Record<string, string | undefined>;
+    const { branch: branchQ, ref: refQ, path: pathQ, page: pageQ, per_page: perPageQ } = request.query as Record<string, string | undefined>;
     const ref = branchQ ?? refQ ?? await defaultBranch(repo.storageKey);
     const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(perPageQ ?? "20", 10) || 20));
+    // Optional per-path history (issue #109): only commits touching this file/dir.
+    // Taken verbatim, like the tree/blob handlers below — a pathspec means the
+    // same thing on every route here. An absent or empty `?path=` is no filter.
+    const path = pathQ || undefined;
 
-    const commits = await listCommits(repo.storageKey, ref, { page, perPage });
-    return { commits, branch: ref, page, perPage };
+    const commits = await listCommits(repo.storageKey, ref, { page, perPage, path });
+    return { commits, branch: ref, path: path ?? null, page, perPage };
   });
 
   // GET /repos/:handle/:name/commits/:sha

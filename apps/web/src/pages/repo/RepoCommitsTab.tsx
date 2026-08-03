@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
 import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
-import { resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { extensionForFilename, resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
+import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../views/diffViewers/computeTierUi";
+import { needsFileDiffMeta } from "../../lib/computeTier";
 import { useSemanticExtensions } from "../../lib/fhrFormats";
 import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../ui";
 import {
@@ -80,6 +82,21 @@ export function FileDiffCard({
   const filename = blobPath.split("/").pop() ?? "";
   const semanticExtensions = useSemanticExtensions();
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
+  // Compute-tier chrome, semantic files only: the header pill owns the tier,
+  // the viewer renders it; both share one cached metadata fetch (#66 P4).
+  // The pill's metadata is fetched only once the pill is engaged — it costs a
+  // handful of git spawns and fills a dropdown most viewers never open.
+  const ext = extensionForFilename(filename);
+  const isSemantic = semanticExtensions.has(ext);
+  const [tier, changeTier] = useComputeTier(ext);
+  const [pillEngaged, setPillEngaged] = useState(false);
+  const meta = useFileDiffMeta(
+    token,
+    base,
+    blobPath,
+    sha,
+    needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
+  );
 
   return (
     <div id={`diff-${index}`} className="scroll-mt-4 rounded-md border border-fh-border bg-fh-surface">
@@ -113,6 +130,14 @@ export function FileDiffCard({
           {displayPath}
         </Link>
         <div className="flex flex-shrink-0 items-center gap-2.5">
+          {isSemantic && (
+            <ComputeTierPill
+              tier={tier}
+              onChange={changeTier}
+              meta={meta}
+              onActivate={() => setPillEngaged(true)}
+            />
+          )}
           <DiffCounts additions={file.additions} deletions={file.deletions} />
           <ChangeTypeBadge status={file.status} />
         </div>
@@ -120,7 +145,14 @@ export function FileDiffCard({
 
       {expanded && (
         <div className="overflow-hidden rounded-b-md">
-          <Viewer file={file} repoBase={base} headRef={sha} token={token} />
+          <Viewer
+            file={file}
+            repoBase={base}
+            headRef={sha}
+            token={token}
+            computeTier={isSemantic ? tier : undefined}
+            onComputeTierChange={changeTier}
+          />
         </div>
       )}
     </div>
@@ -389,7 +421,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
     setLoading(true);
     setError(null);
     setStatuses({});
-    listCommits(token, handle, repoName, defaultBranch, undefined, 50)
+    listCommits(token, handle, repoName, defaultBranch, { perPage: 50 })
       .then((d) => {
         setCommits(d.commits);
         // Batch-fetch CI status for the visible shas (best-effort; empty when no CI).

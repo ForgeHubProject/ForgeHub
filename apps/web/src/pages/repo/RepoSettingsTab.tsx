@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteWebhook,
+  addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
   getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepoMergePolicy, updateTopics, updateWebhook,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
   type MergeMethod,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
@@ -11,8 +12,9 @@ import type {
 } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
-  RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
+  RadioCard, RadioGroup, RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
 } from "../../ui";
+import { LockIcon, RepoIcon } from "../listShared";
 
 type Props = {
   token: string;
@@ -78,17 +80,48 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function GeneralSection({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+function GeneralSection({ token, handle, repoName, isOwner }: { token: string; handle: string; repoName: string; isOwner: boolean }) {
   const [repo, setRepo] = useState<Repo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [description, setDescription] = useState("");
+  const [visibility, setVisibility] = useState<"public" | "private">("private");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     setLoading(true);
     getRepo(token, handle, repoName)
-      .then(setRepo)
+      .then((r) => {
+        setRepo(r);
+        setDescription(r.description ?? "");
+        setVisibility(r.visibility);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [token, handle, repoName]);
+
+  const dirty = !!repo && ((description.trim() || null) !== (repo.description ?? null) || visibility !== repo.visibility);
+
+  async function save() {
+    if (!repo || !dirty) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateRepo(token, repoName, {
+        description: description.trim() || null,
+        visibility,
+      });
+      // The PATCH payload is the card shape (no lineage/license); keep the
+      // richer detail fields we already loaded and overlay what changed.
+      setRepo({ ...repo, description: updated.description, visibility: updated.visibility, updatedAt: updated.updatedAt });
+      toast("Repository settings saved", { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div>
@@ -99,28 +132,76 @@ function GeneralSection({ token, handle, repoName }: { token: string; handle: st
           <Skeleton className="h-4 w-2/3" />
         </div>
       ) : repo ? (
-        <div className="bg-fh-surface border border-fh-border rounded-md">
-          <div className="flex items-center gap-3 px-4 py-4 border-b border-fh-border">
-            <Avatar name={repo.name} size={40} square />
-            <div className="min-w-0">
-              <p className="text-fh-lg font-semibold text-fh-fg flex items-center gap-2">
-                <span className="truncate">{repo.fullName}</span>
-                <Badge tone="neutral">
-                  {repo.visibility === "public" ? "Public" : "Private"}
-                </Badge>
-              </p>
-              <p className="text-fh-sm text-fh-fg-muted mt-0.5">
-                {repo.description || <span className="italic text-fh-fg-subtle">No description</span>}
-              </p>
+        <div className="space-y-4">
+          <div className="bg-fh-surface border border-fh-border rounded-md">
+            <div className="flex items-center gap-3 px-4 py-4 border-b border-fh-border">
+              {/* The repo octicon — the one repo mark used everywhere (issue #109). */}
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-fh-border bg-fh-surface-muted text-fh-fg-muted">
+                <RepoIcon size={20} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-fh-lg font-semibold text-fh-fg flex items-center gap-2">
+                  <span className="truncate">{repo.fullName}</span>
+                  <Badge variant="outline" tone={repo.visibility === "public" ? "neutral" : "warning"}>
+                    {repo.visibility === "public" ? "Public" : "Private"}
+                  </Badge>
+                </p>
+                <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+                  {repo.description || <span className="italic text-fh-fg-subtle">No description</span>}
+                </p>
+              </div>
             </div>
+            <dl className="divide-y divide-fh-border">
+              <InfoRow label="Repository name"><span className="font-mono text-fh-fg">{repo.name}</span></InfoRow>
+              <InfoRow label="Owner"><span className="font-mono text-fh-fg">@{repo.ownerHandle}</span></InfoRow>
+              <InfoRow label="Created"><RelativeTime date={repo.createdAt} /></InfoRow>
+              <InfoRow label="Last updated"><RelativeTime date={repo.updatedAt} /></InfoRow>
+            </dl>
           </div>
-          <dl className="divide-y divide-fh-border">
-            <InfoRow label="Repository name"><span className="font-mono text-fh-fg">{repo.name}</span></InfoRow>
-            <InfoRow label="Owner"><span className="font-mono text-fh-fg">@{repo.ownerHandle}</span></InfoRow>
-            <InfoRow label="Visibility">{repo.visibility === "public" ? "Public — anyone can see this repository." : "Private — only you and collaborators can see it."}</InfoRow>
-            <InfoRow label="Created"><RelativeTime date={repo.createdAt} /></InfoRow>
-            <InfoRow label="Last updated"><RelativeTime date={repo.updatedAt} /></InfoRow>
-          </dl>
+
+          {isOwner ? (
+            <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-4">
+              <Field label="Description" hint="A short sentence about what this repository is for.">
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    value={description}
+                    placeholder="Short description of your project (optional)"
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                )}
+              </Field>
+              <RadioGroup
+                name="settings-visibility"
+                legend="Visibility"
+                value={visibility}
+                onChange={(v) => setVisibility(v as "public" | "private")}
+              >
+                <RadioCard
+                  value="private"
+                  title="Private"
+                  icon={<LockIcon size={14} />}
+                  description="Only owners and collaborators can see this repository."
+                />
+                <RadioCard
+                  value="public"
+                  title="Public"
+                  icon={<RepoIcon size={14} />}
+                  description="Anyone can see this repository."
+                />
+              </RadioGroup>
+              {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+              <div className="flex justify-end pt-1 border-t border-fh-border">
+                <Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}>
+                  Save changes
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+              Only the repository owner can change these settings.
+            </p>
+          )}
         </div>
       ) : (
         <p className="text-fh-sm text-fh-fg-muted">Could not load repository details.</p>
@@ -1463,25 +1544,41 @@ function DeployKeysSection({ token, handle, repoName, isOwner }: {
 
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
-function DangerSection({ repoName, fullName }: { repoName: string; fullName: string }) {
+function DangerSection({ token, handle, repoName, fullName, isOwner }: {
+  token: string; handle: string; repoName: string; fullName: string; isOwner: boolean;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
   const matches = typed.trim() === repoName;
 
   function close() { setConfirming(false); setTyped(""); }
 
-  function requestDelete() {
-    if (!matches) return;
-    // Repository deletion needs a server wrapper that isn't exposed in this
-    // build (src/api.ts has no deleteRepo). Keep the flow honest.
-    toast("Repository deletion isn't available in this build yet.", { tone: "warning" });
-    close();
+  async function requestDelete() {
+    if (!matches || deleting || !isOwner) return;
+    setDeleting(true);
+    try {
+      // Addressed by owner + name, so the repo deleted is the one named below;
+      // the toast fires only after the server confirms it (deleteRepo throws otherwise).
+      await deleteRepo(token, handle, repoName);
+      toast(`Deleted ${fullName}`, { tone: "success" });
+      navigate("/");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete repository", { tone: "danger" });
+      setDeleting(false);
+    }
   }
 
   return (
     <div>
       <SectionHeader title="Danger zone" description="Irreversible and destructive actions." />
+      {!isOwner ? (
+        <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
+          Only the repository owner can delete this repository.
+        </p>
+      ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
           <div className="min-w-0">
@@ -1495,16 +1592,19 @@ function DangerSection({ repoName, fullName }: { repoName: string; fullName: str
           </Button>
         </div>
       </div>
+      )}
 
       <Dialog
         open={confirming}
-        onClose={close}
+        onClose={deleting ? () => {} : close}
         size="sm"
         title="Delete this repository?"
         footer={
           <>
-            <Button variant="default" onClick={close}>Cancel</Button>
-            <Button variant="danger" disabled={!matches} onClick={requestDelete}>Delete this repository</Button>
+            <Button variant="default" onClick={close} disabled={deleting}>Cancel</Button>
+            <Button variant="danger" disabled={!matches} loading={deleting} onClick={() => void requestDelete()}>
+              Delete this repository
+            </Button>
           </>
         }
       >
@@ -1714,7 +1814,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} />}
+        {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
         {section === "pulls" && <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
@@ -1723,7 +1823,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}
         {section === "webhooks" && <WebhooksSection token={token} handle={handle} repoName={repoName} />}
         {section === "deploy-keys" && <DeployKeysSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
-        {section === "danger" && <DangerSection repoName={repoName} fullName={fullName} />}
+        {section === "danger" && <DangerSection token={token} handle={handle} repoName={repoName} fullName={fullName} isOwner={isOwner} />}
       </div>
     </div>
   );

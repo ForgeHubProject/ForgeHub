@@ -198,6 +198,13 @@ describe("evaluateAutoMergeGates", () => {
     const ready = await evaluateAutoMergeGates(pr, "repo-am-1", "head1234");
     expect(ready.ready).toBe(true);
   });
+
+  // Draft PRs (#82) cannot merge at the endpoints either; auto-merge must agree.
+  it("blocked while the PR is a draft, even with every other gate green", async () => {
+    const gate = await evaluateAutoMergeGates({ ...pr, isDraft: true }, "repo-am-1", "head1234");
+    expect(gate.ready).toBe(false);
+    expect(gate.reasons).toContain("pull request is a draft");
+  });
 });
 
 // ─── Firing ───────────────────────────────────────────────────────────────────
@@ -230,6 +237,33 @@ describe("maybeAutoMergePr", () => {
     vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR({ state: "MERGED" }) as never);
     const result = await maybeAutoMergePr("pr-am-1");
     expect(result.fired).toBe(false);
+    expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
+  });
+
+  // ── Draft interaction (#82 × #119) ────────────────────────────────────────
+  // Arming a draft is legal — "merge this once it's ready" — but the draft flag
+  // is a gate, so nothing may merge until it is cleared.
+  it("does NOT fire on an armed DRAFT PR whose other gates are all green", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR({ isDraft: true }) as never);
+    const result = await maybeAutoMergePr("pr-am-1");
+    expect(result).toEqual({ fired: false, reason: "pull request is a draft" });
+    expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
+    // Blocked, not disarmed: the intent must survive for the ready-for-review signal.
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
+  });
+
+  it("fires once the same PR is no longer a draft", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR({ isDraft: false }) as never);
+    expect(await maybeAutoMergePr("pr-am-1")).toEqual({ fired: true, sha: "auto0001" });
+    expect(vi.mocked(executePullMerge)).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a draft PR when the CI-completion signal sweeps armed PRs", async () => {
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([
+      { id: "pr-am-1", fromBranch: "feature" },
+    ] as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(armedPR({ isDraft: true }) as never);
+    await maybeAutoMergeForCommit("repo-am-1", "head1234");
     expect(vi.mocked(executePullMerge)).not.toHaveBeenCalled();
   });
 

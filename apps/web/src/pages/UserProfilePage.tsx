@@ -199,7 +199,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
         setProfile(prof);
         setRepos(repoData.repos);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "User not found"))
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load profile"))
       .finally(() => setLoading(false));
   }, [token, handle]);
 
@@ -280,7 +280,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
 
         {!loading && error && (
           <div className="rounded-md border border-fh-border bg-fh-surface px-6 py-16 text-center">
-            <p className="text-fh-lg font-semibold text-fh-fg">User not found</p>
+            <p className="text-fh-lg font-semibold text-fh-fg">Couldn't load this profile</p>
             <p className="mt-1 text-fh-base text-fh-fg-muted">{error}</p>
             <Link to="/" className="mt-4 inline-block no-underline">
               <Button variant="default">Back to dashboard</Button>

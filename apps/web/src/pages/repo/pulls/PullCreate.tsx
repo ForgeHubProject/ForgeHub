@@ -29,6 +29,7 @@ export function PullCreate({
   const [toBranch, setToBranch] = useState(defaultBranch);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [draft, setDraft] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +49,7 @@ export function PullCreate({
         fromBranch,
         toBranch,
         description.trim() || undefined,
+        draft || undefined,
       );
       navigate(`${base}/pulls/${pr.number}`);
     } catch (err) {
@@ -144,6 +146,21 @@ export function PullCreate({
             />
           )}
         </Field>
+        {/* Draft toggle (issue #82): open as not-ready — merging blocked until "Ready for review". */}
+        <label className="flex items-start gap-2 text-fh-sm text-fh-fg cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-fh-accent-emphasis"
+            checked={draft}
+            onChange={(e) => setDraft(e.target.checked)}
+          />
+          <span>
+            Create as draft
+            <span className="block text-fh-xs text-fh-fg-subtle">
+              A draft can't be merged until you mark it ready for review.
+            </span>
+          </span>
+        </label>
         {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
         <div className="flex items-center gap-3">
           <Button
@@ -153,7 +170,7 @@ export function PullCreate({
             loading={submitting}
             disabled={!title.trim() || sameBranch}
           >
-            Create pull request
+            {draft ? "Create draft pull request" : "Create pull request"}
           </Button>
           <Link to={`${base}/pulls`} className="no-underline">
             <Button variant="default">Cancel</Button>

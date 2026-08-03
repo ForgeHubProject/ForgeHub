@@ -63,6 +63,10 @@ vi.mock("../prisma.js", () => ({
     pullRequestFileView: {
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    // Requested reviewers (#82): review submission fulfills an active request.
+    pullRequestReviewerRequest: {
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     personalAccessToken: {
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -1389,5 +1393,70 @@ describe("auto-merge review-submit signal (issue #119)", () => {
     expect(res.statusCode).toBe(201);
     await new Promise((r) => setTimeout(r, 25));
     expect(vi.mocked(performMerge)).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Requested-reviewer fulfillment on review submission (issue #82) ───────────
+
+describe("review submission fulfills an active reviewer request (issue #82)", () => {
+  let app: FastifyInstance;
+  let aliceToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    aliceToken = await authHeader(app, ALICE_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestReviewerRequest.updateMany).mockResolvedValue({ count: 1 } as never);
+  });
+
+  it("POST reviews (direct submit) stamps fulfilledAt on the reviewer's active request", async () => {
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(makePRReview() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { state: "approved", body: "LGTM" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.updateMany)).toHaveBeenCalledWith({
+      where: { pullRequestId: "pr-prc-1", userId: ALICE_ID, fulfilledAt: null, dismissedAt: null },
+      data: { fulfilledAt: expect.any(Date) },
+    });
+  });
+
+  it("POST reviews without a state (pending draft) does NOT fulfill", async () => {
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(makePendingReview() as never);
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: aliceToken },
+      payload: { body: "draft notes" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.updateMany)).not.toHaveBeenCalled();
+  });
+
+  it("PUT reviews/:id (submit pending) stamps fulfilledAt", async () => {
+    vi.mocked(prisma.pullRequestReview.findFirst).mockResolvedValue(makePendingReview() as never);
+    vi.mocked(prisma.pullRequestReview.update).mockResolvedValue(
+      makePRReview({ id: "review-pending-1", state: "APPROVED" as const, submittedAt: new Date() }) as never,
+    );
+    const res = await app.inject({
+      method: "PUT",
+      url: "/repos/alice/my-repo/pulls/1/reviews/review-pending-1",
+      headers: { authorization: aliceToken },
+      payload: { state: "changes_requested" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(prisma.pullRequestReviewerRequest.updateMany)).toHaveBeenCalledWith({
+      where: { pullRequestId: "pr-prc-1", userId: ALICE_ID, fulfilledAt: null, dismissedAt: null },
+      data: { fulfilledAt: expect.any(Date) },
+    });
   });
 });
