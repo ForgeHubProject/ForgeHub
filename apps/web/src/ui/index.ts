@@ -18,8 +18,9 @@ export type { ButtonVariant, ButtonSize } from "./Button";
 
 export { TabNav, TabItem } from "./TabNav";
 export { Badge, LabelChip } from "./Badge";
-export type { BadgeTone } from "./Badge";
+export type { BadgeTone, BadgeVariant } from "./Badge";
 export { Avatar } from "./Avatar";
+export { RadioGroup, RadioCard } from "./RadioGroup";
 
 export { DropdownMenu, DropdownItem, DropdownSeparator, DropdownLabel } from "./DropdownMenu";
 export { Dialog } from "./Dialog";
