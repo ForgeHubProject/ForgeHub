@@ -1111,6 +1111,7 @@ model SSHKey {
   publicKey   String
   fingerprint String    @unique
   lastUsedAt  DateTime?
+  lastUsedIp  String?
   createdAt   DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1119,15 +1120,17 @@ model SSHKey {
 }
 
 model DeployKey {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   repoId      String
   title       String
   publicKey   String
-  fingerprint String   @unique
+  fingerprint String    @unique
   // Read-only by default: a deploy key clones/pulls but cannot push unless a repo
   // admin explicitly grants write. Enforced identically to git-http's canWrite.
-  readOnly    Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  readOnly    Boolean   @default(true)
+  lastUsedAt  DateTime?
+  lastUsedIp  String?
+  createdAt   DateTime  @default(now())
 
   repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
 
