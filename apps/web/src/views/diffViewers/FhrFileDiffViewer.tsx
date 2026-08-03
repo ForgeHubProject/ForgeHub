@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { FileDiffViewerProps } from "../fileDiffViewerTypes";
-import { fetchRawBlob, getFileSemanticDiff, isFormatNotSupported, type SemanticFileDiff } from "../../api";
+import {
+  fetchRawBlob, getFileSemanticDiff, isFormatNotEnabled, isFormatNotSupported,
+  type FormatNotEnabled, type SemanticFileDiff,
+} from "../../api";
 import { loadRendererBundle, type RendererInstance } from "../../lib/rendererBundle";
+import { notEnabledScopeKey } from "../../lib/notEnabledFormats";
 import { resolveBaseFileDiffViewer } from "../fileDiffViewerRegistry";
+import { FormatNotEnabledCard } from "./FormatNotEnabledCard";
 
-type Status = "loading" | "ready" | "empty" | "error" | "fallback";
+type Status = "loading" | "ready" | "empty" | "error" | "fallback" | "not-enabled";
 
 // The blob envelope a renderer receives (SPEC-RENDERING §2b, @fhr/types
 // RendererBlobs). Declared locally so the web app needs no build-time dep on
@@ -24,10 +29,14 @@ type RendererBlobs = { base?: BlobRef; head?: BlobRef };
  * plain text/binary diff for that file. The rich native workspace is unaffected;
  * this upgrades the commit/PR file view only.
  *
- * Graceful degradation: if the repo hasn't opted this format in / no handler is
- * registered, /filediff answers 404 and we render exactly what the file would
- * have shown WITHOUT semantic support — its base text/binary viewer — instead of
- * an error. Only genuine failures (500, network) surface the error line.
+ * Graceful degradation splits in two (#73):
+ * - "format-not-enabled" (200): an official handler EXISTS, the repo just
+ *   hasn't opted the extension into .forge/formats — an actionable card shows
+ *   the exact `forge formats add/ignore` commands (aggregated across the
+ *   view's files), above the file's base text/binary viewer.
+ * - 404: no official handler for the extension at all — render exactly what
+ *   the file would have shown WITHOUT semantic support (its base viewer), no
+ *   CTA. Only genuine failures (500, network) surface the error line.
  *
  * The renderer's optional geometry/"View in 3D" scene needs the actual file
  * bytes, so we also fetch the base/head raw blobs (auth-aware) and hand the
@@ -39,6 +48,7 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
   const instRef = useRef<RendererInstance | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState("");
+  const [notEnabled, setNotEnabled] = useState<FormatNotEnabled | null>(null);
 
   const path = file.status === "deleted" ? file.oldPath : file.newPath;
   const filename = path.split("/").pop() ?? path;
@@ -55,11 +65,19 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
     };
     setStatus("loading");
     setMessage("");
+    setNotEnabled(null);
 
     (async () => {
       try {
         const diff = await getFileSemanticDiff(token, handle, repoName, path, headRef);
         if (cancelled) return;
+        // Official handler exists but the repo hasn't opted the format in —
+        // show the actionable card instead of a silent fallback (#73).
+        if (isFormatNotEnabled(diff)) {
+          setNotEnabled(diff);
+          setStatus("not-enabled");
+          return;
+        }
         if (!diff.changes || diff.changes.length === 0) {
           setStatus("empty");
           return;
@@ -108,6 +126,18 @@ export function FhrFileDiffViewer({ file, repoBase, headRef, token }: FileDiffVi
   if (status === "fallback") {
     const BaseViewer = resolveBaseFileDiffViewer(filename);
     return <BaseViewer file={file} repoBase={repoBase} headRef={headRef} token={token} />;
+  }
+
+  // Not enabled (#73): the actionable card on top, then everything the file
+  // would have shown without semantic support, so no information is lost.
+  if (status === "not-enabled" && notEnabled) {
+    const BaseViewer = resolveBaseFileDiffViewer(filename);
+    return (
+      <div>
+        <FormatNotEnabledCard payload={notEnabled} scope={notEnabledScopeKey(repoBase, headRef)} />
+        <BaseViewer file={file} repoBase={repoBase} headRef={headRef} token={token} />
+      </div>
+    );
   }
 
   return (
