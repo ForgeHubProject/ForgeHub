@@ -36,9 +36,11 @@ export function FilterTrigger({
 }
 
 /**
- * A lightweight popover that — unlike the shared `DropdownMenu` — stays open
- * while you interact with it, so multiple labels can be toggled in one visit.
- * Closes on outside-click and Escape.
+ * A lightweight popover that stays open while you interact with it. The
+ * multi-select label/assignee pickers now use the shared `DropdownMenu`'s
+ * `stayOpen` + searchable variant (issue #109); this remains for panels that
+ * need a render-prop trigger or free-form content (milestone, time tracking,
+ * saved views). Closes on outside-click and Escape.
  */
 export function Popover({
   trigger,
@@ -90,28 +92,48 @@ export function Popover({
   );
 }
 
-/** A sidebar section header: uppercase title + an optional gear edit trigger. */
+/**
+ * A sidebar section header: title + an optional edit affordance on the right —
+ * either a plain gear button (`onEdit`) or an arbitrary trigger node (`action`,
+ * e.g. a gear wrapped in a `DropdownMenu`).
+ */
 export function SidebarHeader({
   title,
   onEdit,
+  action,
 }: {
   title: string;
   onEdit?: () => void;
+  action?: React.ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between mb-2">
       <h3 className="text-fh-sm font-semibold text-fh-fg">{title}</h3>
-      {onEdit && (
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label={`Edit ${title.toLowerCase()}`}
-          className="p-1 -m-1 rounded text-fh-fg-muted hover:text-fh-fg transition-colors"
-        >
-          <GearIcon size={16} />
-        </button>
-      )}
+      {action ??
+        (onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`Edit ${title.toLowerCase()}`}
+            className="p-1 -m-1 rounded text-fh-fg-muted hover:text-fh-fg transition-colors"
+          >
+            <GearIcon size={16} />
+          </button>
+        ))}
     </div>
+  );
+}
+
+/** The bare gear mark used as a `DropdownMenu` trigger inside `SidebarHeader`. */
+export function SidebarGearTrigger({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      className="p-1 -m-1 rounded text-fh-fg-muted hover:text-fh-fg transition-colors"
+    >
+      <GearIcon size={16} />
+    </button>
   );
 }
 
