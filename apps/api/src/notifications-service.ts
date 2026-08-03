@@ -76,9 +76,17 @@ export async function notifySubscribers(p: EventParams): Promise<void> {
   await Promise.all(recipients.map((uid) => notify(uid, p)));
 }
 
+// Reasons an IGNORE watch cannot mute. A review request is *addressed to a
+// person* and blocks the PR until they act on it — unlike a mention or an
+// assignment, dropping it strands the requester waiting on a review the
+// reviewer was never told about. Muting a repo says "stop subscribing me to its
+// activity", not "answer for me when someone asks me directly" (issues #88/#82).
+const UNMUTABLE_REASONS: ReadonlySet<NotificationReason> = new Set(["REVIEW_REQUESTED"]);
+
 // Notify a single specific user (mentioned / assigned / review-requested /
 // thread-comment), skipping self-notification. An IGNORE watch actually mutes:
-// it suppresses even these direct reasons (issue #88). Read access is re-checked
+// it suppresses these direct reasons too (issue #88), except the ones in
+// UNMUTABLE_REASONS. Read access is re-checked
 // here too — a direct reason is no licence to leak a private repo's subject.
 // `loaded` lets a caller that already holds the access-relevant repo row hand it
 // over instead of paying for the (heavy: org memberships + team member sets)
@@ -97,6 +105,6 @@ export async function notifyUser(
     }),
   ]);
   if (!repo || !canRead(repo, userId)) return;
-  if (watch?.level === "IGNORE") return;
+  if (watch?.level === "IGNORE" && !UNMUTABLE_REASONS.has(p.reason)) return;
   await notify(userId, p);
 }

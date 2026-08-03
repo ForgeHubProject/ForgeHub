@@ -620,6 +620,40 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
+  // Owner-qualified delete, addressed like GET /repos/:handle/:name. The bare-name
+  // route above resolves against the CALLER's namespace, so a client on someone
+  // else's repo page sending just the name would silently delete its own same-named
+  // repo instead; here the owning handle is part of the address and a repo the
+  // caller does not own is a 404, never a deletion.
+  app.delete(
+    "/repos/:handle/:name",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
+
+      // Deletion stays owner-only and personal-repo-only, matching /repos/:name —
+      // the difference is that the owning handle now has to agree.
+      const existing = await prisma.repo.findFirst({
+        where: {
+          ...repoByOwningHandleWhere(handleParam, nameParam),
+          ownerId: request.user.sub,
+          orgId: null,
+        },
+      });
+      if (!existing) {
+        return reply.status(404).send({ error: "Repository not found" });
+      }
+
+      await prisma.repo.delete({ where: { id: existing.id } });
+
+      if (existing.storageKey) {
+        await removeBareRepo(existing.storageKey);
+      }
+
+      return reply.status(204).send();
+    },
+  );
+
   // Returns everyone assignable to issues — the repo creator plus direct
   // collaborators, and (for org repos, issue #114) org OWNERs and members of teams
   // granted the repo. Visible to any repo reader.

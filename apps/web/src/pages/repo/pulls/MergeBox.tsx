@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, closePull, mergePull, resolveMergePr, revertPull } from "../../../api";
+import { ApiError, closePull, markPullReady, mergePull, resolveMergePr, revertPull } from "../../../api";
 import type { PullRequest } from "../../../types";
 import { Button, ConfirmDialog, DropdownMenu, Icons, RelativeTime, cx } from "../../../ui";
-import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, PRStateIcon } from "./prShared";
+import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, GitPullRequestDraftIcon, PRStateIcon } from "./prShared";
 import {
   MERGE_METHOD_OPTIONS,
   mergeMethodOption,
@@ -43,22 +43,27 @@ function browserStorage(): Storage | null {
  * merge-conflict resolution flow (the /merge-resolve API) inline. A merged PR
  * gains a Revert action that opens a reverting PR. The conflict-resolution
  * wiring (resolveMergePr) is unchanged — only merge/revert chrome is added.
+ * A draft PR (issue #82) replaces the merge affordances with a "Ready for
+ * review" step — `canMarkReady` gates the button to the author / repo owner.
  */
 export function MergeBox({
   token,
   handle,
   repoName,
   pr,
+  canMarkReady,
   onUpdate,
 }: {
   token: string;
   handle: string;
   repoName: string;
   pr: PullRequest;
+  canMarkReady: boolean;
   onUpdate: (next: PullRequest) => void;
 }) {
   const navigate = useNavigate();
   const [merging, setMerging] = useState(false);
+  const [readying, setReadying] = useState(false);
   const [closing, setClosing] = useState(false);
   const [resolving, setResolving] = useState<null | "ours" | "theirs">(null);
   const [reverting, setReverting] = useState(false);
@@ -119,6 +124,20 @@ export function MergeBox({
       setError(err instanceof Error ? err.message : "Resolution failed");
     } finally {
       setResolving(null);
+    }
+  }
+
+  /** Leave draft (issue #82): one-way flip to a normal, mergeable open PR. */
+  async function doReady() {
+    setReadying(true);
+    setError(null);
+    try {
+      await markPullReady(token, handle, repoName, pr.number);
+      onUpdate({ ...pr, isDraft: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to mark ready for review");
+    } finally {
+      setReadying(false);
     }
   }
 
@@ -211,6 +230,43 @@ export function MergeBox({
       <div className="rounded-md border border-fh-danger-muted bg-fh-danger-muted/40 px-4 py-3 flex items-center gap-2.5">
         <PRStateIcon state="closed" />
         <p className="text-fh-base font-semibold text-fh-danger-fg">Pull request closed</p>
+      </div>
+    );
+  }
+
+  // ── Open draft (issue #82): no merge affordances until "Ready for review" ──
+  if (pr.isDraft) {
+    return (
+      <div className="rounded-md border border-fh-border bg-fh-surface">
+        <div className="flex items-start gap-2.5 px-4 py-3 border-b border-fh-border rounded-t-md bg-fh-neutral-muted/40">
+          <GitPullRequestDraftIcon size={16} className="mt-0.5 shrink-0 text-fh-fg-muted" />
+          <div className="min-w-0">
+            <p className="text-fh-base font-semibold text-fh-fg">This pull request is still a work in progress</p>
+            <p className="mt-0.5 text-fh-sm text-fh-fg-muted">Draft pull requests cannot be merged.</p>
+          </div>
+        </div>
+        <div className="px-4 py-3">
+          {error && (
+            <p className="mb-3 text-fh-sm text-fh-danger-fg flex items-start gap-1.5">
+              <AlertIcon size={14} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            {canMarkReady ? (
+              <Button variant="primary" loading={readying} disabled={busy} onClick={doReady}>
+                Ready for review
+              </Button>
+            ) : (
+              <p className="text-fh-sm text-fh-fg-muted">
+                Only the author or repository owner can mark this ready for review.
+              </p>
+            )}
+            <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy || readying} onClick={doClose}>
+              Close pull request
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }

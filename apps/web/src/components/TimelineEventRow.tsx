@@ -27,6 +27,7 @@ const UnlockMark = (p: IconProps) => <Svg {...p}><path d="M5.5 4a2.5 2.5 0 0 1 4
 const TransferMark = (p: IconProps) => <Svg {...p}><path d="M2.75 1a.75.75 0 0 1 .75.75v10a.25.25 0 0 0 .25.25h9.5a.75.75 0 0 1 0 1.5h-9.5A1.75 1.75 0 0 1 2 11.75v-10A.75.75 0 0 1 2.75 1Zm10.5 2.44 2.03 2.03a.75.75 0 0 1 0 1.06l-2.03 2.03a.75.75 0 1 1-1.06-1.06l.72-.72H7.75a.75.75 0 0 1 0-1.5h5.16l-.72-.72a.75.75 0 0 1 1.06-1.06Z" /></Svg>;
 const MilestoneMark = (p: IconProps) => <Svg {...p}><path d="M7.75 0a.75.75 0 0 1 .75.75V3h3.634c.414 0 .814.147 1.13.414l1.542 1.303a1.75 1.75 0 0 1 0 2.666l-1.542 1.303a1.75 1.75 0 0 1-1.13.414H8.5v6.75a.75.75 0 0 1-1.5 0V8.75H3.75A1.75 1.75 0 0 1 2 7V4.75C2 3.784 2.784 3 3.75 3H7V.75A.75.75 0 0 1 7.75 0ZM3.75 4.5a.25.25 0 0 0-.25.25V7c0 .138.112.25.25.25h8.384a.25.25 0 0 0 .161-.06l1.542-1.302a.25.25 0 0 0 0-.376l-1.542-1.303a.25.25 0 0 0-.161-.059H3.75Z" /></Svg>;
 const DesignMark = (p: IconProps) => <Svg {...p}><path d="M8.878.392a1.75 1.75 0 0 0-1.756 0l-5.25 3.045A1.75 1.75 0 0 0 1 4.951v6.098c0 .624.332 1.2.872 1.514l5.25 3.045a1.75 1.75 0 0 0 1.756 0l5.25-3.045c.54-.313.872-.89.872-1.514V4.951c0-.624-.332-1.2-.872-1.514L8.878.392ZM7.875 1.69a.25.25 0 0 1 .25 0l4.63 2.685L8 7.133 3.245 4.375l4.63-2.685ZM2.5 5.677v5.372c0 .09.047.171.125.216l4.625 2.683V8.432L2.5 5.677Zm6.25 8.271 4.625-2.683a.25.25 0 0 0 .125-.216V5.677L8.75 8.432v5.516Z" /></Svg>;
+const PullRequestMark = (p: IconProps) => <Svg {...p}><path d="M7.177 3.073 9.573.677A.25.25 0 0 1 10 .854v4.792a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354zM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25zM11 2.5h-1V4h1a1 1 0 0 1 1 1v5.628a2.251 2.251 0 1 0 1.5 0V5A2.5 2.5 0 0 0 11 2.5zm1 10.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></Svg>;
 
 // ─── Data helpers ────────────────────────────────────────────────────────────────
 
@@ -147,6 +148,16 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
         body: event.kind === "design_added"
           ? <>attached the design {design}</>
           : <>uploaded {design} {version != null && <>v{version}</>}</>,
+      };
+    }
+    // Draft PRs + requested reviewers (#82)
+    case "ready_for_review":
+      return { icon: <PullRequestMark />, tone: "text-fh-success-fg", body: <>marked this pull request as ready for review</> };
+    case "review_requested": {
+      const who = str(d.reviewer);
+      return {
+        icon: <PersonMark />, tone: "text-fh-fg-subtle",
+        body: <>requested a review from {who ? <ActorLink handle={who} /> : "someone"}</>,
       };
     }
     case "transferred": {

@@ -183,10 +183,10 @@ Everything lives in `src/ui/`, re-exported from `src/ui/index.ts`. Import from
 the barrel:
 
 ```tsx
-import { Button, TabNav, TabItem, Badge, LabelChip, Avatar, DropdownMenu,
-  DropdownItem, Dialog, ConfirmDialog, TextInput, Textarea, Select, Field,
-  EmptyState, Spinner, Skeleton, Tooltip, Breadcrumbs, PageHeading, Pagination,
-  RelativeTime, useToast, useTheme } from "../ui";
+import { Button, TabNav, TabItem, Badge, LabelChip, Avatar, RadioGroup,
+  RadioCard, DropdownMenu, DropdownItem, Dialog, ConfirmDialog, TextInput,
+  Textarea, Select, Field, EmptyState, Spinner, Skeleton, Tooltip, Breadcrumbs,
+  PageHeading, Pagination, RelativeTime, useToast, useTheme } from "../ui";
 ```
 
 **Button** — `variant`: primary | default | danger | invisible; `size`: sm | md;
@@ -208,11 +208,12 @@ active. Renders a router `Link` when `to` is set, else a button.
 ```
 
 **Badge / LabelChip** — `Badge` is a semantic pill (`tone`: neutral | accent |
-success | danger | warning | purple). `LabelChip` fills with an arbitrary label
-color and auto-picks black/white ink for AA contrast.
+success | danger | warning | purple; `variant`: solid | outline — `outline` is
+the GitHub-style bordered pill used for visibility chips). `LabelChip` fills
+with an arbitrary label color and auto-picks black/white ink for AA contrast.
 
 ```tsx
-<Badge tone="success">Public</Badge>
+<Badge variant="outline" tone="neutral">Public</Badge>
 <LabelChip name="bug" color="#c2352f" />
 ```
 
@@ -224,7 +225,9 @@ name). `square` for repos/orgs.
 ```
 
 **DropdownMenu** — outside-click + Escape + roving arrow-key nav. Compose with
-`DropdownItem` / `DropdownSeparator` / `DropdownLabel`.
+`DropdownItem` / `DropdownSeparator` / `DropdownLabel`. Function children add a
+pinned search input (the function receives the query — filter your own rows);
+`stayOpen` keeps the panel mounted across clicks for multi-select pickers.
 
 ```tsx
 <DropdownMenu trigger={<Button trailingIcon={<ChevronDownIcon/>}>Actions</Button>}>
@@ -232,6 +235,20 @@ name). `square` for repos/orgs.
   <DropdownSeparator />
   <DropdownItem danger onSelect={remove}>Delete</DropdownItem>
 </DropdownMenu>
+
+<DropdownMenu stayOpen searchPlaceholder="Filter labels…" trigger={<GearButton/>}>
+  {(query) => labels.filter(matches(query)).map((l) => <LabelRow key={l.id} … />)}
+</DropdownMenu>
+```
+
+**RadioGroup / RadioCard** — a fieldset of bordered option cards with a real
+radio input each (extracted from the create-repo visibility cards).
+
+```tsx
+<RadioGroup name="visibility" legend="Visibility" value={v} onChange={setV}>
+  <RadioCard value="private" title="Private" icon={<LockIcon/>} description="Only collaborators." />
+  <RadioCard value="public" title="Public" icon={<RepoIcon/>} description="Anyone can see it." />
+</RadioGroup>
 ```
 
 **Dialog / ConfirmDialog** — portal modal with focus trap, scroll lock, Escape

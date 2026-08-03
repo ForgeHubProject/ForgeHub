@@ -477,6 +477,15 @@ export type ProtectionStatus = {
   reason: string | null;
 };
 
+/** One explicitly requested reviewer on a PR (issue #82). */
+export type RequestedReviewer = {
+  handle: string;
+  /** "requested" until they submit a review while the request is active. */
+  state: "requested" | "reviewed";
+  requestedBy: string;
+  requestedAt: string;
+};
+
 export type PullRequest = {
   id: string;
   number: number;
@@ -485,6 +494,10 @@ export type PullRequest = {
   fromBranch: string;
   toBranch: string;
   state: "open" | "merged" | "closed";
+  /** Draft PR (issue #82): open but not ready — merging is blocked until /ready. */
+  isDraft?: boolean;
+  /** Requested-reviewer state for the sidebar; detail payload only. */
+  requestedReviewers?: RequestedReviewer[];
   mergeable?: boolean | null;
   headSha?: string | null;
   reviewSummary?: ReviewSummary;
