@@ -27,6 +27,7 @@ import { labelRoutes } from "./routes/labels.js";
 import { milestoneRoutes } from "./routes/milestones.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { prCommentRoutes } from "./routes/pr-comments.js";
+import { reactionRoutes } from "./routes/reactions.js";
 import { projectRoutes } from "./routes/projects.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { releaseRoutes } from "./routes/releases.js";
@@ -168,6 +169,7 @@ export async function buildServer() {
   await app.register(releaseRoutes);
   await app.register(prCommentRoutes);
   await app.register(issueRoutes);
+  await app.register(reactionRoutes);
   await app.register(designRoutes);
   await app.register(labelRoutes);
   await app.register(milestoneRoutes);
