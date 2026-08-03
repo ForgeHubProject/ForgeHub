@@ -108,6 +108,61 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 | `POST` | `/repos/:handle/:name/pulls/:number/merge` | Auto-merge; returns `{ merged, sha }` or 409 on conflict |
 | `POST` | `/repos/:handle/:name/pulls/:number/merge-resolve` | Resolve conflicts manually — per-hunk for text, per-entity/field for glTF |
 
+### Repo conventions: templates and CODEOWNERS (issue #89)
+
+Repo-configurable conventions live under `.forgehub/` — product-scoped, kept
+separate from the CLI's `.forge/` config — and are read from the default branch:
+
+```
+.forgehub/ISSUE_TEMPLATE/*.md      # issue templates, one file each
+.forgehub/PULL_REQUEST_TEMPLATE.md # single PR description template
+.forgehub/CODEOWNERS               # path patterns → @handles
+```
+
+An issue template may carry a small YAML front-matter block; everything after it
+is the template body, served byte-for-byte:
+
+```markdown
+---
+name: Bug report
+about: Something isn't working
+labels: [bug, needs triage]
+---
+## Steps to reproduce
+```
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/repos/:handle/:name/templates` | Parsed issue + PR templates (optional `?ref=`) |
+
+The new-issue page offers a template picker (front-matter `labels` pre-apply,
+matched case-insensitively against the repo's labels; unknown names are ignored)
+and the new-PR page pre-fills its description. Neither ever overwrites text the
+author has already typed.
+
+`CODEOWNERS` maps gitignore-style path patterns to `@handle`s. It is also
+recognised at the repo root and at `docs/CODEOWNERS`; the `.forgehub/` copy wins:
+
+```
+*                          @lead
+apps/api/                  @api-team
+apps/api/prisma/           @db-team
+!apps/api/prisma/generated/   # carve an exception out of the rule above
+```
+
+`*` matches within a path segment, `**` spans segments, a leading or interior `/`
+anchors to the repo root, and a trailing `/` scopes the rule to a directory's
+contents. **Last match wins**, so specific rules go below broad ones; a negated
+(`!`) or owner-less rule leaves the path deliberately unowned.
+
+When a PR is opened — and again whenever its head branch is pushed — the owners
+of its changed files are requested as reviewers automatically (issue #82's
+request + `REVIEW_REQUESTED` notification), and the reviewers sidebar marks those
+requests `CODEOWNERS`. CODEOWNERS is read from the PR's **base** branch. Owners
+who aren't the repo owner or a collaborator, the PR author, and the acting user
+are skipped silently, and an existing request (pending, fulfilled or withdrawn)
+is never touched. A malformed or missing file never blocks issue/PR creation.
+
 ### Forks
 
 | Method | Endpoint | Description |

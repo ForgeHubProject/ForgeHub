@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { createPull } from "../../../api";
+import { createPull, listRepoTemplates } from "../../../api";
+import { canReplaceBody } from "../templatesModel";
 import type { BranchInfo } from "../../../types";
 import { Button, Field, Select, TextInput, Textarea } from "../../../ui";
 import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, GitPullRequestIcon } from "./prShared";
@@ -34,6 +35,26 @@ export function PullCreate({
   const [error, setError] = useState<string | null>(null);
 
   const sameBranch = fromBranch === toBranch;
+
+  // Pre-fill from `.forgehub/PULL_REQUEST_TEMPLATE.md` (issue #89). The ref
+  // tracks what the template put in the box so a late-arriving fetch can't
+  // overwrite a description the author already started typing.
+  const appliedTemplate = useRef<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listRepoTemplates(token, handle, repoName)
+      .then((d) => {
+        const template = d.pullRequestTemplate;
+        if (cancelled || !template) return;
+        setDescription((current) => {
+          if (!canReplaceBody(current, appliedTemplate.current)) return current;
+          appliedTemplate.current = template.body;
+          return template.body;
+        });
+      })
+      .catch(() => { /* no templates — plain empty box */ });
+    return () => { cancelled = true; };
+  }, [token, handle, repoName]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

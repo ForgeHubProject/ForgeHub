@@ -37,6 +37,7 @@ import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
 import { socialRoutes } from "./routes/social.js";
 import { topicRoutes } from "./routes/topics.js";
+import { templateRoutes } from "./routes/templates.js";
 import { compositionRoutes } from "./routes/composition.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
@@ -180,6 +181,7 @@ export async function buildServer() {
   await app.register(timelineRoutes);
   await app.register(searchRoutes);
   await app.register(topicRoutes);
+  await app.register(templateRoutes);
   await app.register(compositionRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
