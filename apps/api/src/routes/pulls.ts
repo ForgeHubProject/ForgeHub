@@ -14,6 +14,7 @@ import { computeReviewSummary } from "../review-summary.js";
 import { triggerWorkflowsForPrOpen } from "../ci/trigger.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { evaluateMergeProtection, getCheckSummary, type ProtectionMergeStatus } from "../branch-protection.js";
+import { reactionRollupFor, reactionRollups, emptyRollup } from "../reactions-service.js";
 
 const MERGE_METHODS: readonly MergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -129,6 +130,9 @@ export async function pullRoutes(app: FastifyInstance) {
       },
     });
 
+    // Reactions ride along, batched: ONE grouped query for the whole page (#90).
+    const rollups = await reactionRollups("PULL_REQUEST", pulls.map((p) => p.id), userId);
+
     return {
       pulls: pulls.map((p) => ({
         id: p.id,
@@ -145,6 +149,7 @@ export async function pullRoutes(app: FastifyInstance) {
           : null,
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
+        ...(rollups.get(p.id) ?? emptyRollup()),
       })),
     };
   });
@@ -291,6 +296,8 @@ export async function pullRoutes(app: FastifyInstance) {
         : null,
       createdAt: pr.createdAt.toISOString(),
       updatedAt: pr.updatedAt.toISOString(),
+      // Emoji reactions on the PR body (#90): grouped counts + viewer state.
+      ...(await reactionRollupFor("PULL_REQUEST", pr.id, userId)),
     };
   });
 
