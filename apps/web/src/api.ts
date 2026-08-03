@@ -26,13 +26,37 @@ export class ApiError extends Error {
 }
 
 /**
- * True when a semantic-diff request failed because the format isn't supported
- * for this repo — a 404 from /filediff (no handler registered / repo hasn't
- * opted the format in). Such files should fall back to their base text/binary
- * viewer rather than show an error. Any other failure is genuine.
+ * True when a semantic-diff request failed because the format is genuinely
+ * unsupported — a 404 from /filediff (no official handler exists for the
+ * extension at all). Such files should fall back to their base text/binary
+ * viewer rather than show an error. The fixable "official handler exists but
+ * the repo hasn't opted in" case is NOT a 404 — it answers 200 with a
+ * FormatNotEnabled payload (#73). Any other failure is genuine.
  */
 export function isFormatNotSupported(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
+}
+
+/**
+ * The 200 payload /filediff answers when an official FHR handler EXISTS for the
+ * file's extension but the repo hasn't opted it into .forge/formats at this
+ * commit (issue #73). Not an error — a fixable state the view renders as an
+ * actionable card with the hint commands (`forge formats add/ignore <ext>`).
+ */
+export type FormatNotEnabled = {
+  status: "format-not-enabled";
+  path: string;
+  ext: string;
+  message: string;
+  hint: string[];
+};
+
+/**
+ * Discriminate a /filediff answer: true for the "official handler exists but
+ * the repo hasn't opted the format in" payload, false for a real diff.
+ */
+export function isFormatNotEnabled(res: SemanticFileDiff | FormatNotEnabled): res is FormatNotEnabled {
+  return (res as FormatNotEnabled).status === "format-not-enabled";
 }
 
 /** Result of GET /repos/:h/:n/filediff — a format-aware diff for one file blob pair. */
@@ -49,14 +73,18 @@ export type SemanticFileDiff = {
   headSha: string;
 };
 
-/** Compute a semantic diff for one file at a commit (base defaults to its parent). */
+/**
+ * Compute a semantic diff for one file at a commit (base defaults to its
+ * parent). May resolve to a FormatNotEnabled payload instead of a diff — see
+ * isFormatNotEnabled — when the repo hasn't opted the (official) format in.
+ */
 export async function getFileSemanticDiff(
   token: string | null,
   handle: string,
   repoName: string,
   filePath: string,
   sha: string,
-): Promise<SemanticFileDiff> {
+): Promise<SemanticFileDiff | FormatNotEnabled> {
   return req(
     `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
     { token: token ?? undefined },
