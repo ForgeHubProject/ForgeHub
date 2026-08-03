@@ -22,6 +22,8 @@ vi.mock("../prisma.js", () => ({
     // No watch row ⇒ notifyUser's IGNORE-mute check (issue #88) passes through.
     watch: { findUnique: vi.fn().mockResolvedValue(null) },
     timelineEvent: { create: vi.fn(), findMany: vi.fn() },
+    // Reactions (#90) ride on issue/PR/comment payloads — default to "none".
+    reaction: { findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn(), deleteMany: vi.fn() },
     $transaction: vi.fn(),
   },
 }));

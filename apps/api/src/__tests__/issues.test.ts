@@ -37,7 +37,9 @@ vi.mock("../prisma.js", () => ({
       count: vi.fn(),
     },
     issueComment: {
-      findMany: vi.fn(),
+      // Default: no comments — the issue DELETE handler gathers comment ids for
+      // its reaction sweep (#90), so this must resolve even when unset.
+      findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -74,6 +76,12 @@ vi.mock("../prisma.js", () => ({
       findFirst: vi.fn(),
     },
     personalAccessToken: { findUnique: vi.fn(), update: vi.fn() },
+    // Reactions (#90) ride on issue/comment payloads — default to "none".
+    reaction: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(),
+      deleteMany: vi.fn(),
+    },
     $transaction: vi.fn(),
   },
 }));

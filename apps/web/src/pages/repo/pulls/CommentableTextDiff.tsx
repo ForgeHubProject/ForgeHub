@@ -144,6 +144,7 @@ export function CommentableTextDiff({
                                 busy={review.busy}
                                 onReply={review.onReply}
                                 onToggleResolve={review.onToggleResolve}
+                                reactionCtx={review.reactionCtx}
                                 anchored
                               />
                             ))}
