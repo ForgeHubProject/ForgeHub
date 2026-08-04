@@ -3,7 +3,7 @@ set -euo pipefail
 
 mkdir -p "${GIT_STORAGE_ROOT:-/data/git-storage}"
 
-echo "Applying database migrations..."
-npx prisma migrate deploy
+echo "Applying database schema..."
+npx prisma db push --accept-data-loss
 
 exec "$@"
