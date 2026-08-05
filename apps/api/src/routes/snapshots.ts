@@ -119,17 +119,21 @@ export async function snapshotRoutes(app: FastifyInstance) {
         });
       }
 
-      const utf8Text =
-        body.text !== undefined ? body.text : JSON.stringify(body.gltf);
+      // This route takes a JSON body, so the payload is text by construction;
+      // the handler ABI is byte-oriented, so encode once here.
+      const bytes = Buffer.from(
+        body.text !== undefined ? body.text : JSON.stringify(body.gltf),
+        "utf8",
+      );
       const defaultSource =
         inferredHandlerId === PLAIN_TEXT_HANDLER_ID ? "upload.txt" : "upload.gltf";
 
       let snapshotId: string;
       try {
-        snapshotId = await handler.ingestFromUtf8Text({
+        snapshotId = await handler.ingest({
           repoId: repo.id,
           sourceFile: body.sourceFile?.trim() || defaultSource,
-          utf8Text,
+          bytes,
           label: body.label?.trim() || null,
           gitCommitSha: null,
         });

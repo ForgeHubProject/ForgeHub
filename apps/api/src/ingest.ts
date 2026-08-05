@@ -53,15 +53,17 @@ export async function ingestCommitRange(
       if (!handler) continue;
 
       try {
+        // Read the blob as bytes, not text: a UTF-8 decode here would corrupt
+        // binary formats (.glb) before the handler ever sees them.
         const { stdout: content } = await execFile(
           "git",
           ["show", `${commit.sha}:${file}`],
-          { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
+          { cwd: repoPath, maxBuffer: 50 * 1024 * 1024, encoding: "buffer" },
         );
-        await handler.ingestFromUtf8Text({
+        await handler.ingest({
           repoId,
           sourceFile: file,
-          utf8Text: content,
+          bytes: content,
           label: commit.message || null,
           gitCommitSha: commit.sha,
         });
