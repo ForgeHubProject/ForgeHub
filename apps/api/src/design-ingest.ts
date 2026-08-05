@@ -30,11 +30,12 @@ export function isImageName(name: string, contentType?: string | null): boolean 
 
 /**
  * Ingest a design file's bytes into a Snapshot if an FHR handler claims its name.
- * Reuses the exact same `handler.ingestFromUtf8Text` pipeline that push-time
- * ingestion and the /snapshots route use — no duplicated parse/persist logic.
- * Returns the new snapshot id, or null when the format is unrecognized or the
- * bytes could not be ingested (e.g. a binary .glb or malformed JSON): such files
- * still store fine, just without an entity tree.
+ * Reuses the exact same `handler.ingest` pipeline that push-time ingestion and
+ * the /snapshots route use — no duplicated parse/persist logic. The raw bytes go
+ * through untouched, so binary containers (.glb) ingest as well as their text
+ * equivalents. Returns the new snapshot id, or null when the format is
+ * unrecognized or the bytes could not be ingested (e.g. malformed glTF): such
+ * files still store fine, just without an entity tree.
  */
 export async function ingestDesignSnapshot(params: {
   repoId: string;
@@ -44,10 +45,10 @@ export async function ingestDesignSnapshot(params: {
   const handler = designHandlerFor(params.name);
   if (!handler) return null;
   try {
-    return await handler.ingestFromUtf8Text({
+    return await handler.ingest({
       repoId: params.repoId,
       sourceFile: params.name,
-      utf8Text: params.buffer.toString("utf8"),
+      bytes: params.buffer,
       label: null,
       gitCommitSha: null,
     });

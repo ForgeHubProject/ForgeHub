@@ -14,13 +14,15 @@ function matchesPlainTextPath(path: string): boolean {
   return TEXT_EXT.test(path);
 }
 
-async function ingestPlainUtf8(input: IngestInput): Promise<string> {
-  const { repoId, sourceFile, utf8Text, label, gitCommitSha } = input;
+async function ingestPlainText(input: IngestInput): Promise<string> {
+  const { repoId, sourceFile, bytes, label, gitCommitSha } = input;
 
-  const buf = Buffer.byteLength(utf8Text, "utf8");
-  if (buf > PLAIN_TEXT_MAX_BYTES) {
+  if (bytes.length > PLAIN_TEXT_MAX_BYTES) {
     throw new Error(`Text exceeds ${PLAIN_TEXT_MAX_BYTES} bytes`);
   }
+
+  // This handler owns text formats, so it does its own UTF-8 decode.
+  const utf8Text = bytes.toString("utf8");
 
   if (gitCommitSha) {
     const existing = await prisma.snapshot.findFirst({
@@ -108,6 +110,6 @@ export const plainTextHandler: ArtifactHandler = {
   id: PLAIN_TEXT_HANDLER_ID,
   capabilities: { semanticCompare: true, semanticMerge: false },
   matchesPath: matchesPlainTextPath,
-  ingestFromUtf8Text: ingestPlainUtf8,
+  ingest: ingestPlainText,
   diff: diffPlainText,
 };

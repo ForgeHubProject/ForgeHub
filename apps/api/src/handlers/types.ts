@@ -47,7 +47,9 @@ export type HandlerCapabilities = {
 export type IngestInput = {
   repoId: string;
   sourceFile: string;
-  utf8Text: string;
+  /** Raw file bytes. Binary-safe: a handler that owns a binary container (.glb)
+   *  decodes them itself; text handlers decode as UTF-8 internally. */
+  bytes: Buffer;
   label: string | null;
   gitCommitSha: string | null;
 };
@@ -56,7 +58,8 @@ export type ArtifactHandler = {
   id: HandlerId;
   capabilities: HandlerCapabilities;
   matchesPath(path: string): boolean;
-  ingestFromUtf8Text(input: IngestInput): Promise<string>;
+  /** Persist a Snapshot (+ entity tree) for one file's raw bytes. */
+  ingest(input: IngestInput): Promise<string>;
   /** Produce a format-aware structured diff between two raw file blobs. */
   diff(base: Buffer, head: Buffer): Promise<StructuredDiff>;
   /** Attempt a 3-way semantic merge. Optional — omit if format cannot merge. */
