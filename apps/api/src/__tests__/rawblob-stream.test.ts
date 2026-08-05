@@ -348,11 +348,23 @@ function request(
   });
 }
 
-/** Count live `git cat-file blob` children of this process. */
+/**
+ * Count live `git cat-file blob` children of this process.
+ *
+ * The match is anchored to ps's PID columns rather than run over the whole
+ * line, and the helper's own shell is excluded by pid. A plain
+ * `grep "cat-file blob"` over ps output also matches this very `sh -c`, whose
+ * arguments contain that literal, so it reported 1 with no git child alive at
+ * all. That constant offset cancelled out of the before/after comparison
+ * below, but it would quietly absorb a one-child leak the moment the baseline
+ * was sampled anywhere else. `ps` and `awk` are children of the helper shell,
+ * not of this process, so the ppid filter already drops them.
+ */
 async function countCatFileChildren(): Promise<number> {
   const { stdout } = await execFile("sh", [
     "-c",
-    `ps -o ppid=,args= -e | grep -c "^ *${process.pid} .*cat-file blob" || true`,
+    `ps -o pid=,ppid=,args= -e | awk -v me=$$ -v parent=${process.pid} ` +
+      `'$2 == parent && $1 != me && index($0, "cat-file blob") { n++ } END { print n + 0 }'`,
   ]);
   return Number(stdout.trim()) || 0;
 }
