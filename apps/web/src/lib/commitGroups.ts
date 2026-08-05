@@ -1,5 +1,14 @@
-import type { CommitFilePreviewRow } from "../views/repoWorkspaceTypes";
 import type { DiffResult, SnapshotSummary } from "../types";
+
+/** Per-file diff summary for one snapshot inside an expanded commit group. */
+export type CommitFilePreviewRow = {
+  snapshotId: string;
+  sourceFile: string;
+  handlerId: string;
+  loading: boolean;
+  stats: { added: number; removed: number; modified: number; moved: number } | null;
+  error?: string;
+};
 
 export type ChangeCounts = {
   added: number;

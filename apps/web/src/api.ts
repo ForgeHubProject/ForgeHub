@@ -7,7 +7,7 @@ import type {
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
   Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
-  SessionInfo, Snapshot, SnapshotSummary, SyncForkResult, TagInfo, Team, TimelineEvent,
+  SessionInfo, Snapshot, SyncForkResult, Team, TimelineEvent,
   TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
@@ -322,25 +322,6 @@ export async function updateTopics(
   });
 }
 
-export async function getSnapshots(
-  token: string | null,
-  handle: string,
-  repoName: string,
-  branch?: string,
-): Promise<{ snapshots: SnapshotSummary[] }> {
-  const qs = branch ? `?branch=${encodeURIComponent(branch)}` : "";
-  return req(`/repos/${handle}/${repoName}/snapshots${qs}`, { token: token ?? undefined });
-}
-
-export async function getSnapshot(
-  token: string | null,
-  handle: string,
-  repoName: string,
-  snapshotId: string,
-): Promise<Snapshot> {
-  return req(`/repos/${handle}/${repoName}/snapshots/${snapshotId}`, { token: token ?? undefined });
-}
-
 export async function ingestSnapshot(
   token: string,
   handle: string,
@@ -394,19 +375,6 @@ export async function deleteEntity(
     method: "DELETE",
     token,
   });
-}
-
-export async function compareDiff(
-  token: string | null,
-  handle: string,
-  repoName: string,
-  baseId: string,
-  targetId: string,
-): Promise<DiffResult> {
-  return req<DiffResult>(
-    `/repos/${handle}/${repoName}/compare?base=${encodeURIComponent(baseId)}&target=${encodeURIComponent(targetId)}`,
-    { token: token ?? undefined },
-  );
 }
 
 export async function deleteConstraint(
@@ -510,16 +478,6 @@ export async function deleteBranchProtection(
     method: "DELETE",
     token,
   });
-}
-
-// ─── tags ─────────────────────────────────────────────────────────────────────────────
-
-export async function listTags(
-  token: string | null,
-  handle: string,
-  repoName: string,
-): Promise<{ tags: TagInfo[] }> {
-  return req(`/repos/${handle}/${repoName}/tags`, { token: token ?? undefined });
 }
 
 // ─── protected tags (issue #117) ────────────────────────────────────────────────
