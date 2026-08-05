@@ -698,15 +698,30 @@ describe("openBlobStream", () => {
   let streamRepo: TestRepo;
   let sha: string;
   let oid: string;
+  let bigOid: string;
   const BODY = "abcdefghij".repeat(1024); // 10 KiB
+  /**
+   * 8 MiB, for the mid-stream kill only. A small blob cannot be killed
+   * mid-stream at all: git writes the whole thing and exits before the signal
+   * lands, and a kill on an exited child is discarded. 8 MiB is far more than
+   * the pipe buffer, so git is still writing when the first chunk arrives.
+   */
+  const BIG_BODY = "x".repeat(8 * 1024 * 1024);
 
   beforeAll(async () => {
     streamRepo = await createTestRepo("test/open-blob-stream.git");
-    sha = await makeCommit(streamRepo.workDir, { "asset.bin": BODY }, "init");
+    sha = await makeCommit(
+      streamRepo.workDir,
+      { "asset.bin": BODY, "huge.bin": BIG_BODY },
+      "init",
+    );
     const stat = await statBlob(streamRepo.storageKey, sha, "asset.bin");
     if (stat.kind !== "blob") throw new Error("fixture is not a blob");
     oid = stat.oid;
-  }, 30_000);
+    const bigStat = await statBlob(streamRepo.storageKey, sha, "huge.bin");
+    if (bigStat.kind !== "blob") throw new Error("big fixture is not a blob");
+    bigOid = bigStat.oid;
+  }, 60_000);
 
   afterAll(async () => {
     await streamRepo.cleanup();
@@ -749,10 +764,18 @@ describe("openBlobStream", () => {
   it("reports a failure when the child is killed mid-stream, with the consumer draining", async () => {
     // A SIGKILL with the consumer keeping up: stdout sees EOF first, exactly as
     // in the bad-oid case, so the signal has to be observed on the child.
+    //
+    // "Mid-stream" has to be made true, not assumed. Killing straight after
+    // spawn against a 10 KiB blob races git to the finish and frequently loses:
+    // git writes all the bytes and exits 0 first, the signal is dropped on an
+    // exited child, and the test then waits out its timeout for a failure that
+    // legitimately never happened (worse on an idle machine, where git wins
+    // more often). So: an 8 MiB blob, which cannot fit in the pipe buffer, and
+    // the kill fires only once the first chunk proves bytes are flowing.
     const failure = new Promise<Error>((resolve) => {
-      const child = openBlobStream(streamRepo.storageKey, oid, resolve);
+      const child = openBlobStream(streamRepo.storageKey, bigOid, resolve);
+      child.stdout.once("data", () => child.kill("SIGKILL"));
       void drain(child.stdout);
-      child.kill("SIGKILL");
     });
     await expect(failure).resolves.toBeInstanceOf(Error);
   });
