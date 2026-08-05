@@ -88,7 +88,7 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 
 **There is no size limit.** The response is streamed straight from `git cat-file blob` to the socket, so serving a 4 GiB file costs the API the same memory as serving a 4 KiB one — a contributor who can push a file can fetch it back. `Content-Length` is always explicit (so a client can tell a truncated download from a complete one), the blob's object id is the `ETag`, and a commit-pinned URL is cached `immutable`.
 
-**And nothing interrupts a download that is making progress**, however slow the link and however large the file. The API applies no concurrency limit, no queue, no deadline and no stall/idle timeout to this route — not because those would be nice to have, but because in this position each of them behaves as a size ceiling or as a denial-of-service amplifier. A socket idle timer cannot tell a client reading at 8 KiB/s from one reading nothing (under backpressure it is reset on write dispatch, not on bytes leaving the host), and with `Accept-Ranges: none` a transfer it kills cannot be resumed; a *global* download cap is filled, and thereby denied to everyone, by a handful of sockets that take the headers and read nothing. `apps/api/src/rawblob-limits.ts` records the measurements behind both.
+**Nothing in the API interrupts a download that is making progress**, however slow the link and however large the file. (The reverse proxy in front of it is a different matter, and it imposes a rate floor — see the note below, which states it and measures it.) The API applies no concurrency limit, no queue, no deadline and no stall/idle timeout to this route — not because those would be nice to have, but because in this position each of them behaves as a size ceiling or as a denial-of-service amplifier. A socket idle timer cannot tell a client reading at 8 KiB/s from one reading nothing (under backpressure it is reset on write dispatch, not on bytes leaving the host), and with `Accept-Ranges: none` a transfer it kills cannot be resumed; a *global* download cap is filled, and thereby denied to everyone, by a handful of sockets that take the headers and read nothing. `apps/api/src/rawblob-limits.ts` records the measurements behind both.
 
 What bounds the route instead is the layer that can see what it is limiting: the bundled `apps/web/nginx.conf` caps **concurrent raw-blob downloads per client** (`limit_conn`, 32) — nginx is the edge and sees the real client address, which the API cannot — and Node's own `keepAliveTimeout`/`headersTimeout` reap idle connections. This is the same posture GitLab and Gitea take on raw blobs.
 
@@ -96,7 +96,20 @@ What bounds the route instead is the layer that can see what it is limiting: the
 |-----|--------|
 | `FORGEHUB_RAWBLOB_MAX_BYTES` | Opt-in policy ceiling in bytes; over-limit requests get `413` with the real size, decided during the pre-flight before any bytes are sent. **Unset ⇒ unlimited**, which is the default. A non-positive or unparseable value is logged and ignored — it is *not* read as "serve nothing". |
 
-> Behind a reverse proxy, make sure response buffering is **off** for this route or the proxy will spool whole blobs to its own disk before the API ever feels backpressure, and make sure the timeout it applies to writing the response body to a slow client (`send_timeout` in nginx — *not* `proxy_send_timeout`, which governs the request to the upstream) cannot fire on a transfer that is still moving. The bundled `apps/web/nginx.conf` does both.
+> Behind a reverse proxy, make sure response buffering is **off** for this route, or the proxy will spool whole blobs to its own disk before the API ever feels backpressure. The bundled `apps/web/nginx.conf` does this (`proxy_buffering off`, `proxy_max_temp_file_size 0`).
+>
+> **The proxy imposes a rate floor, and it is the one place the "never interrupted" property above stops holding.** The timeout that governs writing the response body to a slow client is nginx's `send_timeout` (*not* `proxy_send_timeout`, which governs the request to the upstream and never applies to a bodyless `GET`). `send_timeout` is **not** reset by partial progress: nginx clears it only when the kernel reports the client socket writable again, and Linux does that only once a substantial fraction of the send buffer has drained — not on every byte the client consumes. A client reading steadily but slowly can therefore be dropped mid-transfer *while still making progress*.
+>
+> The floor is a rate, never a size or a duration — a blob of any size transfers fine at any rate above it — and it is approximately **(client socket buffering) ÷ `send_timeout`**. Measured with nginx 1.24.0 running the bundled file, altering only that value, against a continuously-reading client (drop times observed server-side, since a client cannot see the drop until it has drained its buffer):
+>
+> | `send_timeout` | Dropped | Survived | Floor |
+> |---|---|---|---|
+> | `5s` | 8, 32, 128, 192 KiB/s (at ~5.0 s); 256 KiB/s (at 8.3 s) | 384, 512 KiB/s | ~300 KiB/s |
+> | `20s` | 8, 32, 48 KiB/s (at ~20 s); 64 KiB/s (at 32.8 s) | 96, 128 KiB/s | ~80 KiB/s |
+>
+> Four times the timeout gave a four times lower floor; shrinking the socket buffers 16x lowered the 5 s floor from ~300 to ~48 KiB/s, so it tracks the buffer too. nginx logs `client timed out (110: Connection timed out) while sending to client` on each drop.
+>
+> The bundled conf ships `send_timeout 1h`, where that works out to roughly **0.4 KiB/s (~430 B/s)** on a host with ~1.5 MB of socket buffering. No real client sustains less, which is why this is acceptable rather than a ceiling in disguise — but it is a real limit, so it is stated rather than claimed away. **An operator who needs a lower floor raises `send_timeout`**; that is the only knob, and buffering is host- and tuning-dependent, so re-measure if it matters to you.
 
 ### Semantic diff (compare)
 

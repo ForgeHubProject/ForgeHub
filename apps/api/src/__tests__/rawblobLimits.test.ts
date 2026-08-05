@@ -43,9 +43,11 @@ describe("rawblob env limits", () => {
   });
 
   it("exposes no concurrency, queue or stall knob at all", () => {
-    // The route deliberately has no mechanism that can refuse or interrupt a
-    // download that is making progress, so there is nothing here to configure.
-    // Re-adding any of these would mean re-adding the mechanism.
+    // The API side of the route deliberately has no mechanism that can refuse
+    // or interrupt a download that is making progress, so there is nothing here
+    // to configure. Re-adding any of these would mean re-adding the mechanism —
+    // including as a "compensation" for the rate floor nginx's send_timeout
+    // imposes at the edge, which is documented there, not worked around here.
     expect(Object.keys(limits).sort()).toEqual(["RAWBLOB_SHARED_MAX_AGE_SECONDS", "rawblobMaxBytes"]);
   });
 

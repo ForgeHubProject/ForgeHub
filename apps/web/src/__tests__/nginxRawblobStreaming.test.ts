@@ -23,7 +23,8 @@ import { describe, it, expect } from "vitest";
 
 // Comments stripped first, the way nginx reads it: `#` runs to end of line, and
 // the word "location" inside a comment is not a location block.
-const conf = readFileSync(fileURLToPath(new URL("../../nginx.conf", import.meta.url)), "utf8")
+const rawConf = readFileSync(fileURLToPath(new URL("../../nginx.conf", import.meta.url)), "utf8");
+const conf = rawConf
   .split("\n")
   .map((line) => line.replace(/#.*$/, ""))
   .join("\n");
@@ -78,16 +79,43 @@ describe("nginx.conf — raw blob responses stream end to end", () => {
   });
 
   it("raises the timeout that actually governs writing the body to a slow client", () => {
-    // `send_timeout` is the one: it bounds the gap between two successive writes
-    // of the RESPONSE to the client. `proxy_send_timeout` governs writing the
-    // *request* to the upstream and, for a bodyless GET, never comes into play —
-    // an earlier revision raised only that one and left the response side on
-    // nginx's 60 s default, which is a cut-off for exactly the slow, large
-    // download this route exists to serve.
+    // `send_timeout` is the one that governs writing the RESPONSE to the client.
+    // `proxy_send_timeout` governs writing the *request* to the upstream and,
+    // for a bodyless GET, never comes into play — an earlier revision raised
+    // only that one and left the response side on nginx's 60 s default, which
+    // is a cut-off for exactly the slow, large download this route exists to
+    // serve.
+    //
+    // Raising it does NOT make it unreachable. `send_timeout` is not reset by
+    // partial progress (nginx clears it only when the client socket becomes
+    // writable, which needs a substantial fraction of the send buffer to
+    // drain), so it imposes a rate floor of about (socket buffering) /
+    // send_timeout. The value is large because raising it is the only way to
+    // lower that floor.
     const winner = locations().find((l) => asRegex(l.matcher)?.test(RAWBLOB_PATH));
     expect(winner?.body).toMatch(/(?:^|[\s;])send_timeout\s+\S+\s*;/);
     // Reading the response from the API — only live when git itself goes quiet.
     expect(winner?.body).toMatch(/proxy_read_timeout\s+\S+\s*;/);
+  });
+
+  it("documents the rate floor send_timeout imposes instead of claiming it away", () => {
+    // This route's whole premise is that nothing caps a slow download, and the
+    // proxy is the one place that is not strictly true. Measured against this
+    // file with nginx 1.24.0: at `send_timeout 5s` a client reading
+    // continuously at 8/32/128/192 KiB/s was dropped at ~5 s; at `20s` the
+    // floor moved to ~80 KiB/s. Earlier revisions of this file asserted the
+    // opposite — that partial progress resets the timer — which is the failure
+    // this guards: the comment must describe the floor, not deny it. Asserted
+    // against the RAW file, comments included — that is where the claim lives.
+    //
+    // The guard is worded to still fail on the original sentence ("is reset by
+    // partial progress") while allowing the corrected one ("is NOT reset by
+    // partial progress"), so it pins the meaning rather than the keyword.
+    expect(rawConf, "nginx.conf must not claim partial progress resets send_timeout").not.toMatch(
+      /\bis reset by partial progress/i,
+    );
+    // And it must say what the limit actually is, so an operator can act on it.
+    expect(rawConf, "nginx.conf must name the rate floor send_timeout imposes").toMatch(/floor/i);
   });
 
   it("caps raw-blob concurrency PER CLIENT at the edge, which is the only layer that can", () => {
