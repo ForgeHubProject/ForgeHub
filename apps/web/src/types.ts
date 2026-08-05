@@ -205,8 +205,6 @@ export type Snapshot = SnapshotSummary & {
   constraints: Constraint[];
 };
 
-export type TreeNode = Entity & { children: TreeNode[] };
-
 export type DiffEntitySnapshot = {
   entityId: string;
   parentEntityId: string | null;
@@ -250,14 +248,6 @@ export type DiffResult = {
   /** Full line-by-line diff including unchanged lines — present only for `format: "text"`. */
   lines?: TextDiffLineRow[];
 };
-
-export function isPlainTextDiff(d: DiffResult | null): d is DiffResult & { format: "text"; lines: TextDiffLineRow[] } {
-  return d !== null && d.format === "text";
-}
-
-export function isGlTfDiff(d: DiffResult | null): d is DiffResult & { format: "gltf-scene" } {
-  return d !== null && d.format === "gltf-scene";
-}
 
 /** Extract the gltf entity payload from a DiffChange (before ?? after). */
 export function gltfEntityOf(c: DiffChange): DiffEntitySnapshot | null {
@@ -348,13 +338,6 @@ export type RefCompareResult = {
   identical: boolean;
   commits: CommitInfo[];
   files: PRFileEntry[];
-};
-
-export type TagInfo = {
-  name: string;
-  sha: string;
-  subject: string;
-  date: string;
 };
 
 export type PRFileEntry = {
