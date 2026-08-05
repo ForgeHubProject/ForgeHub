@@ -1,25 +1,21 @@
 /**
- * Env parsing for the `/rawblob` operational knobs (#157 phase 2).
+ * Env parsing for the `/rawblob` operational knob (#157 phase 2).
  *
- * The behaviour under test is mostly about *not being quiet*: these are
- * operator-facing settings whose failure mode is a value that looks accepted
- * and isn't. `FORGEHUB_RAWBLOB_MAX_BYTES=0` is the sharp one — it reads as
- * "serve nothing" and resolves to "unlimited", the precise opposite — so the
- * rule is that a rejected value is announced, never swallowed.
+ * There is exactly one, and it is unset by default. The behaviour under test is
+ * mostly about *not being quiet*: this is an operator-facing setting whose
+ * failure mode is a value that looks accepted and isn't.
+ * `FORGEHUB_RAWBLOB_MAX_BYTES=0` is the sharp one — it reads as "serve nothing"
+ * and resolves to "unlimited", the precise opposite — so the rule is that a
+ * rejected value is announced, never swallowed.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  rawblobMaxBytes,
-  rawblobMaxConcurrentStreams,
-  rawblobStallTimeoutMs,
-  rawblobQueueWaitMs,
-  DEFAULT_MAX_CONCURRENT_RAWBLOB_STREAMS,
-  DEFAULT_RAWBLOB_STALL_TIMEOUT_MS,
-  DEFAULT_RAWBLOB_QUEUE_WAIT_MS,
-} from "../rawblob-limits.js";
+import { rawblobMaxBytes } from "../rawblob-limits.js";
+import * as limits from "../rawblob-limits.js";
 
 const VARS = [
   "FORGEHUB_RAWBLOB_MAX_BYTES",
+  // Retired knobs. Kept in the cleanup list so a stale value in a developer's
+  // environment cannot influence anything, and asserted-absent below.
   "FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS",
   "FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS",
   "FORGEHUB_RAWBLOB_QUEUE_WAIT_MS",
@@ -43,10 +39,14 @@ const warnings = () => warn.mock.calls.map((c) => c.join(" ")).join("\n");
 describe("rawblob env limits", () => {
   it("is unlimited by default and reports nothing", () => {
     expect(rawblobMaxBytes()).toBeNull();
-    expect(rawblobMaxConcurrentStreams()).toBe(DEFAULT_MAX_CONCURRENT_RAWBLOB_STREAMS);
-    expect(rawblobStallTimeoutMs()).toBe(DEFAULT_RAWBLOB_STALL_TIMEOUT_MS);
-    expect(rawblobQueueWaitMs()).toBe(DEFAULT_RAWBLOB_QUEUE_WAIT_MS);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("exposes no concurrency, queue or stall knob at all", () => {
+    // The route deliberately has no mechanism that can refuse or interrupt a
+    // download that is making progress, so there is nothing here to configure.
+    // Re-adding any of these would mean re-adding the mechanism.
+    expect(Object.keys(limits).sort()).toEqual(["RAWBLOB_SHARED_MAX_AGE_SECONDS", "rawblobMaxBytes"]);
   });
 
   it("honours a real ceiling", () => {
@@ -71,9 +71,7 @@ describe("rawblob env limits", () => {
     expect(rawblobMaxBytes()).toBeNull();
     process.env["FORGEHUB_RAWBLOB_MAX_BYTES"] = "64MiB";
     expect(rawblobMaxBytes()).toBeNull();
-    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "0";
-    expect(rawblobMaxConcurrentStreams()).toBe(DEFAULT_MAX_CONCURRENT_RAWBLOB_STREAMS);
-    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledTimes(2);
     expect(warnings()).toContain('"64MiB"');
   });
 
@@ -88,16 +86,6 @@ describe("rawblob env limits", () => {
   it("treats a blank value as unset, which is not a mistake to report", () => {
     process.env["FORGEHUB_RAWBLOB_MAX_BYTES"] = "  ";
     expect(rawblobMaxBytes()).toBeNull();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("accepts 0 where 0 is a meaningful setting — disabling, not misconfiguring", () => {
-    // Unlike a byte ceiling, "no stall timeout" and "no queue" are coherent
-    // choices, so 0 is taken at face value for these and nothing is logged.
-    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "0";
-    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "0";
-    expect(rawblobStallTimeoutMs()).toBe(0);
-    expect(rawblobQueueWaitMs()).toBe(0);
     expect(warn).not.toHaveBeenCalled();
   });
 });

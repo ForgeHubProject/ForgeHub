@@ -7,9 +7,9 @@
  * responses by default — it fills `proxy_buffers` and then spools the remainder
  * to a temp file (`proxy_max_temp_file_size`, 1 GiB by default) on the web
  * container's writable layer, where no volume is mounted, before any
- * backpressure reaches the API. With no size ceiling and a 64-slot pool that is
- * up to ~64 GiB of container disk, and the streaming property holds only inside
- * the API process.
+ * backpressure reaches the API. With no size ceiling that is up to ~1 GiB of
+ * container disk per in-flight download, and the streaming property holds only
+ * inside the API process.
  *
  * The config is not executable here (no nginx in CI), so this asserts the two
  * things that must be true of it and would silently regress if the location
@@ -77,10 +77,33 @@ describe("nginx.conf — raw blob responses stream end to end", () => {
     expect(rawblobIdx).toBeLessThan(generalIdx);
   });
 
-  it("does not cut a large, slow download off at nginx's 60s defaults", () => {
+  it("raises the timeout that actually governs writing the body to a slow client", () => {
+    // `send_timeout` is the one: it bounds the gap between two successive writes
+    // of the RESPONSE to the client. `proxy_send_timeout` governs writing the
+    // *request* to the upstream and, for a bodyless GET, never comes into play —
+    // an earlier revision raised only that one and left the response side on
+    // nginx's 60 s default, which is a cut-off for exactly the slow, large
+    // download this route exists to serve.
     const winner = locations().find((l) => asRegex(l.matcher)?.test(RAWBLOB_PATH));
+    expect(winner?.body).toMatch(/(?:^|[\s;])send_timeout\s+\S+\s*;/);
+    // Reading the response from the API — only live when git itself goes quiet.
     expect(winner?.body).toMatch(/proxy_read_timeout\s+\S+\s*;/);
-    expect(winner?.body).toMatch(/proxy_send_timeout\s+\S+\s*;/);
+  });
+
+  it("caps raw-blob concurrency PER CLIENT at the edge, which is the only layer that can", () => {
+    // This is what replaced the API-side semaphore. A global cap in the API is a
+    // denial-of-service amplifier — the API sees the proxy's address as the peer
+    // for every request, so it cannot tell clients apart, and a shared pool is
+    // filled (and thereby denied to everyone) by a handful of sockets that take
+    // the headers and read nothing. nginx is the edge and sees the real address.
+    const winner = locations().find((l) => asRegex(l.matcher)?.test(RAWBLOB_PATH));
+    const zone = /limit_conn_zone\s+\$binary_remote_addr\s+zone=(\w+):/.exec(conf);
+    expect(zone, "no per-client limit_conn_zone declared").not.toBeNull();
+    const use = new RegExp(`limit_conn\\s+${zone?.[1]}\\s+(\\d+)\\s*;`).exec(winner?.body ?? "");
+    expect(use, "the rawblob location does not use that zone").not.toBeNull();
+    // A count of simultaneous downloads, never a size or a duration — and
+    // generous, since a browser opens at most ~6 connections per host.
+    expect(Number(use?.[1])).toBeGreaterThanOrEqual(8);
   });
 
   it("still matches only the rawblob route, leaving the rest of the API alone", () => {
