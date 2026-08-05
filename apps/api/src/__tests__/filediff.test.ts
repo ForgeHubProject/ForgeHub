@@ -265,15 +265,13 @@ describe("GET /repos/:handle/:name/rawblob", () => {
     expect(res.body).not.toContain("formats");
   });
 
-  it("413s — not 404s — for a file too large to hold in memory, and names the real size (#157)", async () => {
-    // The file is present at this commit; the ceiling is ForgeHub's, and it is
-    // reported as ForgeHub's. (Phase 2 streams this route and removes it.)
+  it("serves a file past the old in-memory ceiling — streamed, no size limit (#157 phase 2)", async () => {
+    // The same file /filediff still refuses (its wasm engine needs a whole
+    // buffer) is served here in full, because this route no longer buffers.
     const res = await rawblob(`path=huge.gltf&sha=${oversizeSha}`);
-    expect(res.statusCode).toBe(413);
-    const body = res.json();
-    expect(body.size).toBe(OVERSIZE_BYTES);
-    expect(body.limit).toBe(10 * 1024 * 1024);
-    expect(body.error).toMatch(/too large/i);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-length"]).toBe(String(OVERSIZE_BYTES));
+    expect(res.rawPayload.length).toBe(OVERSIZE_BYTES);
   });
 
   it("still serves a small file byte-for-byte after the size pre-flight", async () => {

@@ -49,6 +49,7 @@ import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
+import { activeRawblobStreams, rawblobMaxConcurrentStreams } from "./rawblob-limits.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 import { sessionActive } from "./session-service.js";
@@ -145,7 +146,14 @@ export async function buildServer() {
     };
   });
 
-  app.get("/health", async () => ({ ok: true }));
+  // `rawblobStreams` is the gauge for the only unbounded resource the streamed
+  // /rawblob route has left (#157): in-flight downloads, each pinning one git
+  // child. `active` approaching `max` is what precedes 503s from that route —
+  // and it says nothing about file sizes, which are uncapped.
+  app.get("/health", async () => ({
+    ok: true,
+    rawblobStreams: { active: activeRawblobStreams(), max: rawblobMaxConcurrentStreams() },
+  }));
 
   await app.register(serverInfoRoutes);
   await app.register(devUiRoutes);
