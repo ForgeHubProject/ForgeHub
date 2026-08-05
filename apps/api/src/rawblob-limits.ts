@@ -56,8 +56,19 @@
  * - **nginx**, which in the shipped topology is the edge and therefore *does*
  *   see the real client address. `apps/web/nginx.conf` gives `/rawblob` a
  *   per-client concurrent-connection cap (`limit_conn`), so one client can be
- *   bounded without denying anybody else, and a `send_timeout` that is an idle
- *   timer on the downstream write — reset by partial progress, unlike Node's.
+ *   bounded without denying anybody else. nginx's `send_timeout` also applies
+ *   to the downstream write, and — unlike everything else on this list — it
+ *   *can* interrupt a transfer that is still moving: it is **not** reset by
+ *   partial progress. nginx clears that timer only when the kernel reports the
+ *   client socket writable, which needs a substantial fraction of the send
+ *   buffer to drain, so a steady slow reader can sit below the threshold for a
+ *   whole window and be dropped. That imposes a rate floor of about
+ *   (socket buffering) / `send_timeout` — measured ~300 KiB/s at `5s` and
+ *   ~80 KiB/s at `20s`, so ~0.4 KiB/s at the 1h the bundled conf ships. It is
+ *   a floor, never a size or duration limit, an operator lowers it by raising
+ *   `send_timeout`, and it is documented in `apps/web/nginx.conf` and the
+ *   README rather than compensated for here. Nothing in this process may add a
+ *   timer to "make up for" it.
  * - **Node's own connection reaping** — `keepAliveTimeout` for idle keep-alive
  *   sockets and `headersTimeout` for a request that never arrives — which now
  *   works on this route because nothing disarms it.

@@ -249,9 +249,12 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       if (request.method === "HEAD") return sendHeaders().send();
 
       // Nothing below counts, paces, times or bounds this transfer, and nothing
-      // is allowed to: a download that is making progress is never interrupted,
-      // however slow it is and however large the blob, because there is no
-      // mechanism here that could interrupt it. In particular this code MUST NOT
+      // is allowed to: a download that is making progress is never interrupted
+      // *by this process*, however slow it is and however large the blob,
+      // because there is no mechanism here that could interrupt it. (The proxy
+      // in front is not equally free of them — nginx's `send_timeout` imposes a
+      // sub-KiB/s rate floor, documented in apps/web/nginx.conf. That is not a
+      // reason to add anything here.) In particular this code MUST NOT
       // call `socket.setTimeout`. Doing so cancels the `keepAliveTimeout` that
       // Node arms from its own `finish` handler and leaks the connection reaper
       // API-wide; and a socket idle timer cannot distinguish a slow reader from
