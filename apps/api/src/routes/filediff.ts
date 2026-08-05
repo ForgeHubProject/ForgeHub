@@ -1,5 +1,4 @@
 import { extname } from "node:path";
-import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import {
@@ -11,13 +10,7 @@ import {
   BLOB_BUFFER_MAX,
 } from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
-import {
-  acquireRawblobStream,
-  rawblobMaxBytes,
-  rawblobStallTimeoutMs,
-  RAWBLOB_RETRY_AFTER_SECONDS,
-  RAWBLOB_SHARED_MAX_AGE_SECONDS,
-} from "../rawblob-limits.js";
+import { rawblobMaxBytes, RAWBLOB_SHARED_MAX_AGE_SECONDS } from "../rawblob-limits.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
@@ -255,89 +248,28 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
       if (request.method === "HEAD") return sendHeaders().send();
 
-      // The one long-lived finite resource: each streaming response pins a
-      // blocked git child for as long as the client keeps reading. This bounds
-      // how many downloads run at once — it is NOT a size limit, and no file is
-      // ever too big for it. Past the limit a request waits briefly for a slot
-      // before being shed, so a burst costs latency rather than a failure.
-      const release = await acquireRawblobStream();
-      if (!release) {
-        return reply
-          .status(503)
-          .header("Retry-After", String(RAWBLOB_RETRY_AFTER_SECONDS))
-          .send({ error: "Too many concurrent downloads in flight; retry shortly" });
-      }
-      // The wait above can outlive the client. `close` has already fired on a
-      // dead socket, so the cleanup registered below would never run — hand the
-      // slot straight back instead of leaking it.
-      if (reply.raw.destroyed) {
-        release();
-        reply.hijack();
-        return reply;
-      }
-
+      // Nothing below counts, paces, times or bounds this transfer, and nothing
+      // is allowed to: a download that is making progress is never interrupted,
+      // however slow it is and however large the blob, because there is no
+      // mechanism here that could interrupt it. In particular this code MUST NOT
+      // call `socket.setTimeout`. Doing so cancels the `keepAliveTimeout` that
+      // Node arms from its own `finish` handler and leaks the connection reaper
+      // API-wide; and a socket idle timer cannot distinguish a slow reader from
+      // a stalled one anyway, because under backpressure it is reset on write
+      // dispatch rather than on bytes leaving the host. `rawblob-limits.ts`
+      // records both findings and what bounds the route instead (nginx's
+      // per-client `limit_conn`, Node's own connection reaping, TCP
+      // backpressure).
       const { child, stream } = openBlobStream(storageKey, stat.oid);
-      child.once("close", release);
       // Fastify destroys the payload on disconnect and git dies on EPIPE, but
       // killing explicitly is deterministic and cheap — with no size ceiling, an
       // abandoned multi-gigabyte download must not leave a git process pinned.
-      reply.raw.once("close", () => {
-        child.kill();
-        release();
-      });
+      // This fires on normal completion too, where it is a no-op on an already
+      // exited child.
+      reply.raw.once("close", () => child.kill());
       sendHeaders();
-      armStallTimeout(reply.raw, rawblobStallTimeoutMs(), () => {
-        request.log.warn(
-          { oid: stat.oid, path: filePath },
-          "rawblob stream made no progress; dropping it and reclaiming the slot",
-        );
-      });
       return reply.send(stream);
     },
-  });
-}
-
-/**
- * Drop a streaming response that stops making progress, so its concurrency slot
- * comes back without waiting for the client to disconnect.
- *
- * Concurrency is a *shared* limit, which makes "hold a slot and do nothing" an
- * attack: taking the headers and never reading the body costs the client no
- * bandwidth at all, and without this the slot is pinned until it chooses to go
- * away. Sixty-four such sockets would deny raw-blob downloads to everyone, for
- * as long as the attacker cared to keep them open.
- *
- * The mechanism is the socket's own idle timer, which is what makes this a
- * *stall* timeout and not a deadline: every byte that actually reaches the
- * client restarts it, so a transfer that is merely slow — a phone on a bad link
- * pulling a multi-gigabyte blob for an hour — is never interrupted, while one
- * that has moved nothing for `ms` is. Measured: a client reading 64 KiB every
- * 400 ms survives a 2 s window indefinitely; one reading nothing is dropped at
- * 2 s. `ms <= 0` disables it.
- */
-function armStallTimeout(res: ServerResponse, ms: number, onStall: () => void) {
-  const socket = res.socket;
-  // No real socket, nothing to stall: in-process injection (light-my-request,
-  // which hands back a plain Writable) has no peer that can stop reading, and
-  // no `setTimeout` to arm.
-  if (ms <= 0 || !socket || typeof socket.setTimeout !== "function") return;
-
-  const previous = socket.timeout ?? 0;
-  const handleStall = () => {
-    onStall();
-    // Destroying rather than ending: there is a promised Content-Length that
-    // will not be met, and an abort is the only way to tell the client that.
-    socket.destroy();
-  };
-  socket.setTimeout(ms);
-  socket.once("timeout", handleStall);
-
-  res.once("close", () => {
-    socket.removeListener("timeout", handleStall);
-    // Restore whatever governed the connection before (Fastify's keep-alive
-    // timer, normally) so a reused connection is not left with our window — or
-    // with none at all.
-    if (!socket.destroyed) socket.setTimeout(previous);
   });
 }
 

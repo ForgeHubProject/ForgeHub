@@ -15,6 +15,7 @@
 import { createHash } from "node:crypto";
 import { execFile as execFileCb } from "node:child_process";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { connect as netConnect } from "node:net";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -32,7 +33,6 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { createTestRepo, type TestRepo } from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
-import { activeRawblobStreams, queuedRawblobStreams } from "../rawblob-limits.js";
 import { openBlobStream } from "../git-utils.js";
 
 const execFile = promisify(execFileCb);
@@ -103,13 +103,11 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(MOCK_REPO as never);
-  delete process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"];
   delete process.env["FORGEHUB_RAWBLOB_MAX_BYTES"];
-  delete process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"];
-  delete process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"];
-  // No test-only counter reset: a slot the previous case dropped must come back
-  // on its own, or the semaphore leaks in production too.
-  expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
+  // The route keeps no counters, so the honest quiescence check is the resource
+  // itself: every git child from the previous case must be gone. A leaked child
+  // fails the next test rather than being papered over.
+  expect(await waitFor(async () => (await catFileProcesses(bigOid)) === 0)).toBe(true);
 });
 
 function url(path: string, sha: string) {
@@ -247,7 +245,7 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     expect(res.headers["content-length"]).toBeUndefined();
     expect(res.headers["etag"]).toBe(`"${bigOid}"`);
     // Nothing was spawned to produce a 304.
-    expect(activeRawblobStreams()).toBe(0);
+    expect(await catFileProcesses(bigOid)).toBe(0);
   });
 
   it("honours a weak/list-form If-None-Match", async () => {
@@ -267,7 +265,6 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     expect(body.length).toBe(0);
     // A HEAD must not spawn-then-discard a 26 MiB read.
     expect(await catFileProcesses(bigOid)).toBe(0);
-    expect(activeRawblobStreams()).toBe(0);
   });
 
   it("still 404s a directory rather than serving a tree listing (#157 phase 1 regression)", async () => {
@@ -364,143 +361,243 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     abort();
 
     // Deliberately no assertion on how git dies — EPIPE vs SIGPIPE vs SIGTERM
-    // is platform-dependent. What matters is that nothing is left running and
-    // the slot is handed back.
+    // is platform-dependent. What matters is that nothing is left running.
     expect(await waitFor(async () => (await catFileProcesses(bigOid)) === 0)).toBe(true);
-    expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
   }, 30_000);
 });
 
-describe("GET /rawblob — concurrency limit (a download count, not a size limit)", () => {
-  it("sheds with 503 + Retry-After past the limit, and recovers when a slot frees", async () => {
-    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "1";
-    // No queue and no reclamation here — this pins the shed itself, with the
-    // two mechanisms that soften it covered separately below.
-    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "0";
-    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "0";
+/**
+ * A GET issued over a RAW SOCKET and read at a byte rate we actually control.
+ *
+ * `http.request` cannot be used for this. Its client buffers a response
+ * independently of how fast the test consumes it, and an `http.Agent` detaches
+ * the socket the moment the response ends — so neither the transfer rate nor the
+ * connection's fate is observable through it. Here the socket is paused and
+ * exactly `bytesPerSecond` is taken out of it per second, so the rate the server
+ * sees is the rate this test asked for.
+ *
+ * `serverClosed` reports what the SERVER did: whether the connection went away
+ * before we chose to stop reading.
+ */
+async function readAtRate(
+  target: string,
+  opts: { bytesPerSecond: number; durationMs: number },
+): Promise<{ status: number; bodyBytes: number; serverClosed: boolean; childAlive: boolean }> {
+  const TICK_MS = 250;
+  const perTick = Math.max(1, Math.round((opts.bytesPerSecond * TICK_MS) / 1000));
+  const u = new URL(target);
 
-    // Hold a slot: take the headers but never read the body, so git blocks on
-    // backpressure and the response stays in flight.
-    const first = await open(url("big.bin", headSha));
-    expect(first.res.statusCode).toBe(200);
-    expect(await waitFor(() => activeRawblobStreams() === 1)).toBe(true);
-
-    const second = await open(url("big.bin", headSha));
-    const body = await drain(second.res);
-    expect(second.res.statusCode).toBe(503);
-    expect(second.res.headers["retry-after"]).toBe("5");
-    expect(JSON.parse(body.toString()).error).toMatch(/concurrent/i);
-
-    // Free the slot and the very next request is served again.
-    first.abort();
-    expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
-
-    const third = await open(url("small.txt", headSha));
-    const served = await drain(third.res);
-    expect(third.res.statusCode).toBe(200);
-    expect(served.toString()).toBe("hello\n");
-  }, 60_000);
-
-  it("reclaims slots from clients that hold a response open without reading it", async () => {
-    // REGRESSION: a slot used to be held for the connection's lifetime, so a
-    // client that took the headers and then read nothing pinned its git child
-    // forever — free to mount (no bandwidth spent) and unrecoverable without an
-    // operator killing sockets. Filling the pool that way denied /rawblob to
-    // everyone for as long as the attacker cared to keep the sockets open.
-    //
-    // The slot is now held only while the transfer makes progress, so the pool
-    // clears itself. The holders are kept referenced and un-read for the whole
-    // test: nothing here disconnects them.
-    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "2";
-    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "1500";
-    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "0"; // isolate reclamation from queueing
-
-    const holders = [
-      await open(url("big.bin", headSha)),
-      await open(url("big.bin", headSha)),
-    ];
-    for (const h of holders) {
-      expect(h.res.statusCode).toBe(200);
-      // Deliberately never read: `res` is left paused.
-      h.res.on("error", () => undefined);
-    }
-    expect(await waitFor(() => activeRawblobStreams() === 2)).toBe(true);
-
-    // Saturated right now, as designed.
-    const shed = await open(url("small.txt", headSha));
-    await drain(shed.res);
-    expect(shed.res.statusCode).toBe(503);
-
-    // ...and it un-saturates on its own, with the holders still connected.
-    expect(await waitFor(() => activeRawblobStreams() === 0, 20_000)).toBe(true);
-    expect(await catFileProcesses(bigOid)).toBe(0);
-
-    const served = await open(url("small.txt", headSha));
-    const body = await drain(served.res);
-    expect(served.res.statusCode).toBe(200);
-    expect(body.toString()).toBe("hello\n");
-
-    for (const h of holders) h.abort();
-  }, 60_000);
-
-  it("does not interrupt a download that is slow but still moving", async () => {
-    // The other side of the reclamation rule, and the one that keeps it from
-    // becoming a size ceiling in disguise: the timeout measures *stalling*, not
-    // slowness. This client reads a chunk at a time with gaps far shorter than
-    // a real link's, but keeps going for several multiples of the stall window,
-    // and must never be dropped.
-    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "600";
-
-    const { res, abort } = await open(url("big.bin", headSha));
-    expect(res.statusCode).toBe(200);
-    res.pause();
-
-    const started = Date.now();
-    let got = 0;
-    const outcome = await new Promise<{ error: Error | null; elapsed: number }>((resolve) => {
-      res.on("error", (error) => resolve({ error, elapsed: Date.now() - started }));
-      res.on("aborted", () => resolve({ error: new Error("aborted"), elapsed: Date.now() - started }));
-      const tick = () => {
-        const chunk = res.read(64 * 1024);
-        if (chunk) got += chunk.length;
-        // Four stall windows of trickling, and still alive.
-        if (Date.now() - started > 2_400) return resolve({ error: null, elapsed: Date.now() - started });
-        setTimeout(tick, 250);
+  const outcome = await new Promise<{
+    status: number;
+    bodyBytes: number;
+    serverClosed: boolean;
+    childAlive: boolean;
+  }>((resolve) => {
+      // A tiny read buffer so backpressure reaches the server almost at once
+      // instead of hiding behind the client's own queue.
+      const sock = netConnect({ host: u.hostname, port: Number(u.port), highWaterMark: perTick });
+      let status = 0;
+      let bodyBytes = 0;
+      let header = Buffer.alloc(0);
+      let settled = false;
+      const finish = (serverClosed: boolean, childAlive = false) => {
+        if (settled) return;
+        settled = true;
+        resolve({ status, bodyBytes, serverClosed, childAlive });
       };
-      setTimeout(tick, 250);
+      // Any of these means the connection is gone and we did not end it.
+      sock.on("error", () => finish(true));
+      sock.on("end", () => finish(true));
+      sock.on("close", () => finish(true));
+
+      sock.on("connect", () => {
+        sock.write(
+          `GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nConnection: close\r\n\r\n`,
+        );
+        sock.pause();
+
+        // Headers first, at whatever speed they arrive — throttling starts with
+        // the body, which is the part whose rate this test is about.
+        const readHeaders = () => {
+          let chunk: Buffer | null;
+          while ((chunk = sock.read() as Buffer | null) !== null) {
+            header = Buffer.concat([header, chunk]);
+            const end = header.indexOf("\r\n\r\n");
+            if (end < 0) continue;
+            status = Number(/^HTTP\/1\.\d (\d{3})/.exec(header.subarray(0, end).toString())?.[1] ?? 0);
+            bodyBytes += header.length - (end + 4);
+            sock.removeListener("readable", readHeaders);
+            const started = Date.now();
+            const tick = () => {
+              if (settled) return;
+              // At most `perTick` bytes per tick, and never more.
+              const got = (sock.read(perTick) ?? sock.read()) as Buffer | null;
+              if (got) bodyBytes += got.length;
+              if (Date.now() - started >= opts.durationMs) {
+                // Sample the child BEFORE hanging up: closing this socket is
+                // itself what kills it, so measuring afterwards would race with
+                // our own teardown and read as "the server dropped us".
+                void catFileProcesses(bigOid).then((n) => {
+                  finish(false, n > 0);
+                  sock.destroy();
+                });
+                return;
+              }
+              setTimeout(tick, TICK_MS);
+            };
+            setTimeout(tick, TICK_MS);
+            return;
+          }
+        };
+        sock.on("readable", readHeaders);
+      });
+  });
+
+  // The route kills its git child whenever the response closes, so a child still
+  // running while we are still reading is proof the server never dropped us.
+  return outcome;
+}
+
+/**
+ * Milliseconds between a keep-alive response arriving in full and the SERVER
+ * closing the idle connection, or `Infinity` if it never does within `capMs`.
+ *
+ * Raw socket again, and for the same reason: an `http.Agent` takes the socket
+ * away at `end`, so a leaked connection is invisible through it. This client
+ * never closes anything — every close observed here is the server's.
+ */
+function keepAliveReapDelay(target: string, capMs = 8_000): Promise<number> {
+  const u = new URL(target);
+  return new Promise((resolve) => {
+    const sock = netConnect({ host: u.hostname, port: Number(u.port) });
+    let seen = Buffer.alloc(0);
+    let completeAt = 0;
+    sock.on("connect", () => {
+      sock.write(
+        `GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nConnection: keep-alive\r\n\r\n`,
+      );
     });
+    sock.on("data", (d: Buffer) => {
+      seen = Buffer.concat([seen, d]);
+      const end = seen.indexOf("\r\n\r\n");
+      if (completeAt || end < 0) return;
+      const length = Number(/content-length: *(\d+)/i.exec(seen.subarray(0, end).toString())?.[1] ?? 0);
+      if (seen.length - (end + 4) >= length) completeAt = Date.now();
+    });
+    const cap = setTimeout(() => {
+      sock.destroy();
+      resolve(Infinity);
+    }, capMs);
+    sock.on("close", () => {
+      clearTimeout(cap);
+      resolve(completeAt ? Date.now() - completeAt : Infinity);
+    });
+    sock.on("error", () => undefined);
+  });
+}
 
-    expect(outcome.error).toBeNull();
-    expect(outcome.elapsed).toBeGreaterThan(600 * 3);
-    expect(got).toBeGreaterThan(0);
-    abort();
-    expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
+describe("GET /rawblob — nothing may function as a size ceiling", () => {
+  it("never drops a download that is slow but making progress, however slow", async () => {
+    // THE REQUIREMENT: raw blobs stream with no size ceiling, and no mechanism
+    // may function as one. A timeout that kills a slow-but-progressing transfer
+    // IS a size ceiling for slow links — below some byte rate a large file can
+    // never be fetched, every retry dies at the same offset, and
+    // `Accept-Ranges: none` means it cannot be resumed.
+    //
+    // The route this replaced had a socket-idle "stall timeout" that could not
+    // tell 8 KiB/s from 0 B/s: Node resets that timer on write dispatch, and
+    // under backpressure a dispatch waits on the peer draining everything
+    // buffered downstream. Measured on that revision: 8 and 16 KiB/s dropped,
+    // 32 KiB/s survived. The legacy knob is set here so that a mechanism of that
+    // shape coming back — under that name, or honouring it — is caught in
+    // seconds rather than needing a 30 s window. It is inert in shipped code:
+    // nothing reads it, which the rawblobLimits suite asserts separately.
+    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "3000";
+    try {
+      const RATE = 8 * 1024;
+      const DURATION = 15_000;
+      const outcome = await readAtRate(url("big.bin", headSha), {
+        bytesPerSecond: RATE,
+        durationMs: DURATION,
+      });
+
+      expect(outcome.status).toBe(200);
+      // The rate really was ~8 KiB/s, five stall windows long. This is not a
+      // fast client in disguise, and it is not a short one.
+      expect(outcome.bodyBytes).toBeGreaterThan((RATE * DURATION) / 1000 / 2);
+      expect(outcome.bodyBytes).toBeLessThan(RATE * 2 * (DURATION / 1000));
+      // The two server-side assertions, which is the whole point: a client that
+      // merely sees no error proves nothing, because ~1 MB stays buffered
+      // between the two ends and keeps arriving long after a drop.
+      expect(outcome.serverClosed).toBe(false);
+      expect(outcome.childAlive).toBe(true);
+    } finally {
+      delete process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"];
+    }
   }, 60_000);
 
-  it("queues a request past the limit and serves it when a slot frees, rather than shedding at once", async () => {
-    // A burst should cost latency, not a failed download: 503 is what happens
-    // when the queue *also* fails to clear, not the first response to a full
-    // pool.
-    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "1";
-    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "10000";
-    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "0"; // isolate queueing from reclamation
-
-    const holder = await open(url("big.bin", headSha));
-    expect(holder.res.statusCode).toBe(200);
-    holder.res.on("error", () => undefined);
-    expect(await waitFor(() => activeRawblobStreams() === 1)).toBe(true);
-
-    // This one has nowhere to go yet — it parks instead of failing.
-    const queued = open(url("small.txt", headSha));
-    expect(await waitFor(() => queuedRawblobStreams() === 1)).toBe(true);
-
-    holder.abort();
-    const { res } = await queued;
-    const body = await drain(res);
-    expect(res.statusCode).toBe(200);
-    expect(body.toString()).toBe("hello\n");
-    expect(queuedRawblobStreams()).toBe(0);
+  it("does not disarm the connection reaper, so one rawblob GET cannot leak a socket", async () => {
+    // REGRESSION, and API-wide rather than rawblob-shaped. Arming a socket idle
+    // timeout for the stream captured `socket.timeout` first — 0, because
+    // Fastify's server.timeout is 0 — and restored it when the response closed.
+    // Node arms `socket.setTimeout(keepAliveTimeout)` from its own `finish`
+    // handler, which runs BEFORE the response's `close`, so restoring 0
+    // cancelled it. Any client could then pin N sockets and file descriptors
+    // forever by issuing one tiny /rawblob GET on each, at zero cost — and
+    // headersTimeout does not reap those (no request is in flight).
+    //
+    // keepAliveTimeout is lowered so "reaped" is observable; /health is the
+    // control, and the streamed route must behave the same.
+    const previousKeepAlive = app.server.keepAliveTimeout;
+    app.server.keepAliveTimeout = 1_000;
+    try {
+      const control = await keepAliveReapDelay(`${origin}/health`);
+      const streamed = await keepAliveReapDelay(url("small.txt", headSha));
+      expect(control).toBeLessThan(5_000);
+      expect(streamed).toBeLessThan(5_000);
+      // Same clock, not merely "closed eventually".
+      expect(Math.abs(streamed - control)).toBeLessThan(2_000);
+    } finally {
+      app.server.keepAliveTimeout = previousKeepAlive;
+    }
   }, 60_000);
+
+  it("lets clients that take the headers and never read deny nothing to anyone else", async () => {
+    // REGRESSION. The route used to hold one of 64 GLOBAL slots per in-flight
+    // download, so 64 sockets that took the headers and read nothing — costing
+    // the attacker no bandwidth at all — refused /rawblob to everybody. Adding a
+    // timer that reclaimed those slots only changed the price from "hold a
+    // socket" to "reconnect every 30 s", which is still about zero.
+    //
+    // There is no shared pool now, so these holders bound only themselves. 65 is
+    // one past the pool that used to exist, which is what makes this fail if a
+    // semaphore comes back at that default.
+    const HOLDERS = 65;
+    const holders = await Promise.all(
+      Array.from({ length: HOLDERS }, () => open(url("big.bin", headSha))),
+    );
+    try {
+      for (const h of holders) {
+        expect(h.res.statusCode).toBe(200);
+        // Deliberately never read: left paused, and never disconnected.
+        h.res.on("error", () => undefined);
+      }
+      expect(await catFileProcesses(bigOid)).toBeGreaterThanOrEqual(HOLDERS);
+
+      // A different client, with all 65 still connected and still reading
+      // nothing. It must be served, and served promptly — no 503, no queueing.
+      const started = Date.now();
+      const served = await open(url("small.txt", headSha));
+      const body = await drain(served.res);
+      expect(served.res.statusCode).toBe(200);
+      expect(body.toString()).toBe("hello\n");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      for (const h of holders) h.abort();
+    }
+    // And nothing is leaked once they do go away.
+    expect(await waitFor(async () => (await catFileProcesses(bigOid)) === 0)).toBe(true);
+  }, 120_000);
 
   it("applies an operator's opt-in byte ceiling only when one is configured", async () => {
     // Unset by default: the 26 MiB blob is served, no ceiling anywhere.

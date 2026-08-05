@@ -88,16 +88,15 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 
 **There is no size limit.** The response is streamed straight from `git cat-file blob` to the socket, so serving a 4 GiB file costs the API the same memory as serving a 4 KiB one — a contributor who can push a file can fetch it back. `Content-Length` is always explicit (so a client can tell a truncated download from a complete one), the blob's object id is the `ETag`, and a commit-pinned URL is cached `immutable`.
 
-What *is* limited is how many downloads stream **at once**: each in-flight response holds one blocked `git cat-file` child for as long as its client keeps reading. Past the limit a request waits briefly, then gets `503` + `Retry-After`. That is a shared limit — a saturated instance refuses raw-blob downloads to everyone until slots free — so `/health` reports `rawblobStreams: { active, queued, max }`; sustained `queued > 0` means `max` is too low for this instance.
+**And nothing interrupts a download that is making progress**, however slow the link and however large the file. The API applies no concurrency limit, no queue, no deadline and no stall/idle timeout to this route — not because those would be nice to have, but because in this position each of them behaves as a size ceiling or as a denial-of-service amplifier. A socket idle timer cannot tell a client reading at 8 KiB/s from one reading nothing (under backpressure it is reset on write dispatch, not on bytes leaving the host), and with `Accept-Ranges: none` a transfer it kills cannot be resumed; a *global* download cap is filled, and thereby denied to everyone, by a handful of sockets that take the headers and read nothing. `apps/api/src/rawblob-limits.ts` records the measurements behind both.
+
+What bounds the route instead is the layer that can see what it is limiting: the bundled `apps/web/nginx.conf` caps **concurrent raw-blob downloads per client** (`limit_conn`, 32) — nginx is the edge and sees the real client address, which the API cannot — and Node's own `keepAliveTimeout`/`headersTimeout` reap idle connections. This is the same posture GitLab and Gitea take on raw blobs.
 
 | Env | Effect |
 |-----|--------|
-| `FORGEHUB_RAWBLOB_MAX_BYTES` | Opt-in policy ceiling in bytes; over-limit requests get `413` with the real size. **Unset ⇒ unlimited**, which is the default. A non-positive or unparseable value is logged and ignored — it is *not* read as "serve nothing". |
-| `FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS` | Simultaneous streaming downloads before requests queue and then shed. Default `64`. Bounds the *number* of downloads, never the size of one. |
-| `FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS` | How long a response may make **no progress** before it is dropped and its slot returned. A stall timeout, not a deadline: any byte that reaches the client restarts it, so a slow-but-moving download is never cut off. It stops a client that reads nothing from pinning a slot for free. Default `30000`; `0` disables. |
-| `FORGEHUB_RAWBLOB_QUEUE_WAIT_MS` | How long a request waits for a free slot before `503`. Default `10000`; `0` sheds immediately. |
+| `FORGEHUB_RAWBLOB_MAX_BYTES` | Opt-in policy ceiling in bytes; over-limit requests get `413` with the real size, decided during the pre-flight before any bytes are sent. **Unset ⇒ unlimited**, which is the default. A non-positive or unparseable value is logged and ignored — it is *not* read as "serve nothing". |
 
-> Behind a reverse proxy, make sure response buffering is **off** for this route or the proxy will spool whole blobs to its own disk before the API ever feels backpressure. The bundled `apps/web/nginx.conf` does this (`proxy_buffering off`).
+> Behind a reverse proxy, make sure response buffering is **off** for this route or the proxy will spool whole blobs to its own disk before the API ever feels backpressure, and make sure the timeout it applies to writing the response body to a slow client (`send_timeout` in nginx — *not* `proxy_send_timeout`, which governs the request to the upstream) cannot fire on a transfer that is still moving. The bundled `apps/web/nginx.conf` does both.
 
 ### Semantic diff (compare)
 
