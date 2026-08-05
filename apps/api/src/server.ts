@@ -49,7 +49,11 @@ import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
-import { activeRawblobStreams, rawblobMaxConcurrentStreams } from "./rawblob-limits.js";
+import {
+  activeRawblobStreams,
+  queuedRawblobStreams,
+  rawblobMaxConcurrentStreams,
+} from "./rawblob-limits.js";
 import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 import { sessionActive } from "./session-service.js";
@@ -152,7 +156,13 @@ export async function buildServer() {
   // and it says nothing about file sizes, which are uncapped.
   app.get("/health", async () => ({
     ok: true,
-    rawblobStreams: { active: activeRawblobStreams(), max: rawblobMaxConcurrentStreams() },
+    rawblobStreams: {
+      active: activeRawblobStreams(),
+      // Sustained `queued > 0` is the signal that `max` is too low for this
+      // instance's traffic — requests are waiting, and some are being shed.
+      queued: queuedRawblobStreams(),
+      max: rawblobMaxConcurrentStreams(),
+    },
   }));
 
   await app.register(serverInfoRoutes);

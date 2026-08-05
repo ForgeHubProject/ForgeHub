@@ -80,6 +80,25 @@ Snapshots are immutable point-in-time captures of an artifact file. They are cre
 | `GET` | `/repos/:handle/:name/snapshots` | List snapshots (filterable by `branch`, `tag`, `commitSha`) |
 | `GET` | `/repos/:handle/:name/snapshots/:id` | Load snapshot with entities and constraints |
 
+### Raw file bytes (issue #157)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`/`HEAD` | `/repos/:handle/:name/rawblob?path=X&sha=Y` | Exact file bytes at a commit, as `application/octet-stream` |
+
+**There is no size limit.** The response is streamed straight from `git cat-file blob` to the socket, so serving a 4 GiB file costs the API the same memory as serving a 4 KiB one — a contributor who can push a file can fetch it back. `Content-Length` is always explicit (so a client can tell a truncated download from a complete one), the blob's object id is the `ETag`, and a commit-pinned URL is cached `immutable`.
+
+What *is* limited is how many downloads stream **at once**: each in-flight response holds one blocked `git cat-file` child for as long as its client keeps reading. Past the limit a request waits briefly, then gets `503` + `Retry-After`. That is a shared limit — a saturated instance refuses raw-blob downloads to everyone until slots free — so `/health` reports `rawblobStreams: { active, queued, max }`; sustained `queued > 0` means `max` is too low for this instance.
+
+| Env | Effect |
+|-----|--------|
+| `FORGEHUB_RAWBLOB_MAX_BYTES` | Opt-in policy ceiling in bytes; over-limit requests get `413` with the real size. **Unset ⇒ unlimited**, which is the default. A non-positive or unparseable value is logged and ignored — it is *not* read as "serve nothing". |
+| `FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS` | Simultaneous streaming downloads before requests queue and then shed. Default `64`. Bounds the *number* of downloads, never the size of one. |
+| `FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS` | How long a response may make **no progress** before it is dropped and its slot returned. A stall timeout, not a deadline: any byte that reaches the client restarts it, so a slow-but-moving download is never cut off. It stops a client that reads nothing from pinning a slot for free. Default `30000`; `0` disables. |
+| `FORGEHUB_RAWBLOB_QUEUE_WAIT_MS` | How long a request waits for a free slot before `503`. Default `10000`; `0` sheds immediately. |
+
+> Behind a reverse proxy, make sure response buffering is **off** for this route or the proxy will spool whole blobs to its own disk before the API ever feels backpressure. The bundled `apps/web/nginx.conf` does this (`proxy_buffering off`).
+
 ### Semantic diff (compare)
 
 | Method | Endpoint | Description |

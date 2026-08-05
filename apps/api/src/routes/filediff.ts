@@ -1,4 +1,5 @@
 import { extname } from "node:path";
+import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import {
@@ -13,7 +14,9 @@ import type { BlobReadResult } from "../git-utils.js";
 import {
   acquireRawblobStream,
   rawblobMaxBytes,
+  rawblobStallTimeoutMs,
   RAWBLOB_RETRY_AFTER_SECONDS,
+  RAWBLOB_SHARED_MAX_AGE_SECONDS,
 } from "../rawblob-limits.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
@@ -210,13 +213,23 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       // avoid.) The same unchanged file at many commits shares one ETag, so a
       // client re-fetching it across revisions gets 304s from different URLs.
       const etag = `"${stat.oid}"`;
-      const cacheControl = `${repo.visibility === "PUBLIC" ? "public" : "private"}, ${
+      const isPublic = repo.visibility === "PUBLIC";
+      const cacheControl = `${isPublic ? "public" : "private"}, ${
         // `immutable` is only truthful when the URL pins content. This route
         // resolves `sha` through git, so it also accepts a branch or tag name,
         // for which the same URL yields different bytes over time — those get
         // revalidation instead. (There is no separate ref-name variant of this
         // route; the two cases are the same URL shape, told apart here.)
-        isCommitPinned(sha) ? "max-age=31536000, immutable" : "no-cache"
+        isCommitPinned(sha)
+          ? // A commit-pinned URL's *bytes* never change, so a year and
+            // `immutable` are honest — but the repo's *visibility* can change,
+            // and a public→private flip must not leave a CDN serving the old
+            // bytes for a year with revalidation suppressed. `s-maxage` bounds
+            // only the shared copy; the browser cache that already has the
+            // bytes keeps the full year. Private repos never reach a shared
+            // cache in the first place, so they don't need it.
+            `max-age=31536000${isPublic ? `, s-maxage=${RAWBLOB_SHARED_MAX_AGE_SECONDS}` : ""}, immutable`
+          : "no-cache"
       }`;
 
       if (ifNoneMatchHits(request.headers["if-none-match"], etag)) {
@@ -242,16 +255,25 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
       if (request.method === "HEAD") return sendHeaders().send();
 
-      // The one genuinely finite resource: each streaming response pins a
-      // blocked git child for the connection's lifetime. This bounds how many
-      // downloads run at once — it is NOT a size limit, and no file is ever too
-      // big for it.
-      const release = acquireRawblobStream();
+      // The one long-lived finite resource: each streaming response pins a
+      // blocked git child for as long as the client keeps reading. This bounds
+      // how many downloads run at once — it is NOT a size limit, and no file is
+      // ever too big for it. Past the limit a request waits briefly for a slot
+      // before being shed, so a burst costs latency rather than a failure.
+      const release = await acquireRawblobStream();
       if (!release) {
         return reply
           .status(503)
           .header("Retry-After", String(RAWBLOB_RETRY_AFTER_SECONDS))
           .send({ error: "Too many concurrent downloads in flight; retry shortly" });
+      }
+      // The wait above can outlive the client. `close` has already fired on a
+      // dead socket, so the cleanup registered below would never run — hand the
+      // slot straight back instead of leaking it.
+      if (reply.raw.destroyed) {
+        release();
+        reply.hijack();
+        return reply;
       }
 
       const { child, stream } = openBlobStream(storageKey, stat.oid);
@@ -264,8 +286,58 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         release();
       });
       sendHeaders();
+      armStallTimeout(reply.raw, rawblobStallTimeoutMs(), () => {
+        request.log.warn(
+          { oid: stat.oid, path: filePath },
+          "rawblob stream made no progress; dropping it and reclaiming the slot",
+        );
+      });
       return reply.send(stream);
     },
+  });
+}
+
+/**
+ * Drop a streaming response that stops making progress, so its concurrency slot
+ * comes back without waiting for the client to disconnect.
+ *
+ * Concurrency is a *shared* limit, which makes "hold a slot and do nothing" an
+ * attack: taking the headers and never reading the body costs the client no
+ * bandwidth at all, and without this the slot is pinned until it chooses to go
+ * away. Sixty-four such sockets would deny raw-blob downloads to everyone, for
+ * as long as the attacker cared to keep them open.
+ *
+ * The mechanism is the socket's own idle timer, which is what makes this a
+ * *stall* timeout and not a deadline: every byte that actually reaches the
+ * client restarts it, so a transfer that is merely slow — a phone on a bad link
+ * pulling a multi-gigabyte blob for an hour — is never interrupted, while one
+ * that has moved nothing for `ms` is. Measured: a client reading 64 KiB every
+ * 400 ms survives a 2 s window indefinitely; one reading nothing is dropped at
+ * 2 s. `ms <= 0` disables it.
+ */
+function armStallTimeout(res: ServerResponse, ms: number, onStall: () => void) {
+  const socket = res.socket;
+  // No real socket, nothing to stall: in-process injection (light-my-request,
+  // which hands back a plain Writable) has no peer that can stop reading, and
+  // no `setTimeout` to arm.
+  if (ms <= 0 || !socket || typeof socket.setTimeout !== "function") return;
+
+  const previous = socket.timeout ?? 0;
+  const handleStall = () => {
+    onStall();
+    // Destroying rather than ending: there is a promised Content-Length that
+    // will not be met, and an abort is the only way to tell the client that.
+    socket.destroy();
+  };
+  socket.setTimeout(ms);
+  socket.once("timeout", handleStall);
+
+  res.once("close", () => {
+    socket.removeListener("timeout", handleStall);
+    // Restore whatever governed the connection before (Fastify's keep-alive
+    // timer, normally) so a reused connection is not left with our window — or
+    // with none at all.
+    if (!socket.destroyed) socket.setTimeout(previous);
   });
 }
 
