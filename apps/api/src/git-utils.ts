@@ -1385,15 +1385,15 @@ export async function resolveBlobSha(
 }
 
 /**
- * The most bytes a blob may have and still be read into memory by
- * {@link readBlobAsBuffer}. This is not a policy ceiling on what ForgeHub will
- * serve — it is the size at which buffering the whole file in the API process
- * stops being acceptable. The semantic-diff routes genuinely need every byte in
- * memory (the wasm engine takes a whole buffer), so for them it is a real
- * constraint; /rawblob only inherits it until it is switched to a streamed
- * response, at which point it has no ceiling at all (#157 phase 2).
+ * The most bytes a blob may have and still be fed to the **semantic diff
+ * engine**. The wasm handler takes a whole buffer, so /filediff and /compare
+ * genuinely need every byte resident and are genuinely capped by this.
+ *
+ * It is not a policy ceiling on what ForgeHub will *serve*: /rawblob streams and
+ * has no size limit at all, because a contributor who can push an arbitrarily
+ * large file must be able to fetch it back. Do not reintroduce one there.
  */
-export const BLOB_BUFFER_MAX = MAX;
+export const DIFF_BUFFER_MAX = MAX;
 
 /** What `git cat-file --batch-check` says about `<commit>:<path>`. */
 export type BlobStat =
@@ -1401,7 +1401,29 @@ export type BlobStat =
   | { kind: "missing" }
   /** A tree, tag or commit lives at that path — real, but not file bytes. */
   | { kind: "not-blob" }
+  /** The request itself is malformed — a caller bug, not a repository state. */
+  | { kind: "invalid"; message: string }
   | { kind: "error"; message: string };
+
+/**
+ * git refusals that mean "that revision/path cannot name anything here", as
+ * opposed to "git is broken". `cat-file --batch-check` reports most negatives
+ * in-band and exits 0, but `<rev>:<path>` forms that the revision parser will
+ * not even interpret — a leading `./` or `../`, which has no meaning without a
+ * working tree — abort the process with exit 128 before any request is read.
+ *
+ * Those are still just client-supplied paths that name nothing, so they must
+ * answer 404 like any other absent path. Mapping them to `error` (and so to a
+ * 500) would let any reader of a public repo mint unbounded 5xx by varying one
+ * query param, and would be a regression from the pre-#157 behaviour, where
+ * `git show` failed the same way and the caller reported "not found".
+ *
+ * Deliberately narrow: anything else — "not a git repository", a broken object
+ * store, git missing entirely — stays `error`, which is the whole point of
+ * having the kind.
+ */
+const PATH_REFUSAL =
+  /relative path syntax can't be used outside working tree|is outside repository|Not a valid object name|ambiguous argument|not a valid object name/i;
 
 /**
  * Ask git what object sits at `<commitSha>:<filePath>` without reading its
@@ -1414,15 +1436,26 @@ export type BlobStat =
  * - `-z` (git >= 2.32) makes the *input* NUL-delimited, so a path containing a
  *   newline cannot be misparsed as two requests. Output stays newline-framed.
  * - The process exits 0 whether the object is there or not; "missing" is
- *   reported in-band as `"<input> missing"`, so a non-zero exit really is a
- *   git-level failure and is surfaced as `error`, never as "absent".
+ *   reported in-band, so a non-zero exit is a git-level failure — except for the
+ *   revision-parser refusals in {@link PATH_REFUSAL}, which are just unnameable
+ *   paths and stay `missing`.
  * - The oid pattern is deliberately `{40,64}`: SHA-256 repositories exist.
+ *
+ * NUL is the framing character, so a NUL inside `commitSha`/`filePath` would
+ * make git read two requests and emit two lines. That can never be misread as a
+ * *blob* — the output pattern is anchored `^...$` and git emits exactly one line
+ * per request, so two lines never match (the anchoring is load-bearing: do not
+ * relax it to `/m`) — but it would answer "not found" about a file that exists.
+ * The input is rejected up front instead, as `invalid`.
  */
 export function statBlob(
   storageKey: string,
   commitSha: string,
   filePath: string,
 ): Promise<BlobStat> {
+  if (commitSha.includes("\0") || filePath.includes("\0")) {
+    return Promise.resolve({ kind: "invalid", message: "NUL byte in commit-ish or path" });
+  }
   const cwd = bareRepoPathFromKey(storageKey);
   return new Promise((resolve) => {
     const child = spawn("git", ["cat-file", "--batch-check", "-z"], { cwd });
@@ -1446,7 +1479,11 @@ export function statBlob(
 
     child.on("close", (code, signal) => {
       if (code !== 0 || signal !== null) {
-        return done({ kind: "error", message: err.trim() || `git cat-file exited ${code ?? signal}` });
+        const message = err.trim();
+        // A path the revision parser refuses to interpret names nothing — 404
+        // territory, not a server failure. See PATH_REFUSAL.
+        if (PATH_REFUSAL.test(message)) return done({ kind: "missing" });
+        return done({ kind: "error", message: message || `git cat-file exited ${code ?? signal}` });
       }
       const line = out.trim();
       const m = /^([0-9a-f]{40,64}) (\S+) (\d+)$/.exec(line);
@@ -1462,11 +1499,42 @@ export function statBlob(
   });
 }
 
+/**
+ * Open a blob's bytes as a stream, pinned to its immutable oid.
+ *
+ * `spawn` has no `maxBuffer` (that footgun belongs to `exec`/`execFile`), so the
+ * caller's memory is O(highWaterMark) rather than O(filesize) and there is
+ * nothing left for a size ceiling to protect. `cat-file blob` is the
+ * contractually-raw plumbing: it hard-asserts the object is a blob, with no
+ * textconv or pretty-printing (which is exactly how `git show <sha>:<dir>` used
+ * to hand a tree listing back as file bytes).
+ *
+ * The failure wiring is the part that is easy to get wrong: a git child that
+ * dies does *not* error its stdout — the stream simply EOFs and the exit code
+ * goes unnoticed, producing a clean-looking but truncated 200. Destroying stdout
+ * with an error on a non-zero exit turns that into a visible aborted response.
+ */
+export function openBlobStream(storageKey: string, oid: string) {
+  const cwd = bareRepoPathFromKey(storageKey);
+  const child = spawn("git", ["cat-file", "blob", oid], { cwd });
+  child.stderr.resume();
+  child.once("error", (e) => child.stdout.destroy(e));
+  child.once("exit", (code, signal) => {
+    // EPIPE death after a client disconnect is platform-dependent (code 128 on
+    // Linux, SIGPIPE elsewhere); either way the consumer is already gone.
+    if (code !== 0 || signal !== null) {
+      child.stdout.destroy(new Error(`git cat-file exited ${code ?? signal}`));
+    }
+  });
+  return child;
+}
+
 /** Outcome of reading a blob into memory. */
 export type BlobReadResult =
   | { kind: "ok"; buf: Buffer }
   | { kind: "missing" }
   | { kind: "not-blob" }
+  | { kind: "invalid"; message: string }
   | { kind: "too-large"; size: number }
   | { kind: "error" };
 
@@ -1484,6 +1552,12 @@ export type BlobReadResult =
  * `cat-file blob` — the plumbing that is contractually raw. (`git show` is not
  * used here: on a directory it pretty-prints a tree listing and exits 0, which
  * is exactly how a directory used to be served as if it were file bytes.)
+ *
+ * This is the *buffered* read, for the semantic-diff engine only, and it costs
+ * two git spawns: the size has to be known before any bytes are read, or
+ * "too-large" could only be discovered by first buffering the whole file. To
+ * serve bytes rather than diff them, use {@link openBlobStream}, which has no
+ * ceiling.
  */
 export async function readBlobAsBuffer(
   storageKey: string,
@@ -1493,15 +1567,16 @@ export async function readBlobAsBuffer(
   const stat = await statBlob(storageKey, commitSha, filePath);
   if (stat.kind === "missing") return { kind: "missing" };
   if (stat.kind === "not-blob") return { kind: "not-blob" };
+  if (stat.kind === "invalid") return { kind: "invalid", message: stat.message };
   if (stat.kind === "error") return { kind: "error" };
-  if (stat.size > BLOB_BUFFER_MAX) return { kind: "too-large", size: stat.size };
+  if (stat.size > DIFF_BUFFER_MAX) return { kind: "too-large", size: stat.size };
 
   const cwd = bareRepoPathFromKey(storageKey);
   return new Promise((resolve) => {
     execFileCb(
       "git",
       ["cat-file", "blob", stat.oid],
-      { cwd, maxBuffer: BLOB_BUFFER_MAX, encoding: "buffer" },
+      { cwd, maxBuffer: DIFF_BUFFER_MAX, encoding: "buffer" },
       (err, stdout) => {
         resolve(err ? { kind: "error" } : { kind: "ok", buf: stdout as unknown as Buffer });
       },

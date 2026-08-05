@@ -657,4 +657,30 @@ describe("statBlob", () => {
     const stat = await statBlob("test/definitely-not-a-repo.git", sha, "kept.txt");
     expect(stat.kind).toBe("error");
   });
+
+  it("reports a path the revision parser REFUSES as missing, not as error (#157)", async () => {
+    // These are the one family of negatives `cat-file --batch-check` does not
+    // report in-band: `<rev>:./x` and `<rev>:../x` have no meaning without a
+    // working tree, so git aborts with exit 128 before reading the request.
+    // They are still client-supplied paths that name nothing — `error` would
+    // become a 500, which is both dishonest and an unbounded 5xx source, since
+    // `filePath` comes straight off a query string on a public repo.
+    for (const p of ["../../../etc/passwd", "../outside.txt", "./kept.txt"]) {
+      expect([await statBlob(statRepo.storageKey, sha, p), p]).toEqual([{ kind: "missing" }, p]);
+    }
+  });
+
+  it("rejects a NUL in the path as invalid rather than misparsing it (#157)", async () => {
+    // NUL is the framing character of the `-z` request stream. Smuggling one in
+    // makes git answer two requests and emit two lines, which the anchored blob
+    // pattern rejects — reporting a file that exists as absent.
+    const stat = await statBlob(statRepo.storageKey, sha, `kept.txt\0${sha}:dir`);
+    expect(stat.kind).toBe("invalid");
+    // And it is genuinely a lie being prevented: the real path is a real blob.
+    expect(await statBlob(statRepo.storageKey, sha, "kept.txt")).toMatchObject({ kind: "blob" });
+  });
+
+  it("rejects a NUL in the commit-ish as invalid (#157)", async () => {
+    expect((await statBlob(statRepo.storageKey, `${sha}\0${sha}`, "kept.txt")).kind).toBe("invalid");
+  });
 });
