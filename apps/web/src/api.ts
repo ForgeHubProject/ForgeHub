@@ -1,7 +1,7 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
-  DesignVersion, DiffChange, DiffResult, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
+  DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
