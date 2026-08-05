@@ -21,6 +21,7 @@ import {
   performRebaseMerge,
   performRevert,
   blobSizeAtCommit,
+  statBlob,
 } from "../git-utils.js";
 
 const AUTHOR = { name: "Merl Merger", email: "merl@forgehub.io" };
@@ -596,5 +597,64 @@ describe("blobSizeAtCommit", () => {
     await expect(
       blobSizeAtCommit("test/definitely-not-a-repo.git", "HEAD", "kept.txt"),
     ).rejects.toThrow();
+  });
+});
+
+// ─── statBlob (#157 phase 1) ──────────────────────────────────────────────────
+//
+// `statBlob` exists so callers can tell apart the four things the old
+// `readBlobAsBuffer` reported as one `null`: absent, not-a-file, too big, and
+// git failed. Only the first of those is a 404, so the value of these tests is
+// entirely in the boundaries between the kinds.
+
+describe("statBlob", () => {
+  let statRepo: TestRepo;
+  let sha: string;
+  // A path containing a newline: the reason the request is NUL-framed (-z).
+  // Newline framing would split this into two bogus requests.
+  const NEWLINE_PATH = "odd\nname.txt";
+
+  beforeAll(async () => {
+    statRepo = await createTestRepo("test/stat-blob.git");
+    sha = await makeCommit(
+      statRepo.workDir,
+      { "kept.txt": "0123456789", "dir/nested.txt": "abc", [NEWLINE_PATH]: "xy" },
+      "init",
+    );
+  }, 30_000);
+
+  afterAll(async () => {
+    await statRepo.cleanup();
+  });
+
+  it("reports a file as a blob with its oid and exact size", async () => {
+    const stat = await statBlob(statRepo.storageKey, sha, "kept.txt");
+    expect(stat).toMatchObject({ kind: "blob", size: 10 });
+    // 40 hex today, 64 in a SHA-256 repository — the parser accepts both.
+    if (stat.kind === "blob") expect(stat.oid).toMatch(/^[0-9a-f]{40,64}$/);
+  });
+
+  it("reports a DIRECTORY as not-blob, never as a blob or as missing", async () => {
+    // `git show <sha>:<dir>` exits 0 and pretty-prints a tree listing, which is
+    // how a directory used to be served as if it were file bytes.
+    expect(await statBlob(statRepo.storageKey, sha, "dir")).toEqual({ kind: "not-blob" });
+  });
+
+  it("reports an absent path as missing", async () => {
+    expect(await statBlob(statRepo.storageKey, sha, "never-existed.txt")).toEqual({ kind: "missing" });
+  });
+
+  it("reports an unresolvable commit-ish as missing, not as a parse failure", async () => {
+    expect(await statBlob(statRepo.storageKey, "no-such-ref", "kept.txt")).toEqual({ kind: "missing" });
+  });
+
+  it("parses a path containing a newline (NUL-framed input)", async () => {
+    const stat = await statBlob(statRepo.storageKey, sha, NEWLINE_PATH);
+    expect(stat).toMatchObject({ kind: "blob", size: 2 });
+  });
+
+  it("reports git failing as error — distinct from a missing path", async () => {
+    const stat = await statBlob("test/definitely-not-a-repo.git", sha, "kept.txt");
+    expect(stat.kind).toBe("error");
   });
 });

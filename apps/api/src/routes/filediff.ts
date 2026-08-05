@@ -1,7 +1,8 @@
 import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { git, readBlobAsBuffer, activeFormatsAtCommit } from "../git-utils.js";
+import { git, readBlobAsBuffer, activeFormatsAtCommit, BLOB_BUFFER_MAX } from "../git-utils.js";
+import type { BlobReadResult } from "../git-utils.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
@@ -80,17 +81,38 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         }
       }
 
-      const [baseBuf, headBuf] = await Promise.all([
-        baseSha ? readBlobAsBuffer(storageKey, baseSha, filePath) : Promise.resolve(null),
+      const absent: BlobReadResult = { kind: "missing" };
+      const [baseRead, headRead] = await Promise.all([
+        baseSha ? readBlobAsBuffer(storageKey, baseSha, filePath) : Promise.resolve(absent),
         readBlobAsBuffer(storageKey, sha, filePath),
       ]);
 
-      if (!baseBuf && !headBuf) {
+      // The semantic engine is wasm and takes whole buffers, so this route is
+      // genuinely capped — but a file over the cap is present, and saying
+      // "File not found at this commit" about it is a lie (#157). 413 names the
+      // real reason and carries the real size, so the client can say something
+      // true and a bug report can quote a number.
+      const oversized = [headRead, baseRead].find((r) => r.kind === "too-large");
+      if (oversized?.kind === "too-large") {
+        return reply.status(413).send({
+          error: "File too large to diff",
+          path: filePath,
+          size: oversized.size,
+          limit: BLOB_BUFFER_MAX,
+        });
+      }
+      if (headRead.kind === "error" || baseRead.kind === "error") {
+        return reply.status(500).send({ error: "Failed to read file content at this commit" });
+      }
+      // Only a genuinely absent path (or a directory, which is not a file at
+      // all) reaches the 404 now. An added file still has a missing base and
+      // diffs against empty bytes, exactly as before.
+      if (headRead.kind !== "ok" && baseRead.kind !== "ok") {
         return reply.status(404).send({ error: "File not found at this commit" });
       }
 
-      const baseBlob = baseBuf ?? Buffer.alloc(0);
-      const headBlob = headBuf ?? Buffer.alloc(0);
+      const baseBlob = baseRead.kind === "ok" ? baseRead.buf : Buffer.alloc(0);
+      const headBlob = headRead.kind === "ok" ? headRead.buf : Buffer.alloc(0);
 
       // The official FHR wasm handler (resolved from the manifest) is the only
       // engine — the exact binary forge runs, so ForgeHub's diff matches the
@@ -132,13 +154,33 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
       if (!repo.storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      const buf = await readBlobAsBuffer(repo.storageKey, sha, filePath);
-      if (!buf) return reply.status(404).send({ error: "File not found at this commit" });
+      const read = await readBlobAsBuffer(repo.storageKey, sha, filePath);
+      switch (read.kind) {
+        case "missing":
+        // A tree/tag/commit at that path is not file bytes, and this route only
+        // hands over file bytes. (It used to answer a directory with 200 and a
+        // pretty-printed tree listing, because `git show <sha>:<dir>` exits 0.)
+        case "not-blob":
+          return reply.status(404).send({ error: "File not found at this commit" });
+        case "too-large":
+          // Present, readable, and larger than this process is willing to hold
+          // in memory. That is a ForgeHub implementation limit, not a property
+          // of the file, and it is temporary: #157 phase 2 streams this route
+          // and drops the ceiling entirely. Until then, say so with the numbers.
+          return reply.status(413).send({
+            error: "File too large to serve",
+            path: filePath,
+            size: read.size,
+            limit: BLOB_BUFFER_MAX,
+          });
+        case "error":
+          return reply.status(500).send({ error: "Failed to read file content at this commit" });
+      }
 
       return reply
         .header("Content-Type", "application/octet-stream")
         .header("Cache-Control", "public, max-age=3600")
-        .send(buf);
+        .send(read.buf);
     },
   );
 }

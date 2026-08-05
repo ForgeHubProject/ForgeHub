@@ -1384,20 +1384,126 @@ export async function resolveBlobSha(
   }
 }
 
-/** Read raw file content as a Buffer for a specific commit. Supports binary files. */
-export function readBlobAsBuffer(
+/**
+ * The most bytes a blob may have and still be read into memory by
+ * {@link readBlobAsBuffer}. This is not a policy ceiling on what ForgeHub will
+ * serve — it is the size at which buffering the whole file in the API process
+ * stops being acceptable. The semantic-diff routes genuinely need every byte in
+ * memory (the wasm engine takes a whole buffer), so for them it is a real
+ * constraint; /rawblob only inherits it until it is switched to a streamed
+ * response, at which point it has no ceiling at all (#157 phase 2).
+ */
+export const BLOB_BUFFER_MAX = MAX;
+
+/** What `git cat-file --batch-check` says about `<commit>:<path>`. */
+export type BlobStat =
+  | { kind: "blob"; oid: string; size: number }
+  | { kind: "missing" }
+  /** A tree, tag or commit lives at that path — real, but not file bytes. */
+  | { kind: "not-blob" }
+  | { kind: "error"; message: string };
+
+/**
+ * Ask git what object sits at `<commitSha>:<filePath>` without reading its
+ * content: one `git cat-file --batch-check -z` spawn, `"<sha>:<path>\0"` on
+ * stdin.
+ *
+ * Why this shape:
+ * - `--batch-check` reports type and size up front, so callers can decide
+ *   404/413/stream *before* touching a single content byte.
+ * - `-z` (git >= 2.32) makes the *input* NUL-delimited, so a path containing a
+ *   newline cannot be misparsed as two requests. Output stays newline-framed.
+ * - The process exits 0 whether the object is there or not; "missing" is
+ *   reported in-band as `"<input> missing"`, so a non-zero exit really is a
+ *   git-level failure and is surfaced as `error`, never as "absent".
+ * - The oid pattern is deliberately `{40,64}`: SHA-256 repositories exist.
+ */
+export function statBlob(
   storageKey: string,
   commitSha: string,
   filePath: string,
-): Promise<Buffer | null> {
+): Promise<BlobStat> {
+  const cwd = bareRepoPathFromKey(storageKey);
+  return new Promise((resolve) => {
+    const child = spawn("git", ["cat-file", "--batch-check", "-z"], { cwd });
+    let out = "";
+    let err = "";
+    let settled = false;
+    const done = (stat: BlobStat) => {
+      if (settled) return;
+      settled = true;
+      resolve(stat);
+    };
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => { out += c; });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => { err += c; });
+    child.on("error", (e) => done({ kind: "error", message: e.message }));
+    // A broken pipe on stdin (git died early) surfaces on the exit handler.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(`${commitSha}:${filePath}\0`);
+
+    child.on("close", (code, signal) => {
+      if (code !== 0 || signal !== null) {
+        return done({ kind: "error", message: err.trim() || `git cat-file exited ${code ?? signal}` });
+      }
+      const line = out.trim();
+      const m = /^([0-9a-f]{40,64}) (\S+) (\d+)$/.exec(line);
+      if (m) {
+        const [, oid, type, size] = m;
+        return done(type === "blob" ? { kind: "blob", oid, size: Number(size) } : { kind: "not-blob" });
+      }
+      // `<input> missing`, or `<input> ambiguous` for an unresolvable rev — in
+      // both cases nothing nameable is at that path.
+      if (/ (missing|ambiguous)$/.test(line)) return done({ kind: "missing" });
+      done({ kind: "error", message: `unparseable cat-file output: ${JSON.stringify(line)}` });
+    });
+  });
+}
+
+/** Outcome of reading a blob into memory. */
+export type BlobReadResult =
+  | { kind: "ok"; buf: Buffer }
+  | { kind: "missing" }
+  | { kind: "not-blob" }
+  | { kind: "too-large"; size: number }
+  | { kind: "error" };
+
+/**
+ * Read raw file content as a Buffer for a specific commit. Supports binary
+ * files.
+ *
+ * The result is typed rather than `Buffer | null` on purpose (#157): the old
+ * signature collapsed "no such path", "that path is a directory", "the file is
+ * bigger than we buffer" and "git blew up" into a single `null`, which every
+ * caller then reported as *File not found at this commit*. Each of those now
+ * has its own kind so callers can answer honestly.
+ *
+ * Content is fetched by the immutable blob oid from the pre-flight stat, via
+ * `cat-file blob` — the plumbing that is contractually raw. (`git show` is not
+ * used here: on a directory it pretty-prints a tree listing and exits 0, which
+ * is exactly how a directory used to be served as if it were file bytes.)
+ */
+export async function readBlobAsBuffer(
+  storageKey: string,
+  commitSha: string,
+  filePath: string,
+): Promise<BlobReadResult> {
+  const stat = await statBlob(storageKey, commitSha, filePath);
+  if (stat.kind === "missing") return { kind: "missing" };
+  if (stat.kind === "not-blob") return { kind: "not-blob" };
+  if (stat.kind === "error") return { kind: "error" };
+  if (stat.size > BLOB_BUFFER_MAX) return { kind: "too-large", size: stat.size };
+
   const cwd = bareRepoPathFromKey(storageKey);
   return new Promise((resolve) => {
     execFileCb(
       "git",
-      ["show", `${commitSha}:${filePath}`],
-      { cwd, maxBuffer: MAX, encoding: "buffer" },
+      ["cat-file", "blob", stat.oid],
+      { cwd, maxBuffer: BLOB_BUFFER_MAX, encoding: "buffer" },
       (err, stdout) => {
-        resolve(err ? null : (stdout as unknown as Buffer));
+        resolve(err ? { kind: "error" } : { kind: "ok", buf: stdout as unknown as Buffer });
       },
     );
   });
