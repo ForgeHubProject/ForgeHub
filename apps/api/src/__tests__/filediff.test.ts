@@ -26,6 +26,8 @@ vi.mock("../fhr/official-handlers.js", async (importOriginal) => {
   return { ...actual, officialWasmDiff: vi.fn() };
 });
 
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { officialWasmDiff } from "../fhr/official-handlers.js";
@@ -71,6 +73,9 @@ let headSha: string;
 let communitySha: string;
 let notEnabledSha: string;
 let oversizeSha: string;
+let fileSha: string;
+let dirSha: string;
+let restoredSha: string;
 
 // One byte past the 10 MiB the API is willing to hold in memory (#157). The
 // content is irrelevant — nothing ever parses it, because both routes refuse it
@@ -114,6 +119,14 @@ beforeAll(async () => {
     { "huge.gltf": "x".repeat(OVERSIZE_BYTES) },
     "add an oversized model",
   );
+  // A path that is a FILE at one commit and a DIRECTORY at the next, then a
+  // file again — git permits the transition, and it is the only way to get a
+  // `not-blob` head with a perfectly readable base.
+  fileSha = await makeCommit(repo.workDir, { "swap.gltf": gltf(1) }, "swap.gltf as a file");
+  await rm(join(repo.workDir, "swap.gltf"));
+  dirSha = await makeCommit(repo.workDir, { "swap.gltf/inner.gltf": gltf(2) }, "swap.gltf becomes a dir");
+  await rm(join(repo.workDir, "swap.gltf"), { recursive: true });
+  restoredSha = await makeCommit(repo.workDir, { "swap.gltf": gltf(3) }, "swap.gltf is a file again");
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
   app = await createTestServer();
@@ -225,6 +238,47 @@ describe("GET /repos/:handle/:name/filediff", () => {
     expect(body.error).toMatch(/too large/i);
     // Nothing was ever handed to the engine.
     expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
+
+  it("400s — not 413s — for a malformed request whose other side is over the cap", async () => {
+    // Ordering. `base` carries a NUL, so the base read is `invalid`; the head
+    // is the oversized file, so it is `too-large`. Checking too-large first
+    // answered 413 "File too large to diff" — reporting a size limit as the
+    // reason a malformed request failed, and naming a limit the caller never
+    // came close to violating on the side they got wrong.
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(
+      `path=huge.gltf&sha=${oversizeSha}&base=${encodeURIComponent(`${baseSha}\0x`)}`,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/invalid/i);
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
+
+  it("404s for a head path that is a DIRECTORY instead of calling the file deleted (#157)", async () => {
+    // /rawblob answers a directory with an honest 404. This route had exactly
+    // the same `not-blob` pre-flight answer in hand and dropped it on the
+    // floor: the head became an empty buffer, the readable base diffed against
+    // it, and the response said the file had been DELETED. It was not deleted;
+    // the path is not a file.
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=swap.gltf&sha=${dirSha}&base=${fileSha}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Path is not a file at this commit", path: "swap.gltf" });
+    // And the engine was never handed a fabricated empty head.
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
+
+  it("still diffs a file whose BASE path was a directory, as an addition", async () => {
+    // The deliberate asymmetry, pinned so the refusal above does not quietly
+    // widen: a tree at the *base* path is not a lie about the head. The file
+    // genuinely did not exist at that path before, so an empty base — the same
+    // treatment a missing base gets — is the honest reading.
+    const res = await get(`path=swap.gltf&sha=${restoredSha}&base=${dirSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().engine).toBe("wasm");
+    const [, , baseBlob] = vi.mocked(officialWasmDiff).mock.calls.at(-1)!;
+    expect(baseBlob.length).toBe(0);
   });
 
   it("404s — never 500s — for a path git's revision parser refuses (#157)", async () => {

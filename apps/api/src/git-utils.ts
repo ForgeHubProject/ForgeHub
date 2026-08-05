@@ -1509,21 +1509,53 @@ export function statBlob(
  * textconv or pretty-printing (which is exactly how `git show <sha>:<dir>` used
  * to hand a tree listing back as file bytes).
  *
- * The failure wiring is the part that is easy to get wrong: a git child that
+ * The failure wiring is the part that is easy to get wrong. A git child that
  * dies does *not* error its stdout — the stream simply EOFs and the exit code
- * goes unnoticed, producing a clean-looking but truncated 200. Destroying stdout
- * with an error on a non-zero exit turns that into a visible aborted response.
+ * goes unnoticed, so the consumer ends a response short of its `Content-Length`
+ * and the socket then sits idle until some unrelated keep-alive timeout closes
+ * it (72s under Fastify's default). The download looks alive the whole time.
+ *
+ * The obvious repair — `child.stdout.destroy(err)` — does not work, and this
+ * function used to make exactly that mistake. `destroy(err)` only emits an error
+ * on a stream that is still alive; once stdout has EOF'd it has already
+ * auto-destroyed, and Node's `destroyImpl` returns silently. Whether that race
+ * is won is decided by the *consumer's* speed: a consumer that keeps up with git
+ * reaches EOF first and the guard is a no-op, which is the common path. Measured
+ * on this repo, an immediate exit(128) and a mid-stream SIGKILL with a keeping-up
+ * consumer both produced `end` → `exit` → `close` with no error at all.
+ *
+ * So `openBlobStream` does not try to signal through a stream whose lifecycle it
+ * does not own. It reports the failure out-of-band, through `onFailure`, and
+ * leaves it to the caller — which owns the response — to abort in a way that
+ * does not depend on stdout still being open. The callback is required, not
+ * optional: silently EOF-ing a truncated body is the bug, so there is no
+ * sensible default for "what to do when git dies".
+ *
+ * `onFailure` fires at most once, and only for a genuine failure (spawn error,
+ * non-zero exit, or death by signal). A clean exit(0) is the whole file.
  */
-export function openBlobStream(storageKey: string, oid: string) {
+export function openBlobStream(
+  storageKey: string,
+  oid: string,
+  onFailure: (reason: Error) => void,
+) {
   const cwd = bareRepoPathFromKey(storageKey);
   const child = spawn("git", ["cat-file", "blob", oid], { cwd });
   child.stderr.resume();
-  child.once("error", (e) => child.stdout.destroy(e));
+  let reported = false;
+  const fail = (reason: Error) => {
+    if (reported) return;
+    reported = true;
+    onFailure(reason);
+  };
+  child.once("error", fail);
   child.once("exit", (code, signal) => {
     // EPIPE death after a client disconnect is platform-dependent (code 128 on
-    // Linux, SIGPIPE elsewhere); either way the consumer is already gone.
+    // Linux, SIGPIPE elsewhere), and a caller that killed the child on
+    // disconnect lands here too; either way the consumer is already gone and
+    // aborting an already-dead response is a no-op.
     if (code !== 0 || signal !== null) {
-      child.stdout.destroy(new Error(`git cat-file exited ${code ?? signal}`));
+      fail(new Error(`git cat-file exited ${code ?? signal}`));
     }
   });
   return child;
