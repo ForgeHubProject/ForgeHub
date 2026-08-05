@@ -32,7 +32,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { createTestRepo, type TestRepo } from "./helpers/git.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
-import { activeRawblobStreams } from "../rawblob-limits.js";
+import { activeRawblobStreams, queuedRawblobStreams } from "../rawblob-limits.js";
 import { openBlobStream } from "../git-utils.js";
 
 const execFile = promisify(execFileCb);
@@ -105,6 +105,8 @@ beforeEach(async () => {
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(MOCK_REPO as never);
   delete process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"];
   delete process.env["FORGEHUB_RAWBLOB_MAX_BYTES"];
+  delete process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"];
+  delete process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"];
   // No test-only counter reset: a slot the previous case dropped must come back
   // on its own, or the semaphore leaks in production too.
   expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
@@ -188,7 +190,7 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     const { res } = await open(url("small.txt", headSha));
     await drain(res);
     expect(res.headers["etag"]).toBe(`"${await smallOid()}"`);
-    expect(res.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(res.headers["cache-control"]).toBe("public, max-age=31536000, s-maxage=600, immutable");
     expect(res.headers["accept-ranges"]).toBe("none");
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["content-type"]).toContain("application/octet-stream");
@@ -214,7 +216,25 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     });
     await drain(res);
     expect(res.statusCode).toBe(200);
+    // No `s-maxage`: a shared cache is told not to store this at all, so
+    // bounding how long it may keep it would be meaningless.
     expect(res.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+  });
+
+  it("bounds how long a SHARED cache may hold a public blob, so a visibility flip is not a year-long leak", async () => {
+    // `immutable` + a year is honest about the *bytes* — a commit-pinned URL's
+    // content can never change — but says nothing about who may read them, and
+    // a repo can be flipped PUBLIC→PRIVATE. Without an `s-maxage`, a CDN would
+    // keep serving the old bytes for a year and `immutable` would suppress the
+    // revalidation that caught it. The browser cache belongs to someone who
+    // already had the bytes, so it keeps the full year.
+    const { res } = await open(url("small.txt", headSha));
+    await drain(res);
+    const cc = res.headers["cache-control"] ?? "";
+    expect(cc).toContain("max-age=31536000");
+    const shared = /(?:^|[ ,])s-maxage=(\d+)/.exec(cc);
+    expect(shared).not.toBeNull();
+    expect(Number(shared?.[1])).toBeLessThanOrEqual(3600);
   });
 
   it("answers 304 to If-None-Match with the blob oid, without re-reading the blob", async () => {
@@ -257,16 +277,17 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     expect(body.toString()).not.toContain("nested.txt");
   });
 
-  it("never ends a clean, complete-looking 200 when git dies mid-stream", async () => {
-    // THE trap this route is built around: a failing git does not error its
-    // stdout — it EOFs cleanly and exits non-zero, which piped naively produces
-    // a well-formed 200 carrying a silently truncated file. Killing the child
-    // mid-body is the deterministic stand-in for any such failure.
+  it("a mid-stream git death reaches the client as a failed transfer, not a short 200", async () => {
+    // End-to-end backstop, NOT the regression test for the EOF-gating trap: it
+    // passes on the strength of the explicit Content-Length alone (verified by
+    // mutation — remove the gating and this still goes green, because Node's
+    // client reports a body shorter than the promised length as an abort). It
+    // is here because "the client can tell" is the property that actually
+    // matters at the HTTP layer, and it is worth pinning independently.
     //
-    // Two independent mechanisms make that detectable, and this asserts the
-    // observable result of both: the promised Content-Length is never met, and
-    // the transfer ends in an abort rather than a clean end. (The unit test
-    // below pins the one that does not depend on Content-Length.)
+    // The gating itself — the thing that saves a consumer with no
+    // Content-Length to check — is pinned by the two `openBlobStream` unit
+    // tests below, which is where the discriminating coverage lives.
     const { res } = await open(url("big.bin", headSha));
     expect(res.statusCode).toBe(200);
     await new Promise<void>((resolve) => res.once("data", () => resolve()));
@@ -292,6 +313,47 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     expect(String(outcome.error)).toMatch(/git cat-file exited/);
   });
 
+  it("openBlobStream errors even when git dies AFTER delivering bytes and stdout EOFs first", async () => {
+    // The other half of the trap, and the one the gating exists for: when git
+    // has already written a prefix, stdout's `end` and the child's `exit` race,
+    // and `end` usually wins. A naive implementation ends the relay right there
+    // — a consumer sees a clean EOF after a partial file and no error anywhere.
+    // Bytes must have flowed AND the stream must still error.
+    const { child, stream } = openBlobStream(repo.storageKey, bigOid);
+    let bytes = 0;
+    const outcome = await new Promise<{ ended: boolean; error: Error | null }>((resolve) => {
+      stream.on("data", (c: Buffer) => {
+        bytes += c.length;
+        // Kill only once we are provably mid-body, so this is the
+        // wrote-then-failed case and not the wrote-nothing one above.
+        if (bytes > 0) child.kill("SIGKILL");
+      });
+      stream.on("end", () => resolve({ ended: true, error: null }));
+      stream.on("error", (error) => resolve({ ended: false, error }));
+    });
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThan(LARGE_BYTES);
+    expect(outcome.ended).toBe(false);
+    expect(outcome.error).not.toBeNull();
+  }, 30_000);
+
+  it("openBlobStream still ends cleanly on success — the gating must not break the happy path", async () => {
+    // The counterweight: a rule that turns every EOF into an error would pass
+    // both tests above and serve nothing. A whole small blob must arrive and
+    // the stream must end, not error.
+    const { stream } = openBlobStream(repo.storageKey, await smallOid());
+    const outcome = await new Promise<{ ended: boolean; error: Error | null; body: string }>((resolve) => {
+      const chunks: Buffer[] = [];
+      stream.on("data", (c: Buffer) => chunks.push(c));
+      stream.on("end", () =>
+        resolve({ ended: true, error: null, body: Buffer.concat(chunks).toString() }));
+      stream.on("error", (error) => resolve({ ended: false, error, body: "" }));
+    });
+    expect(outcome.error).toBeNull();
+    expect(outcome.ended).toBe(true);
+    expect(outcome.body).toBe("hello\n");
+  });
+
   it("leaves no git process behind when the client disappears mid-stream", async () => {
     const { res, abort } = await open(url("big.bin", headSha));
     expect(res.statusCode).toBe(200);
@@ -312,6 +374,10 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
 describe("GET /rawblob — concurrency limit (a download count, not a size limit)", () => {
   it("sheds with 503 + Retry-After past the limit, and recovers when a slot frees", async () => {
     process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "1";
+    // No queue and no reclamation here — this pins the shed itself, with the
+    // two mechanisms that soften it covered separately below.
+    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "0";
+    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "0";
 
     // Hold a slot: take the headers but never read the body, so git blocks on
     // backpressure and the response stays in flight.
@@ -333,6 +399,107 @@ describe("GET /rawblob — concurrency limit (a download count, not a size limit
     const served = await drain(third.res);
     expect(third.res.statusCode).toBe(200);
     expect(served.toString()).toBe("hello\n");
+  }, 60_000);
+
+  it("reclaims slots from clients that hold a response open without reading it", async () => {
+    // REGRESSION: a slot used to be held for the connection's lifetime, so a
+    // client that took the headers and then read nothing pinned its git child
+    // forever — free to mount (no bandwidth spent) and unrecoverable without an
+    // operator killing sockets. Filling the pool that way denied /rawblob to
+    // everyone for as long as the attacker cared to keep the sockets open.
+    //
+    // The slot is now held only while the transfer makes progress, so the pool
+    // clears itself. The holders are kept referenced and un-read for the whole
+    // test: nothing here disconnects them.
+    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "2";
+    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "1500";
+    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "0"; // isolate reclamation from queueing
+
+    const holders = [
+      await open(url("big.bin", headSha)),
+      await open(url("big.bin", headSha)),
+    ];
+    for (const h of holders) {
+      expect(h.res.statusCode).toBe(200);
+      // Deliberately never read: `res` is left paused.
+      h.res.on("error", () => undefined);
+    }
+    expect(await waitFor(() => activeRawblobStreams() === 2)).toBe(true);
+
+    // Saturated right now, as designed.
+    const shed = await open(url("small.txt", headSha));
+    await drain(shed.res);
+    expect(shed.res.statusCode).toBe(503);
+
+    // ...and it un-saturates on its own, with the holders still connected.
+    expect(await waitFor(() => activeRawblobStreams() === 0, 20_000)).toBe(true);
+    expect(await catFileProcesses(bigOid)).toBe(0);
+
+    const served = await open(url("small.txt", headSha));
+    const body = await drain(served.res);
+    expect(served.res.statusCode).toBe(200);
+    expect(body.toString()).toBe("hello\n");
+
+    for (const h of holders) h.abort();
+  }, 60_000);
+
+  it("does not interrupt a download that is slow but still moving", async () => {
+    // The other side of the reclamation rule, and the one that keeps it from
+    // becoming a size ceiling in disguise: the timeout measures *stalling*, not
+    // slowness. This client reads a chunk at a time with gaps far shorter than
+    // a real link's, but keeps going for several multiples of the stall window,
+    // and must never be dropped.
+    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "600";
+
+    const { res, abort } = await open(url("big.bin", headSha));
+    expect(res.statusCode).toBe(200);
+    res.pause();
+
+    const started = Date.now();
+    let got = 0;
+    const outcome = await new Promise<{ error: Error | null; elapsed: number }>((resolve) => {
+      res.on("error", (error) => resolve({ error, elapsed: Date.now() - started }));
+      res.on("aborted", () => resolve({ error: new Error("aborted"), elapsed: Date.now() - started }));
+      const tick = () => {
+        const chunk = res.read(64 * 1024);
+        if (chunk) got += chunk.length;
+        // Four stall windows of trickling, and still alive.
+        if (Date.now() - started > 2_400) return resolve({ error: null, elapsed: Date.now() - started });
+        setTimeout(tick, 250);
+      };
+      setTimeout(tick, 250);
+    });
+
+    expect(outcome.error).toBeNull();
+    expect(outcome.elapsed).toBeGreaterThan(600 * 3);
+    expect(got).toBeGreaterThan(0);
+    abort();
+    expect(await waitFor(() => activeRawblobStreams() === 0)).toBe(true);
+  }, 60_000);
+
+  it("queues a request past the limit and serves it when a slot frees, rather than shedding at once", async () => {
+    // A burst should cost latency, not a failed download: 503 is what happens
+    // when the queue *also* fails to clear, not the first response to a full
+    // pool.
+    process.env["FORGEHUB_RAWBLOB_MAX_CONCURRENT_STREAMS"] = "1";
+    process.env["FORGEHUB_RAWBLOB_QUEUE_WAIT_MS"] = "10000";
+    process.env["FORGEHUB_RAWBLOB_STALL_TIMEOUT_MS"] = "0"; // isolate queueing from reclamation
+
+    const holder = await open(url("big.bin", headSha));
+    expect(holder.res.statusCode).toBe(200);
+    holder.res.on("error", () => undefined);
+    expect(await waitFor(() => activeRawblobStreams() === 1)).toBe(true);
+
+    // This one has nowhere to go yet — it parks instead of failing.
+    const queued = open(url("small.txt", headSha));
+    expect(await waitFor(() => queuedRawblobStreams() === 1)).toBe(true);
+
+    holder.abort();
+    const { res } = await queued;
+    const body = await drain(res);
+    expect(res.statusCode).toBe(200);
+    expect(body.toString()).toBe("hello\n");
+    expect(queuedRawblobStreams()).toBe(0);
   }, 60_000);
 
   it("applies an operator's opt-in byte ceiling only when one is configured", async () => {
