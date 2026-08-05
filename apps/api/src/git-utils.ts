@@ -1,5 +1,7 @@
 import { execFile as execFileCb, spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { PassThrough, type Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -1390,8 +1392,8 @@ export async function resolveBlobSha(
  * serve — it is the size at which buffering the whole file in the API process
  * stops being acceptable. The semantic-diff routes genuinely need every byte in
  * memory (the wasm engine takes a whole buffer), so for them it is a real
- * constraint; /rawblob only inherits it until it is switched to a streamed
- * response, at which point it has no ceiling at all (#157 phase 2).
+ * constraint. `/rawblob` no longer has anything to do with it: it streams via
+ * {@link openBlobStream} and has no size ceiling at all (#157 phase 2).
  */
 export const BLOB_BUFFER_MAX = MAX;
 
@@ -1460,6 +1462,92 @@ export function statBlob(
       done({ kind: "error", message: `unparseable cat-file output: ${JSON.stringify(line)}` });
     });
   });
+}
+
+/**
+ * Open a raw byte stream over a blob, by its immutable oid.
+ *
+ * This is the streamed counterpart to {@link readBlobAsBuffer} and the reason
+ * `/rawblob` has no size ceiling (#157 phase 2): `spawn` has **no `maxBuffer`**
+ * (that footgun belongs to `exec`/`execFile`), so memory here is O(the stream's
+ * highWaterMark) per request and never O(filesize). A multi-gigabyte blob costs
+ * the same resident memory as a small one.
+ *
+ * Why `cat-file blob <oid>` specifically:
+ * - It is the plumbing that is contractually raw — it hard-asserts the object is
+ *   a blob and never applies textconv, filters or pretty-printing (`git show`
+ *   does, which is how a directory used to be served as file bytes).
+ * - Addressing by the **oid** from the caller's pre-flight {@link statBlob}
+ *   pins the exact object that was measured, so the `Content-Length` we promise
+ *   cannot be invalidated by a concurrent ref move between stat and read.
+ *
+ * THE FAILURE TRAP this wires around: when git fails, it does *not* error its
+ * stdout. Stdout reaches EOF perfectly cleanly and the child exits non-zero
+ * somewhere off to the side. Piped naively to a response, that is a well-formed
+ * 200 carrying a silently **truncated** file — the worst possible failure for a
+ * large download, because it looks like a success.
+ *
+ * Watching for the bad exit is not on its own enough: the child's `exit` event
+ * and stdout's `end` are two independent event sources and `end` frequently
+ * wins, so a consumer can have already seen a clean EOF by the time the failure
+ * is known. So the returned stream is a relay whose **EOF is gated on the exit
+ * status**: it ends only if git exited 0, and is destroyed with an error
+ * otherwise. Both `code` and `signal` are checked, because how git dies on a
+ * broken pipe is platform-dependent.
+ *
+ * (The relay adds one small fixed buffer — it does not accumulate the file, and
+ * backpressure still propagates from the socket all the way to git.)
+ *
+ * Cleanup is owned here: destroying the returned stream — which is what a web
+ * framework does when the client disconnects — kills the child. The caller may
+ * also kill it directly via the returned handle.
+ */
+export type BlobStream = {
+  /** The git child. Kill it to abandon a transfer. */
+  child: ChildProcessWithoutNullStreams;
+  /** Raw blob bytes; errors rather than EOFing if git failed. */
+  stream: Readable;
+};
+
+export function openBlobStream(storageKey: string, oid: string): BlobStream {
+  const cwd = bareRepoPathFromKey(storageKey);
+  const child = spawn("git", ["cat-file", "blob", oid], { cwd });
+  // Drain stderr so a chatty git can never fill its pipe buffer and deadlock.
+  child.stderr.resume();
+
+  const stream = new PassThrough({ highWaterMark: 64 * 1024 });
+  // An inert listener so an immediate failure — before the caller has handed the
+  // stream to anything — is not an unhandled 'error' event that ends the
+  // process. It swallows nothing: a consumer attaching later still sees the
+  // error, since the stream stays destroyed and carries it.
+  stream.on("error", () => undefined);
+  let exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let sourceEnded = false;
+
+  const settle = () => {
+    if (!sourceEnded || exit === null) return;
+    if (exit.code !== 0 || exit.signal !== null) {
+      stream.destroy(new Error(`git cat-file exited ${exit.code ?? exit.signal}`));
+    } else {
+      stream.end();
+    }
+  };
+
+  child.stdout.on("error", (err) => stream.destroy(err));
+  child.stdout.on("end", () => { sourceEnded = true; settle(); });
+  // `end: false` — this relay's EOF belongs to `settle`, not to the pipe.
+  child.stdout.pipe(stream, { end: false });
+  child.once("error", (err) => stream.destroy(err));
+  child.once("exit", (code, signal) => { exit = { code, signal }; settle(); });
+  // Covers both outcomes: a consumer that walked away (kill git, don't leave it
+  // blocked on a pipe nobody reads) and a clean finish (both are no-ops).
+  stream.once("close", () => {
+    child.stdout.unpipe(stream);
+    child.stdout.destroy();
+    child.kill();
+  });
+
+  return { child, stream };
 }
 
 /** Outcome of reading a blob into memory. */

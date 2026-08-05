@@ -1,8 +1,20 @@
 import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { git, readBlobAsBuffer, activeFormatsAtCommit, BLOB_BUFFER_MAX } from "../git-utils.js";
+import {
+  git,
+  readBlobAsBuffer,
+  statBlob,
+  openBlobStream,
+  activeFormatsAtCommit,
+  BLOB_BUFFER_MAX,
+} from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
+import {
+  acquireRawblobStream,
+  rawblobMaxBytes,
+  RAWBLOB_RETRY_AFTER_SECONDS,
+} from "../rawblob-limits.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
@@ -137,12 +149,23 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
   // Raw file bytes at a commit, as application/octet-stream — used by client
   // renderers that need the actual file (the gltf-scene 3D viewport fetches the
-  // head blob to build its mesh). readBlobAsBuffer preserves binary content,
-  // unlike the utf-8 /blob endpoints.
-  app.get(
-    "/repos/:handle/:name/rawblob",
-    { preHandler: [app.optionalAuthenticate] },
-    async (request, reply) => {
+  // head blob to build its mesh), and by anyone who just wants the file.
+  //
+  // STREAMED, WITH NO SIZE CEILING (#157 phase 2). The shape is decide-then-pump:
+  // one `cat-file --batch-check` pre-flight settles 404/413/304 and yields the
+  // exact size *before a single header is written*, then git's stdout is piped
+  // to the socket. Peak memory is one stream buffer, not one file — which is
+  // precisely why an arbitrarily large blob can be served at all. If someone
+  // could push it, they can fetch it back.
+  //
+  // HEAD is registered explicitly rather than via Fastify's exposeHeadRoute,
+  // which would run this handler in full and throw the spawned stream away.
+  app.route({
+    method: ["GET", "HEAD"],
+    url: "/repos/:handle/:name/rawblob",
+    exposeHeadRoute: false,
+    preHandler: [app.optionalAuthenticate],
+    handler: async (request, reply) => {
       const { handle, name } = request.params as { handle: string; name: string };
       const { path: filePath, sha } = request.query as { path?: string; sha?: string };
       const userId = (request as { user?: { sub: string } }).user?.sub;
@@ -152,35 +175,115 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       }
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
-      if (!repo.storageKey) return reply.status(404).send({ error: "Repository has no storage" });
+      const storageKey = repo.storageKey;
+      if (!storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      const read = await readBlobAsBuffer(repo.storageKey, sha, filePath);
-      switch (read.kind) {
-        case "missing":
-        // A tree/tag/commit at that path is not file bytes, and this route only
-        // hands over file bytes. (It used to answer a directory with 200 and a
-        // pretty-printed tree listing, because `git show <sha>:<dir>` exits 0.)
-        case "not-blob":
-          return reply.status(404).send({ error: "File not found at this commit" });
-        case "too-large":
-          // Present, readable, and larger than this process is willing to hold
-          // in memory. That is a ForgeHub implementation limit, not a property
-          // of the file, and it is temporary: #157 phase 2 streams this route
-          // and drops the ceiling entirely. Until then, say so with the numbers.
-          return reply.status(413).send({
-            error: "File too large to serve",
-            path: filePath,
-            size: read.size,
-            limit: BLOB_BUFFER_MAX,
-          });
-        case "error":
-          return reply.status(500).send({ error: "Failed to read file content at this commit" });
+      // Everything that can refuse the request happens here, while the headers
+      // are still writable. Past this point the only way to signal failure is to
+      // abort the socket, so nothing below is allowed to be a judgement call.
+      const stat = await statBlob(storageKey, sha, filePath);
+      if (stat.kind === "error") {
+        return reply.status(500).send({ error: "Failed to read file content at this commit" });
+      }
+      // `missing` is a genuinely absent path; `not-blob` is a tree/tag/commit,
+      // which is not file bytes and never was. (This route used to answer a
+      // directory with 200 and a pretty-printed tree listing.)
+      if (stat.kind !== "blob") {
+        return reply.status(404).send({ error: "File not found at this commit" });
       }
 
-      return reply
-        .header("Content-Type", "application/octet-stream")
-        .header("Cache-Control", "public, max-age=3600")
-        .send(read.buf);
+      // There is no size limit by default. An operator may opt into one; when
+      // they haven't, this branch does not exist.
+      const maxBytes = rawblobMaxBytes();
+      if (maxBytes !== null && stat.size > maxBytes) {
+        return reply.status(413).send({
+          error: "File too large to serve",
+          path: filePath,
+          size: stat.size,
+          limit: maxBytes,
+        });
+      }
+
+      // The blob oid is a perfect strong validator and costs nothing — it is
+      // already in hand. (@fastify/etag would hash the body instead, which on a
+      // multi-gigabyte blob is exactly the O(filesize) work streaming exists to
+      // avoid.) The same unchanged file at many commits shares one ETag, so a
+      // client re-fetching it across revisions gets 304s from different URLs.
+      const etag = `"${stat.oid}"`;
+      const cacheControl = `${repo.visibility === "PUBLIC" ? "public" : "private"}, ${
+        // `immutable` is only truthful when the URL pins content. This route
+        // resolves `sha` through git, so it also accepts a branch or tag name,
+        // for which the same URL yields different bytes over time — those get
+        // revalidation instead. (There is no separate ref-name variant of this
+        // route; the two cases are the same URL shape, told apart here.)
+        isCommitPinned(sha) ? "max-age=31536000, immutable" : "no-cache"
+      }`;
+
+      if (ifNoneMatchHits(request.headers["if-none-match"], etag)) {
+        return reply.status(304).header("ETag", etag).header("Cache-Control", cacheControl).send();
+      }
+
+      const sendHeaders = () =>
+        reply
+          .header("Content-Type", "application/octet-stream")
+          // Explicit, from the pre-flight: Fastify only derives Content-Length
+          // for buffers, and a stream without one goes out chunked — leaving a
+          // client unable to tell a truncated download from a complete one, or
+          // to show progress. On a very large file that is the whole difference
+          // between "downloading" and "hung".
+          .header("Content-Length", String(stat.size))
+          .header("ETag", etag)
+          .header("Cache-Control", cacheControl)
+          // Honest: git blobs are zlib-deflated with no random access, so the
+          // origin cannot satisfy a Range. Saying `none` stops download managers
+          // from attempting resumes that would silently restart.
+          .header("Accept-Ranges", "none")
+          .header("X-Content-Type-Options", "nosniff");
+
+      if (request.method === "HEAD") return sendHeaders().send();
+
+      // The one genuinely finite resource: each streaming response pins a
+      // blocked git child for the connection's lifetime. This bounds how many
+      // downloads run at once — it is NOT a size limit, and no file is ever too
+      // big for it.
+      const release = acquireRawblobStream();
+      if (!release) {
+        return reply
+          .status(503)
+          .header("Retry-After", String(RAWBLOB_RETRY_AFTER_SECONDS))
+          .send({ error: "Too many concurrent downloads in flight; retry shortly" });
+      }
+
+      const { child, stream } = openBlobStream(storageKey, stat.oid);
+      child.once("close", release);
+      // Fastify destroys the payload on disconnect and git dies on EPIPE, but
+      // killing explicitly is deterministic and cheap — with no size ceiling, an
+      // abandoned multi-gigabyte download must not leave a git process pinned.
+      reply.raw.once("close", () => {
+        child.kill();
+        release();
+      });
+      sendHeaders();
+      return reply.send(stream);
     },
-  );
+  });
+}
+
+/** Does `sha` name an immutable object id (rather than a branch/tag that moves)? */
+function isCommitPinned(sha: string): boolean {
+  return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(sha);
+}
+
+/**
+ * RFC 9110 If-None-Match: a comma-separated list, `*`, or weak (`W/"…"`) forms.
+ * Comparison is weak, which is what a conditional GET calls for.
+ */
+function ifNoneMatchHits(header: string | string[] | undefined, etag: string): boolean {
+  if (!header) return false;
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  const strip = (v: string) => v.trim().replace(/^W\//, "");
+  return raw.split(",").some((candidate) => {
+    const value = strip(candidate);
+    return value === "*" || value === etag;
+  });
 }
