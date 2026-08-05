@@ -70,6 +70,12 @@ let baseSha: string;
 let headSha: string;
 let communitySha: string;
 let notEnabledSha: string;
+let oversizeSha: string;
+
+// One byte past the 10 MiB the API is willing to hold in memory (#157). The
+// content is irrelevant — nothing ever parses it, because both routes refuse it
+// on the pre-flight size alone.
+const OVERSIZE_BYTES = 10 * 1024 * 1024 + 1;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -101,6 +107,12 @@ beforeAll(async () => {
     repo.workDir,
     { "models/Untitled.glb": "glb-bytes" },
     "add a glb without opting the format in",
+  );
+  // A .gltf (opted in, official) that is larger than the in-memory limit.
+  oversizeSha = await makeCommit(
+    repo.workDir,
+    { "huge.gltf": "x".repeat(OVERSIZE_BYTES) },
+    "add an oversized model",
   );
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
@@ -199,6 +211,21 @@ describe("GET /repos/:handle/:name/filediff", () => {
     const res = await get(`path=model.gltf&sha=${headSha}`);
     expect(res.statusCode).toBe(404);
   });
+
+  it("413s — not 404s — for a file too large to hold in memory, and names the real size (#157)", async () => {
+    // The wasm engine takes whole buffers, so this route is genuinely capped.
+    // The file is present and browsable; calling it "not found" was the lie.
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=huge.gltf&sha=${oversizeSha}`);
+    expect(res.statusCode).toBe(413);
+    const body = res.json();
+    expect(body.size).toBe(OVERSIZE_BYTES);
+    expect(body.limit).toBe(10 * 1024 * 1024);
+    expect(body.path).toBe("huge.gltf");
+    expect(body.error).toMatch(/too large/i);
+    // Nothing was ever handed to the engine.
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
 });
 
 function rawblob(query: string) {
@@ -228,5 +255,32 @@ describe("GET /repos/:handle/:name/rawblob", () => {
     vi.mocked(prisma.repo.findFirst).mockResolvedValue({ ...MOCK_REPO, visibility: "PRIVATE" } as never);
     const res = await rawblob(`path=model.gltf&sha=${headSha}`);
     expect(res.statusCode).toBe(404);
+  });
+
+  it("404s for a DIRECTORY instead of serving a tree listing as file bytes (#157)", async () => {
+    // `git show <sha>:<dir>` exits 0 and pretty-prints the tree, which this
+    // route used to hand back with a 200 and an octet-stream content type.
+    const res = await rawblob(`path=.forge&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.body).not.toContain("formats");
+  });
+
+  it("413s — not 404s — for a file too large to hold in memory, and names the real size (#157)", async () => {
+    // The file is present at this commit; the ceiling is ForgeHub's, and it is
+    // reported as ForgeHub's. (Phase 2 streams this route and removes it.)
+    const res = await rawblob(`path=huge.gltf&sha=${oversizeSha}`);
+    expect(res.statusCode).toBe(413);
+    const body = res.json();
+    expect(body.size).toBe(OVERSIZE_BYTES);
+    expect(body.limit).toBe(10 * 1024 * 1024);
+    expect(body.error).toMatch(/too large/i);
+  });
+
+  it("still serves a small file byte-for-byte after the size pre-flight", async () => {
+    // The pre-flight must not change the happy path: same bytes, same headers.
+    const res = await rawblob(`path=model.gltf&sha=${oversizeSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/octet-stream");
+    expect(res.body).toBe(gltf(5));
   });
 });
