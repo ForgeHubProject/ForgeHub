@@ -1,7 +1,14 @@
 import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { git, readBlobAsBuffer, activeFormatsAtCommit, BLOB_BUFFER_MAX } from "../git-utils.js";
+import {
+  git,
+  readBlobAsBuffer,
+  statBlob,
+  openBlobStream,
+  activeFormatsAtCommit,
+  DIFF_BUFFER_MAX,
+} from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 
@@ -98,8 +105,12 @@ export async function fileDiffRoutes(app: FastifyInstance) {
           error: "File too large to diff",
           path: filePath,
           size: oversized.size,
-          limit: BLOB_BUFFER_MAX,
+          limit: DIFF_BUFFER_MAX,
         });
+      }
+      // A malformed request (a NUL in the path) is the client's, not ours.
+      if (headRead.kind === "invalid" || baseRead.kind === "invalid") {
+        return reply.status(400).send({ error: "Invalid 'path' or 'sha'" });
       }
       if (headRead.kind === "error" || baseRead.kind === "error") {
         return reply.status(500).send({ error: "Failed to read file content at this commit" });
@@ -137,8 +148,17 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
   // Raw file bytes at a commit, as application/octet-stream — used by client
   // renderers that need the actual file (the gltf-scene 3D viewport fetches the
-  // head blob to build its mesh). readBlobAsBuffer preserves binary content,
-  // unlike the utf-8 /blob endpoints.
+  // head blob to build its mesh). Binary-safe, unlike the utf-8 /blob endpoints.
+  //
+  // There is deliberately NO size limit here. A contributor who can push an
+  // arbitrarily large file has to be able to fetch it back; someone who commits
+  // a huge asset is accepting the cost of their own connection, not asking the
+  // server to decide for them. That is affordable because the response is
+  // streamed straight off `git cat-file blob`: memory is O(highWaterMark) per
+  // request rather than O(filesize), so there is no resource for a ceiling to
+  // protect. The size-first pre-flight (statBlob) is what makes it safe — the
+  // 404/500 decision is made while headers are still writable, before a byte of
+  // content is touched.
   app.get(
     "/repos/:handle/:name/rawblob",
     { preHandler: [app.optionalAuthenticate] },
@@ -154,33 +174,32 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
       if (!repo.storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      const read = await readBlobAsBuffer(repo.storageKey, sha, filePath);
-      switch (read.kind) {
+      const stat = await statBlob(repo.storageKey, sha, filePath);
+      switch (stat.kind) {
         case "missing":
         // A tree/tag/commit at that path is not file bytes, and this route only
         // hands over file bytes. (It used to answer a directory with 200 and a
         // pretty-printed tree listing, because `git show <sha>:<dir>` exits 0.)
         case "not-blob":
           return reply.status(404).send({ error: "File not found at this commit" });
-        case "too-large":
-          // Present, readable, and larger than this process is willing to hold
-          // in memory. That is a ForgeHub implementation limit, not a property
-          // of the file, and it is temporary: #157 phase 2 streams this route
-          // and drops the ceiling entirely. Until then, say so with the numbers.
-          return reply.status(413).send({
-            error: "File too large to serve",
-            path: filePath,
-            size: read.size,
-            limit: BLOB_BUFFER_MAX,
-          });
+        case "invalid":
+          // The request itself can't be formed — a NUL in the path. That is the
+          // caller's bug, and 400 says so rather than blaming the repository.
+          return reply.status(400).send({ error: "Invalid 'path' or 'sha'" });
         case "error":
           return reply.status(500).send({ error: "Failed to read file content at this commit" });
       }
 
+      // Content-Length comes from the pre-flight, not from a buffer: Fastify
+      // only computes it for Buffers, and without it the response goes chunked
+      // and a client cannot tell a truncated download from a complete one.
+      const child = openBlobStream(repo.storageKey, stat.oid);
+      reply.raw.once("close", () => child.kill());
       return reply
         .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", String(stat.size))
         .header("Cache-Control", "public, max-age=3600")
-        .send(read.buf);
+        .send(child.stdout);
     },
   );
 }

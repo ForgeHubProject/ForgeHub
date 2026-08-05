@@ -226,6 +226,24 @@ describe("GET /repos/:handle/:name/filediff", () => {
     // Nothing was ever handed to the engine.
     expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
   });
+
+  it("404s — never 500s — for a path git's revision parser refuses (#157)", async () => {
+    // Same regression as on /rawblob: a `../`-prefixed path exits git 128, and
+    // reporting a client-supplied path as a server failure is both a lie and an
+    // unbounded 5xx source. (".gltf" keeps it past the format gate.)
+    const res = await get(`path=${encodeURIComponent("../../x.gltf")}&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("never reaches the blob read for a NUL-bearing path (#157)", async () => {
+    // A NUL makes the extension unrecognisable, so this route's format gate
+    // refuses first with its own honest 404 ("no semantic handler"). The
+    // `invalid` → 400 branch below it is defence in depth, not the live answer
+    // here; /rawblob, which has no format gate, is where it is observable.
+    const res = await get(`path=${encodeURIComponent(`model.gltf\0${headSha}:nope`)}&sha=${headSha}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toMatch(/semantic handler/i);
+  });
 });
 
 function rawblob(query: string) {
@@ -265,15 +283,40 @@ describe("GET /repos/:handle/:name/rawblob", () => {
     expect(res.body).not.toContain("formats");
   });
 
-  it("413s — not 404s — for a file too large to hold in memory, and names the real size (#157)", async () => {
-    // The file is present at this commit; the ceiling is ForgeHub's, and it is
-    // reported as ForgeHub's. (Phase 2 streams this route and removes it.)
+  it("serves a file larger than the diff buffer IN FULL — this route has no size ceiling (#157)", async () => {
+    // The product requirement: a contributor who can push an arbitrarily large
+    // file can fetch it back. This route streams, so there is no resource a
+    // ceiling would protect — refusing here (413, or the old fake 404) makes a
+    // pushed file unfetchable. `huge.gltf` is past the buffer limit that
+    // /filediff is genuinely bound by; this route must not inherit it.
     const res = await rawblob(`path=huge.gltf&sha=${oversizeSha}`);
-    expect(res.statusCode).toBe(413);
-    const body = res.json();
-    expect(body.size).toBe(OVERSIZE_BYTES);
-    expect(body.limit).toBe(10 * 1024 * 1024);
-    expect(body.error).toMatch(/too large/i);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/octet-stream");
+    // Every byte, and a Content-Length that lets a client detect truncation.
+    expect(res.rawPayload.length).toBe(OVERSIZE_BYTES);
+    expect(res.headers["content-length"]).toBe(String(OVERSIZE_BYTES));
+    expect(res.rawPayload.equals(Buffer.from("x".repeat(OVERSIZE_BYTES)))).toBe(true);
+  }, 30_000);
+
+  it("404s — never 500s — for a path git's revision parser refuses (#157)", async () => {
+    // `git cat-file --batch-check` reports most negatives in-band and exits 0,
+    // but a `./`- or `../`-prefixed path aborts it with exit 128 before any
+    // request is read. Treating that as a git failure would let any reader of a
+    // public repo mint unbounded 5xx by varying one query param — and it is a
+    // path that names nothing, which is a 404 like any other absent path.
+    for (const p of ["../../../etc/passwd", "../../x.gltf", "./model.gltf"]) {
+      const res = await rawblob(`path=${encodeURIComponent(p)}&sha=${headSha}`);
+      expect([res.statusCode, p]).toEqual([404, p]);
+    }
+  });
+
+  it("400s for a NUL in the path instead of misparsing it into 'not found' (#157)", async () => {
+    // NUL is the framing character statBlob writes to `cat-file --batch-check
+    // -z`. One inside the path makes git read two requests and emit two lines,
+    // which the anchored blob pattern then rejects — answering "not found"
+    // about a file that is right there. The request is malformed; say so.
+    const res = await rawblob(`path=${encodeURIComponent(`model.gltf\0${headSha}:nope`)}&sha=${headSha}`);
+    expect(res.statusCode).toBe(400);
   });
 
   it("still serves a small file byte-for-byte after the size pre-flight", async () => {
