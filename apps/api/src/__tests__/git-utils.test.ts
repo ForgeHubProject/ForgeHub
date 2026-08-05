@@ -22,6 +22,7 @@ import {
   performRevert,
   blobSizeAtCommit,
   statBlob,
+  openBlobStream,
 } from "../git-utils.js";
 
 const AUTHOR = { name: "Merl Merger", email: "merl@forgehub.io" };
@@ -682,5 +683,89 @@ describe("statBlob", () => {
 
   it("rejects a NUL in the commit-ish as invalid (#157)", async () => {
     expect((await statBlob(statRepo.storageKey, `${sha}\0${sha}`, "kept.txt")).kind).toBe("invalid");
+  });
+});
+
+// ─── openBlobStream (#157 phase 1) ────────────────────────────────────────────
+//
+// The contract that matters here is the failure one, and it is easy to test the
+// wrong way round: whether a dying git is *noticed* depends entirely on how fast
+// the consumer is draining stdout, so a consumer that is paused proves nothing.
+// Every failure case below therefore drains at full speed, which is the case
+// where stdout has already EOF'd by the time the exit fires — the case an
+// earlier `child.stdout.destroy(err)` implementation silently did nothing in.
+describe("openBlobStream", () => {
+  let streamRepo: TestRepo;
+  let sha: string;
+  let oid: string;
+  const BODY = "abcdefghij".repeat(1024); // 10 KiB
+
+  beforeAll(async () => {
+    streamRepo = await createTestRepo("test/open-blob-stream.git");
+    sha = await makeCommit(streamRepo.workDir, { "asset.bin": BODY }, "init");
+    const stat = await statBlob(streamRepo.storageKey, sha, "asset.bin");
+    if (stat.kind !== "blob") throw new Error("fixture is not a blob");
+    oid = stat.oid;
+  }, 30_000);
+
+  afterAll(async () => {
+    await streamRepo.cleanup();
+  });
+
+  /** Drain a stream at full speed; resolve with the bytes once it ends. */
+  function drain(readable: NodeJS.ReadableStream): Promise<Buffer> {
+    return new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+      readable.on("data", (c: Buffer) => chunks.push(c));
+      readable.on("close", () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
+  it("streams the whole blob and never reports a failure on a clean read", async () => {
+    let failure: Error | null = null;
+    const child = openBlobStream(streamRepo.storageKey, oid, (e) => { failure = e; });
+    // Subscribe before draining: the child can exit while we await the bytes,
+    // and a `once` attached afterwards would wait for an event already past.
+    const closed = new Promise((r) => child.once("close", r));
+    const body = await drain(child.stdout);
+    await closed;
+    expect(body.toString("utf8")).toBe(BODY);
+    expect(failure).toBeNull();
+  });
+
+  it("reports a failure for a bad oid even though stdout EOFs cleanly", async () => {
+    // This is the shape that made the old guard a no-op: git exits 128 straight
+    // away, stdout produces no bytes and closes itself, and the exit handler
+    // then finds nothing left to destroy. Reporting out-of-band cannot lose
+    // that race, because it does not run one.
+    const failure = new Promise<Error>((resolve) => {
+      const child = openBlobStream(streamRepo.storageKey, "0".repeat(40), resolve);
+      void drain(child.stdout);
+    });
+    await expect(failure).resolves.toBeInstanceOf(Error);
+    await expect(failure).resolves.toHaveProperty("message", expect.stringMatching(/exited/));
+  });
+
+  it("reports a failure when the child is killed mid-stream, with the consumer draining", async () => {
+    // A SIGKILL with the consumer keeping up: stdout sees EOF first, exactly as
+    // in the bad-oid case, so the signal has to be observed on the child.
+    const failure = new Promise<Error>((resolve) => {
+      const child = openBlobStream(streamRepo.storageKey, oid, resolve);
+      void drain(child.stdout);
+      child.kill("SIGKILL");
+    });
+    await expect(failure).resolves.toBeInstanceOf(Error);
+  });
+
+  it("reports a failure at most once", async () => {
+    const seen: Error[] = [];
+    const child = openBlobStream(streamRepo.storageKey, "0".repeat(40), (e) => seen.push(e));
+    const closed = new Promise((r) => child.once("close", r));
+    void drain(child.stdout);
+    await closed;
+    // A late kill on an already-dead child must not produce a second report.
+    child.kill("SIGKILL");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen).toHaveLength(1);
   });
 });

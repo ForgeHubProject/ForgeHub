@@ -94,6 +94,19 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         readBlobAsBuffer(storageKey, sha, filePath),
       ]);
 
+      // Order matters, and it runs most-fundamental-first: a request that was
+      // never well-formed cannot also be "too large", and a git that blew up
+      // never established a size to compare. Answering 413 to a malformed
+      // request whose *other* side happens to be over the cap would report a
+      // limit as the reason a typo failed.
+      //
+      // A malformed request (a NUL in the path) is the client's, not ours.
+      if (headRead.kind === "invalid" || baseRead.kind === "invalid") {
+        return reply.status(400).send({ error: "Invalid 'path' or 'sha'" });
+      }
+      if (headRead.kind === "error" || baseRead.kind === "error") {
+        return reply.status(500).send({ error: "Failed to read file content at this commit" });
+      }
       // The semantic engine is wasm and takes whole buffers, so this route is
       // genuinely capped — but a file over the cap is present, and saying
       // "File not found at this commit" about it is a lie (#157). 413 names the
@@ -108,16 +121,20 @@ export async function fileDiffRoutes(app: FastifyInstance) {
           limit: DIFF_BUFFER_MAX,
         });
       }
-      // A malformed request (a NUL in the path) is the client's, not ours.
-      if (headRead.kind === "invalid" || baseRead.kind === "invalid") {
-        return reply.status(400).send({ error: "Invalid 'path' or 'sha'" });
+      // A tree at the head path is not a file, and this route has known that
+      // since the pre-flight — it just used to throw the answer away. Left
+      // alone, a directory falls through as an empty head blob and the diff
+      // reports the file as DELETED: a second untrue statement assembled out of
+      // the same information /rawblob already answers honestly with a 404.
+      if (headRead.kind === "not-blob") {
+        return reply.status(404).send({ error: "Path is not a file at this commit", path: filePath });
       }
-      if (headRead.kind === "error" || baseRead.kind === "error") {
-        return reply.status(500).send({ error: "Failed to read file content at this commit" });
-      }
-      // Only a genuinely absent path (or a directory, which is not a file at
-      // all) reaches the 404 now. An added file still has a missing base and
-      // diffs against empty bytes, exactly as before.
+      // A tree at the *base* path where head is a real file is not a lie: the
+      // file genuinely did not exist at that path before, so an empty base — an
+      // "added" diff — is the honest reading, same as a missing base.
+      //
+      // Only a genuinely absent path reaches the 404 now. An added file still
+      // has a missing base and diffs against empty bytes, exactly as before.
       if (headRead.kind !== "ok" && baseRead.kind !== "ok") {
         return reply.status(404).send({ error: "File not found at this commit" });
       }
@@ -193,7 +210,42 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       // Content-Length comes from the pre-flight, not from a buffer: Fastify
       // only computes it for Buffers, and without it the response goes chunked
       // and a client cannot tell a truncated download from a complete one.
-      const child = openBlobStream(repo.storageKey, stat.oid);
+      //
+      // If git dies mid-stream its stdout just EOFs, so Fastify ends the body
+      // short of that Content-Length and the socket then sits there, looking
+      // like a download still in flight, until an unrelated keep-alive timeout
+      // reaps it (72s under Fastify's default). Content-Length is what makes
+      // the truncation *detectable*; cutting the connection is what makes it
+      // detectable NOW instead of a minute and a bit later.
+      //
+      // It has to be the SOCKET, not `reply.raw`. Node detaches the socket from
+      // the response the instant a body is ended — short or not — after which
+      // `reply.raw.destroy()` finds `res.socket === null` and does nothing at
+      // all. That is the very same lose-the-race-with-EOF bug as destroying
+      // git's stdout, one layer up, and a fast consumer loses it every time.
+      // Capturing the socket up front sidesteps the whole lifecycle question.
+      //
+      // NB: this is an abort, not a size or time limit. Nothing here reacts to
+      // how big the blob is or how long the transfer takes — only to git itself
+      // failing. A slow client stays served for as long as it keeps reading.
+      const socket = reply.raw.socket;
+      const child = openBlobStream(repo.storageKey, stat.oid, () => {
+        // A HEAD has no body to truncate: its whole answer came from the
+        // pre-flight, and Node discards the stream. It also finishes long
+        // before a large blob is done draining, so the kill-on-close below
+        // lands on a still-running child and lands here — where tearing down
+        // the connection would kill a perfectly good keep-alive socket. It is
+        // not theoretical: measured over one reused socket, every second HEAD
+        // came back ECONNRESET before this line existed.
+        if (request.method === "HEAD") return;
+        // On a GET, `cat-file blob` exits 0 only after handing over the whole
+        // object, so a failure means the body on the wire is short and this
+        // connection has nothing left to say. (The success path cannot reach
+        // here: the child is already gone with status 0 by the time Fastify
+        // finishes the body, so killing it on close is a no-op.)
+        reply.raw.destroy();
+        socket?.destroy();
+      });
       reply.raw.once("close", () => child.kill());
       return reply
         .header("Content-Type", "application/octet-stream")
