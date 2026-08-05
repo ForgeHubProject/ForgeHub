@@ -25,9 +25,11 @@
  *    only happens when the socket's write queue drains to empty — which is gated
  *    on the peer having consumed everything already buffered downstream (~1 MB on
  *    a typical host). A client reading continuously at 8 KiB/s therefore looks
- *    exactly like one reading nothing, and was dropped: measured on this route at
- *    the shipped 30 s default, 8 and 16 KiB/s were killed and only 32 KiB/s
- *    survived. Below that floor a large blob can never be fetched, every retry
+ *    exactly like one reading nothing, and was dropped: on one host at the
+ *    then-shipped 30 s default, 8 and 16 KiB/s were killed and only 32 KiB/s
+ *    survived — the rate is buffer-dependent and another host put the floor
+ *    lower, so treat the numbers as indicative of the shape, not as constants.
+ *    Below whatever the floor is, a large blob can never be fetched, every retry
  *    dies at the same offset, and `Accept-Ranges: none` means it cannot be
  *    resumed — a size ceiling for slow links wearing a different hat, which is
  *    precisely what this route must not have.

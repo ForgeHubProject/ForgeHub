@@ -507,8 +507,9 @@ describe("GET /rawblob — nothing may function as a size ceiling", () => {
     // The route this replaced had a socket-idle "stall timeout" that could not
     // tell 8 KiB/s from 0 B/s: Node resets that timer on write dispatch, and
     // under backpressure a dispatch waits on the peer draining everything
-    // buffered downstream. Measured on that revision: 8 and 16 KiB/s dropped,
-    // 32 KiB/s survived. The legacy knob is set here so that a mechanism of that
+    // buffered downstream. On one host at that revision 8 and 16 KiB/s dropped
+    // and 32 KiB/s survived; the floor is buffer-dependent and moved elsewhere,
+    // so the shape is the point, not the rates. The legacy knob is set here so that a mechanism of that
     // shape coming back — under that name, or honouring it — is caught in
     // seconds rather than needing a 30 s window. It is inert in shipped code:
     // nothing reads it, which the rawblobLimits suite asserts separately.
