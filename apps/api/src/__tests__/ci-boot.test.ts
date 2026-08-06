@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 vi.mock("../prisma.js", () => ({
   prisma: {
@@ -75,6 +75,53 @@ describe("sweepCiWorkspaces", () => {
 
   it("is a no-op, not an error, when there is nothing to sweep", async () => {
     await expect(sweepCiWorkspaces()).resolves.toBeUndefined();
+  });
+
+  // REGRESSION (issue #86): the same release that added this sweep also moved the CI
+  // root to /ci via FORGEHUB_CI_ROOT. Sweeping only the CURRENT root would mean that
+  // on every existing install, the workspaces already stranded at the old default —
+  // full repo clones, the exact leak this function exists to close — became
+  // permanently invisible on the upgrade that was supposed to fix them.
+  it("also sweeps the DEFAULT root's workspaces after FORGEHUB_CI_ROOT relocates the tree", async () => {
+    // Debris at the legacy location, written before the relocation.
+    const legacyWork = join(`${root}-ci`, ".work");
+    const legacyWs = join(legacyWork, "run-old-build");
+    await mkdir(join(legacyWs, ".git"), { recursive: true });
+    await writeFile(join(legacyWs, ".git", "packed-refs"), "stale\n", "utf8");
+
+    // A log at the legacy root, which is the operator's to keep or delete.
+    const legacyLog = join(`${root}-ci`, "owner/widget.git", "run-old", "build.log");
+    await mkdir(dirname(legacyLog), { recursive: true });
+    await writeFile(legacyLog, "old output\n", "utf8");
+
+    const relocated = await mkdtemp(join(tmpdir(), "ci-boot-new-root-"));
+    process.env["FORGEHUB_CI_ROOT"] = relocated;
+    try {
+      const newWs = join(relocated, ".work", "run-new-build");
+      await mkdir(newWs, { recursive: true });
+
+      await sweepCiWorkspaces();
+
+      expect(await exists(legacyWs)).toBe(false);
+      expect(await exists(legacyWork)).toBe(false);
+      expect(await exists(newWs)).toBe(false);
+      // Logs are never collateral, at either root.
+      expect(await exists(legacyLog)).toBe(true);
+    } finally {
+      delete process.env["FORGEHUB_CI_ROOT"];
+      await rm(relocated, { recursive: true, force: true });
+    }
+  });
+
+  it("does not sweep twice when FORGEHUB_CI_ROOT points at the default location", async () => {
+    process.env["FORGEHUB_CI_ROOT"] = `${root}-ci`;
+    try {
+      const { legacyCiWorkRoot } = await import("../git-storage.js");
+      expect(legacyCiWorkRoot()).toBeNull();
+      await expect(sweepCiWorkspaces()).resolves.toBeUndefined();
+    } finally {
+      delete process.env["FORGEHUB_CI_ROOT"];
+    }
   });
 });
 

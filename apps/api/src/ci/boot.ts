@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { prisma } from "../prisma.js";
-import { ciWorkRoot } from "../git-storage.js";
+import { ciWorkRoot, legacyCiWorkRoot } from "../git-storage.js";
 
 /**
  * CI startup recovery (issue #86, Tier 0).
@@ -29,11 +29,17 @@ import { ciWorkRoot } from "../git-storage.js";
  * by construction. Best-effort — a disk error here must never stop the API booting.
  */
 export async function sweepCiWorkspaces(): Promise<void> {
-  const workRoot = ciWorkRoot();
-  try {
-    await rm(workRoot, { recursive: true, force: true });
-  } catch (err) {
-    console.error("[ci-boot] failed to sweep CI workspaces", err);
+  // Both roots: the one in use, and — when FORGEHUB_CI_ROOT has moved the CI tree —
+  // the default one it moved away from. Relocating the root is exactly the upgrade
+  // that would otherwise strand every workspace an interrupted job left behind,
+  // making the leak this function exists to fix permanent for existing installs.
+  const roots = [ciWorkRoot(), legacyCiWorkRoot()].filter((r): r is string => r !== null);
+  for (const workRoot of roots) {
+    try {
+      await rm(workRoot, { recursive: true, force: true });
+    } catch (err) {
+      console.error(`[ci-boot] failed to sweep CI workspaces at ${workRoot}`, err);
+    }
   }
 }
 

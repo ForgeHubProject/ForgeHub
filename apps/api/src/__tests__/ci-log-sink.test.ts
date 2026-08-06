@@ -57,6 +57,7 @@ describe("LogSink byte cap", () => {
   it("stops at the cap and marks the truncation once, however much more is thrown at it", async () => {
     const cap = 4096;
     const { sink, path } = sinkAt(cap);
+    const contentCap = sink.contentCapacity;
 
     // 1 MiB of output against a 4 KiB cap — the `yes > /dev/stdout` shape.
     const chunk = Buffer.alloc(64 * 1024, 0x61);
@@ -66,34 +67,55 @@ describe("LogSink byte cap", () => {
     const body = await readFile(path, "utf8");
     expect(sink.isTruncated).toBe(true);
 
-    // The kept prefix is exactly the cap; the only overrun is the marker itself.
-    const marker = body.slice(cap);
-    expect(body.slice(0, cap)).toBe("a".repeat(cap));
+    // The kept prefix runs to the content cap; the marker occupies the rest.
+    const marker = body.slice(contentCap);
+    expect(body.slice(0, contentCap)).toBe("a".repeat(contentCap));
     expect(marker).toContain("log truncated");
     expect(marker).toContain("CI_MAX_LOG_BYTES");
 
     // Written ONCE — not once per discarded chunk.
     expect(body.split("log truncated").length - 1).toBe(1);
 
-    // The file on disk is bounded by cap + one marker, not by what the step emitted.
+    // Bounded by what the sink was told, not by what the step emitted.
+    expect((await stat(path)).size).toBeLessThan(1024 * 1024);
+  });
+
+  // REGRESSION (issue #86): the marker used to be appended ON TOP of the cap, so a
+  // truncated log was `cap + markerLen` bytes on disk. The log endpoint serves at
+  // most `cap` bytes, so it sliced the marker straight back off and every reader saw
+  // a log that just stopped. Reserving the marker's bytes out of the cap is what
+  // makes it survive the trip. If this assertion is relaxed, that bug is back.
+  it("keeps the whole file — marker included — inside the cap, so the marker survives serving", async () => {
+    const cap = 4096;
+    const { sink, path } = sinkAt(cap);
+    for (let i = 0; i < 100; i++) sink.write("x".repeat(100));
+    await sink.end();
+
     const size = (await stat(path)).size;
-    expect(size).toBeLessThan(cap + 512);
-    expect(size).toBeLessThan(1024 * 1024);
+    expect(size).toBeLessThanOrEqual(cap);
+
+    // Simulate exactly what the route serves for a file this size: the first `cap`
+    // bytes. The marker must be in there.
+    const served = (await readFile(path, "utf8")).slice(0, cap);
+    expect(served).toContain("log truncated");
   });
 
   it("splits the chunk that crosses the cap instead of dropping it whole", async () => {
-    const { sink, path } = sinkAt(10);
-    sink.write("12345");
-    sink.write("6789ABCDEF"); // crosses at "0"… keeps 5 more bytes
+    const cap = 4096;
+    const { sink, path } = sinkAt(cap);
+    const contentCap = sink.contentCapacity;
+    sink.write("1".repeat(contentCap - 5));
+    sink.write("6789ABCDEF"); // crosses the content cap; the first 5 bytes still land
     await sink.end();
     const body = await readFile(path, "utf8");
-    expect(body.startsWith("123456789A")).toBe(true);
+    expect(body.slice(contentCap - 5, contentCap)).toBe("6789A");
     expect(body).toContain("log truncated");
   });
 
   it("discards everything after truncation, including later runner framing", async () => {
-    const { sink, path } = sinkAt(8);
-    sink.write("XXXXXXXXXX");
+    const cap = 4096;
+    const { sink, path } = sinkAt(cap);
+    sink.write("X".repeat(sink.contentCapacity + 10));
     sink.write("\n[runner] step exited with code 3\n");
     await sink.end();
     expect(await readFile(path, "utf8")).not.toContain("exited with code 3");
@@ -105,7 +127,7 @@ describe("LogSink byte cap", () => {
     // the child's output in this process's heap.
     const path = join(dir, "backpressure.txt");
     const stream = createWriteStream(path, { flags: "w", highWaterMark: 16 });
-    const sink = new LogSink(stream, 64);
+    const sink = new LogSink(stream, 4096);
 
     let sawCongestion = false;
     for (let i = 0; i < 4; i++) {

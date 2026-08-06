@@ -1,12 +1,13 @@
 import { stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { summarizeCheckRuns, type CheckSummary } from "../ci/summary.js";
 import { createRerun } from "../ci/trigger.js";
 import { cancelRun, isCiEnabled } from "../ci/runner.js";
-import { maxLogBytes } from "../ci/log-sink.js";
+import { maxLogBytes, serveTruncationMarker } from "../ci/log-sink.js";
 
 /**
  * Actions-style CI read API (issue #86).
@@ -211,13 +212,39 @@ export async function ciRoutes(app: FastifyInstance) {
     // actually diagnoses from — and matches how the runner truncates.
     const cap = maxLogBytes();
     const truncated = size > cap;
-    const end = truncated ? cap - 1 : undefined;
 
     reply.type("text/plain; charset=utf-8");
     reply.header("x-forgehub-log-truncated", truncated ? "true" : "false");
-    if (!truncated) reply.header("content-length", String(size));
 
-    return reply.send(createReadStream(check.logPath, end === undefined ? {} : { start: 0, end }));
+    if (!truncated) {
+      reply.header("content-length", String(size));
+      return reply.send(createReadStream(check.logPath));
+    }
+
+    // A log bigger than the cap is one the runner's sink did NOT write — it predates
+    // the cap, or the cap was lowered since. Cutting it silently is the failure this
+    // route had before: the reader gets a log that simply stops, with no way to tell
+    // a truncated log from a job that died quietly. The `x-forgehub-log-truncated`
+    // header is not enough on its own, because the only in-tree consumer
+    // (`getCheckLog` in apps/web) reads the BODY and drops the headers, and so does
+    // anyone piping this endpoint through `curl`. So the marker goes in the body,
+    // and it is carved OUT OF the cap rather than added to it — the response stays
+    // within `cap` bytes, which is the whole point of the bound.
+    const marker = serveTruncationMarker(cap);
+    const markerBytes = Buffer.from(marker, "utf8");
+    const headBytes = Math.max(0, cap - markerBytes.length);
+
+    reply.header("content-length", String(headBytes + markerBytes.length));
+    return reply.send(
+      Readable.from(
+        (async function* () {
+          if (headBytes > 0) {
+            yield* createReadStream(check.logPath as string, { start: 0, end: headBytes - 1 });
+          }
+          yield markerBytes;
+        })(),
+      ),
+    );
   });
 
   // ── POST re-run (writer-gated) ────────────────────────────────────────────────
