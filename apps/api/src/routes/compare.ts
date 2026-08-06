@@ -98,10 +98,26 @@ export async function compareRoutes(app: FastifyInstance) {
               where: { handlerId_baseBlobSha_headBlobSha: { handlerId: engineId, baseBlobSha, headBlobSha } },
             });
 
-            const [baseBuffer, headBuffer] = await Promise.all([
+            const [baseRead, headRead] = await Promise.all([
               readBlobAsBuffer(storageKey, baseSnap.gitCommitSha, baseSnap.sourceFile),
               readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
             ]);
+
+            // Anything short of two readable buffers — absent, a directory, or
+            // larger than the wasm engine's buffer — only disqualifies the
+            // *fast path*. Unlike /filediff, this route is not answering "what
+            // does this file look like at this commit": it compares two
+            // snapshots that are already ingested, and the fallback below builds
+            // a real comparison out of those entities without touching git.
+            //
+            // So an over-cap blob must not 413 here. Doing so replaces a working
+            // 200 with a hard failure for the exact two handlers the fast path
+            // serves, and contradicts the invariant this file documents below:
+            // "/filediff refuses the same file with a 404; here the fast path is
+            // skipped and the snapshot fallback serves." Falling through is not
+            // a lie about the file — nothing here ever claims it is missing.
+            const baseBuffer = baseRead.kind === "ok" ? baseRead.buf : null;
+            const headBuffer = headRead.kind === "ok" ? headRead.buf : null;
 
             if (baseBuffer && headBuffer) {
               let diff: StructuredDiff | undefined;
