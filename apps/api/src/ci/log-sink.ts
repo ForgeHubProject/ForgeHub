@@ -12,9 +12,11 @@ import type { WriteStream } from "node:fs";
  *
  * Two fixes, both here:
  *
- *  - **Cap.** At most `capBytes` reach disk per job. The chunk that crosses the
- *    cap is written truncated, a one-line marker is appended, and every later
- *    write is dropped. The job itself is NOT killed — a noisy job is not
+ *  - **Cap.** At most `capBytes` reach disk per job, MARKER INCLUDED. The chunk
+ *    that crosses the cap is written truncated, a one-line marker is appended
+ *    inside the cap, and every later write is dropped. Keeping the marker inside
+ *    the cap is what makes it survive the log endpoint, which serves at most
+ *    `capBytes`. The job itself is NOT killed — a noisy job is not
  *    necessarily a failing one, and changing a job's conclusion because of its
  *    output volume would be a surprising new failure mode.
  *  - **Backpressure.** `write()` reports whether the stream accepted the bytes,
@@ -41,14 +43,42 @@ export function truncationMarker(cap: number): string {
   return `\n[runner] --- log truncated: this job exceeded the ${cap}-byte per-job log cap (CI_MAX_LOG_BYTES); all further output was discarded ---\n`;
 }
 
+/**
+ * The marker the LOG ENDPOINT appends when it has to cut a log that is already
+ * bigger than the cap — a log written before the cap existed, or written by a
+ * future writer that does not go through this sink. Distinct wording from
+ * `truncationMarker` so a reader can tell "the runner stopped writing" apart from
+ * "the server stopped sending", but both contain the same `log truncated` phrase.
+ */
+export function serveTruncationMarker(cap: number): string {
+  return `\n[forgehub] --- log truncated: this log is larger than the ${cap}-byte serving cap (CI_MAX_LOG_BYTES); only the beginning is shown ---\n`;
+}
+
 export class LogSink {
   private written = 0;
   private truncated = false;
+  /** Bytes of step output that may reach disk — the cap MINUS room for the marker. */
+  private readonly contentCap: number;
+  private readonly marker: string;
 
   constructor(
     private readonly stream: WriteStream,
     private readonly capBytes: number = maxLogBytes(),
-  ) {}
+  ) {
+    // The marker is reserved OUT OF the cap, not added on top of it. If it were
+    // added on top the finished file would be `cap + markerLen` bytes, and the log
+    // endpoint — which serves at most `cap` bytes — would slice the marker straight
+    // back off, so the one signal that says "output is missing here" would never
+    // reach a single reader. Reserving it means the marker is always inside the
+    // first `cap` bytes and therefore always served.
+    this.marker = truncationMarker(capBytes);
+    this.contentCap = Math.max(0, capBytes - Buffer.byteLength(this.marker));
+  }
+
+  /** Bytes of step output this sink will accept before truncating. */
+  get contentCapacity(): number {
+    return this.contentCap;
+  }
 
   /** Total bytes handed to the stream so far (marker included). */
   get bytesWritten(): number {
@@ -69,7 +99,7 @@ export class LogSink {
     if (this.truncated) return true;
 
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
-    const room = this.capBytes - this.written;
+    const room = this.contentCap - this.written;
 
     if (buf.length <= room) {
       this.written += buf.length;
@@ -98,8 +128,7 @@ export class LogSink {
 
   private markTruncated(): void {
     this.truncated = true;
-    const marker = truncationMarker(this.capBytes);
-    this.written += Buffer.byteLength(marker);
-    this.stream.write(marker);
+    this.written += Buffer.byteLength(this.marker);
+    this.stream.write(this.marker);
   }
 }

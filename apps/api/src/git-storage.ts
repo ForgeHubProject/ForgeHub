@@ -158,13 +158,18 @@ export async function removeAvatar(userId: string): Promise<void> {
 // workspace under `<root>-ci/.work/` and deletes it when the job finishes.
 //
 // `FORGEHUB_CI_ROOT` relocates that tree wholesale. The shipped compose stack sets
-// it so the CI tree lands on its OWN volume: a job workspace must not be able to
-// sit next to the SQLite database and the bare repos, and a runaway job filling
-// its volume must not take the database's volume down with it.
+// it so the CI tree lands on its OWN volume, with its own lifecycle and its own
+// mount point to hang a quota off: a job workspace should not sit in the same
+// directory tree as the SQLite database and the bare repos.
+
+/** The default location, used when `FORGEHUB_CI_ROOT` is unset: `<git-root>-ci`. */
+function defaultCiRoot(): string {
+  return `${path.resolve(storageRoot())}-ci`;
+}
 
 function ciRoot(): string {
   const override = process.env["FORGEHUB_CI_ROOT"]?.trim();
-  return override ? path.resolve(override) : `${path.resolve(storageRoot())}-ci`;
+  return override ? path.resolve(override) : defaultCiRoot();
 }
 
 /** Resolve a path under the CI root, guarding against traversal. */
@@ -201,6 +206,25 @@ export function ciWorkspaceDir(runId: string, jobId: string): string {
  */
 export function ciWorkRoot(): string {
   return ciPathFromKey(".work");
+}
+
+/**
+ * The work root at the DEFAULT location, when `FORGEHUB_CI_ROOT` has moved the CI
+ * tree somewhere else — otherwise null.
+ *
+ * Relocating the CI root is a one-way move: nothing copies the old tree across, so
+ * every workspace an interrupted job left behind at the old location becomes
+ * invisible to the boot sweep on the very upgrade that introduced the sweep. Those
+ * workspaces are full repo clones and nothing else will ever delete them. The sweep
+ * therefore clears both roots. (Old per-run LOGS are a different matter — they are
+ * still readable through the API for as long as their runs exist, so deleting them
+ * is the operator's call, documented in the README.)
+ */
+export function legacyCiWorkRoot(): string | null {
+  const override = process.env["FORGEHUB_CI_ROOT"]?.trim();
+  if (!override) return null;
+  const legacy = defaultCiRoot();
+  return path.resolve(override) === legacy ? null : path.join(legacy, ".work");
 }
 
 /** Ensure a directory exists (used before writing a log / cloning a workspace). */

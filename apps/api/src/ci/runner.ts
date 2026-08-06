@@ -43,15 +43,18 @@ import { LogSink } from "./log-sink.js";
  * later stage of #86 that MUST land before this is safe for untrusted authors.
  *
  * Tier 0 hardening (#86) adds three more bounds, and again NOT a boundary:
- *   - a step's environment is CONSTRUCTED FROM AN ALLOWLIST (`step-env.ts`), so
- *     the API's secrets — above all JWT_SECRET — are structurally absent rather
- *     than inherited. This is the one leak that would have been permanent.
+ *   - a step's environment is CONSTRUCTED FROM AN ALLOWLIST (`step-env.ts`)
+ *     instead of inherited from this process. Read `step-env.ts` for what that
+ *     does and — importantly — what it does NOT do: it is not a secrecy
+ *     guarantee, because a step is a child of this process running as the same
+ *     uid and can read this process's environment out of `/proc`.
  *   - a job's log is BYTE-CAPPED with backpressure (`log-sink.ts`), so a step
  *     cannot fill the volume out from under the rest of the instance.
  *   - the workspace clone uses `--no-hardlinks`, so workspace corruption is no
  *     longer canonical-repo corruption.
- * A step still runs as the API's OS user and can still reach the database and the
- * bare repos by absolute path. Do not describe any of this as a sandbox.
+ * A step still runs as the API's OS user and can still reach the database, the
+ * bare repos and this process's own memory and environment. Do not describe any
+ * of this as a sandbox, and do not describe any secret as safe from a step.
  * ---------------------------------------------------------------------------
  */
 
