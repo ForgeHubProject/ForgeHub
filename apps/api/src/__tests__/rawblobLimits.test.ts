@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 /** Every warning emitted so far, joined — the dedupe key is `name=value`. */
-const warnings = () => warn.mock.calls.map((c) => c.join(" ")).join("\n");
+const warnings = () => warn.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
 
 describe("rawblob env limits", () => {
   it("is unlimited by default and reports nothing", () => {
