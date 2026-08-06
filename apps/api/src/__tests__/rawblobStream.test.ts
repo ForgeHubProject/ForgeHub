@@ -394,8 +394,14 @@ async function readAtRate(
     childAlive: boolean;
   }>((resolve) => {
       // A tiny read buffer so backpressure reaches the server almost at once
-      // instead of hiding behind the client's own queue.
-      const sock = netConnect({ host: u.hostname, port: Number(u.port), highWaterMark: perTick });
+      // instead of hiding behind the client's own queue. `highWaterMark` is a
+      // real net.connect option at runtime (it reaches the Readable), but
+      // @types/node does not carry it on NetConnectOpts, hence the cast.
+      const sock = netConnect({
+        host: u.hostname,
+        port: Number(u.port),
+        highWaterMark: perTick,
+      } as unknown as Parameters<typeof netConnect>[0]);
       let status = 0;
       let bodyBytes = 0;
       let header = Buffer.alloc(0);
