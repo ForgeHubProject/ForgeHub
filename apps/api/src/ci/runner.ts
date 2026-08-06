@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
 import {
   bareRepoPathFromKey,
@@ -13,6 +13,8 @@ import { prisma } from "../prisma.js";
 import { parseWorkflow, defaultWorkflowName, type WorkflowStep } from "./workflows.js";
 import { git } from "../git-utils.js";
 import { maybeAutoMergeForCommit } from "../auto-merge.js";
+import { buildRunnerGitEnv, buildStepEnv } from "./step-env.js";
+import { LogSink } from "./log-sink.js";
 
 /**
  * ⚠️  SECURITY — READ BEFORE TOUCHING THIS FILE  ⚠️
@@ -39,6 +41,17 @@ import { maybeAutoMergeForCommit } from "../auto-merge.js";
  * disk. These bound blast radius and resource use — they do NOT sandbox the code.
  * Container / VM / user isolation and network-egress control remain the explicit
  * later stage of #86 that MUST land before this is safe for untrusted authors.
+ *
+ * Tier 0 hardening (#86) adds three more bounds, and again NOT a boundary:
+ *   - a step's environment is CONSTRUCTED FROM AN ALLOWLIST (`step-env.ts`), so
+ *     the API's secrets — above all JWT_SECRET — are structurally absent rather
+ *     than inherited. This is the one leak that would have been permanent.
+ *   - a job's log is BYTE-CAPPED with backpressure (`log-sink.ts`), so a step
+ *     cannot fill the volume out from under the rest of the instance.
+ *   - the workspace clone uses `--no-hardlinks`, so workspace corruption is no
+ *     longer canonical-repo corruption.
+ * A step still runs as the API's OS user and can still reach the database and the
+ * bare repos by absolute path. Do not describe any of this as a sandbox.
  * ---------------------------------------------------------------------------
  */
 
@@ -258,7 +271,8 @@ async function executeCheck(run: RunCtx, check: CheckCtx): Promise<JobConclusion
     data: { status: "running", startedAt: new Date(), logPath },
   });
 
-  const log = createWriteStream(logPath, { flags: "w" });
+  // Byte-capped: a step cannot grow this file without bound (see log-sink.ts).
+  const log = new LogSink(createWriteStream(logPath, { flags: "w" }));
   const workspace = ciWorkspaceDir(run.id, check.jobId);
   let conclusion: JobConclusion = "success";
 
@@ -300,7 +314,7 @@ async function executeCheck(run: RunCtx, check: CheckCtx): Promise<JobConclusion
 type LoadedJob = { steps: WorkflowStep[]; env: Record<string, string> };
 
 /** Read + parse the workflow file at the commit and return the job's steps + merged env (null on error, logged). */
-async function loadJob(run: RunCtx, jobId: string, log: WriteStream): Promise<LoadedJob | null> {
+async function loadJob(run: RunCtx, jobId: string, log: LogSink): Promise<LoadedJob | null> {
   let content: string;
   try {
     content = await git(run.storageKey, ["show", `${run.commitSha}:${run.workflowPath}`]);
@@ -321,18 +335,36 @@ async function loadJob(run: RunCtx, jobId: string, log: WriteStream): Promise<Lo
   return { steps: job.steps, env: job.env };
 }
 
-/** Fresh clone of `sha` into `workspace` (detached checkout). Returns success. */
-async function cloneCommit(storageKey: string, sha: string, workspace: string, log: WriteStream): Promise<boolean> {
+/**
+ * Fresh clone of `sha` into `workspace` (detached checkout). Returns success.
+ *
+ * `--no-hardlinks` is load-bearing, not a tidiness flag. Cloning from a LOCAL PATH
+ * makes git hardlink `.git/objects/*` into the source repo by default, so the
+ * workspace's object files ARE the canonical bare repo's object files. A step that
+ * corrupts, truncates or rewrites an object in its own throwaway workspace would
+ * therefore corrupt the repo everyone else pulls from — silently, and surviving
+ * the workspace's deletion. `--no-hardlinks` forces a real copy, which costs disk
+ * and a little time and buys back the property that the workspace is disposable.
+ */
+async function cloneCommit(storageKey: string, sha: string, workspace: string, log: LogSink): Promise<boolean> {
   const barePath = bareRepoPathFromKey(storageKey);
   await ensureCiDir(path.dirname(workspace));
   await removeCiWorkspace(workspace).catch(() => {});
 
-  const clone = await runProcess("git", ["clone", "--quiet", barePath, workspace], process.cwd(), CLONE_TIMEOUT_MS, log);
+  const gitEnv = buildRunnerGitEnv();
+  const clone = await runProcess(
+    "git",
+    ["clone", "--quiet", "--no-hardlinks", barePath, workspace],
+    process.cwd(),
+    CLONE_TIMEOUT_MS,
+    log,
+    gitEnv,
+  );
   if (clone.code !== 0) {
     write(log, `\n[runner] clone failed (exit ${clone.code})\n`);
     return false;
   }
-  const checkout = await runProcess("git", ["-C", workspace, "checkout", "--quiet", "--detach", sha], process.cwd(), CLONE_TIMEOUT_MS, log);
+  const checkout = await runProcess("git", ["-C", workspace, "checkout", "--quiet", "--detach", sha], process.cwd(), CLONE_TIMEOUT_MS, log, gitEnv);
   if (checkout.code !== 0) {
     write(log, `\n[runner] could not check out ${sha} (exit ${checkout.code})\n`);
     return false;
@@ -345,14 +377,17 @@ async function cloneCommit(storageKey: string, sha: string, workspace: string, l
  * (jobTimeoutMs) is shared across steps: when it expires the running step's whole
  * process group is killed and the job fails with a timeout note. A cancel likewise
  * kills the in-flight step (via cancelRun → killGroup) and returns "cancelled".
- * `env` is layered over the runner's own environment for every step.
+ *
+ * `env` is the workflow's/job's own `env:` map. It is layered over a CONSTRUCTED
+ * minimal environment (see step-env.ts) — NOT over the API process's environment,
+ * which is how JWT_SECRET used to reach every step.
  */
 async function runSteps(
   runId: string,
   steps: WorkflowStep[],
   env: Record<string, string>,
   workspace: string,
-  log: WriteStream,
+  log: LogSink,
 ): Promise<JobConclusion> {
   const deadline = Date.now() + jobTimeoutMs();
   for (let i = 0; i < steps.length; i++) {
@@ -370,7 +405,7 @@ async function runSteps(
       return "failure";
     }
 
-    const res = await runProcess("sh", ["-c", step.run], workspace, remaining, log, env);
+    const res = await runProcess("sh", ["-c", step.run], workspace, remaining, log, buildStepEnv(env, workspace));
     // A cancel kills the process group; distinguish it from a genuine step failure.
     if (cancelRequested.has(runId)) {
       write(log, `\n[runner] run cancelled — process killed.\n`);
@@ -394,17 +429,24 @@ type ProcResult = { code: number | null; timedOut: boolean };
 
 /**
  * Spawn a command in its own process group, stream stdout+stderr interleaved into
- * `log`, and enforce `timeoutMs` by SIGKILL-ing the whole group on expiry. When
- * `env` is given it is layered over the runner's own environment. The spawned child
- * is published as `activeChild` so cancelRun() can kill it mid-flight.
+ * `log`, and enforce `timeoutMs` by SIGKILL-ing the whole group on expiry. The
+ * spawned child is published as `activeChild` so cancelRun() can kill it mid-flight.
+ *
+ * ⚠️  `env` is the child's COMPLETE environment — it REPLACES the API process's
+ * environment rather than extending it. Every caller must pass one, and must build
+ * it through `step-env.ts`. Do NOT reintroduce `{ ...process.env, ...env }` here,
+ * and do NOT make `env` optional again: an omitted `env` means Node hands the child
+ * `process.env`, which is precisely the JWT_SECRET leak this replaced. The
+ * parameter is required so that omission is a compile error rather than a silent
+ * regression.
  */
 function runProcess(
   command: string,
   args: string[],
   cwd: string,
   timeoutMs: number,
-  log: WriteStream,
-  env?: Record<string, string>,
+  log: LogSink,
+  env: Record<string, string>,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
@@ -413,7 +455,7 @@ function runProcess(
         cwd,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        ...(env ? { env: { ...process.env, ...env } } : {}),
+        env,
       });
     } catch (err) {
       write(log, `\n[runner] failed to spawn ${command}: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -431,9 +473,19 @@ function runProcess(
       killGroup(child.pid);
     }, timeoutMs);
 
-    const onData = (chunk: Buffer) => log.write(chunk);
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
+    // Backpressure: when the log stream is congested, PAUSE the pipe rather than
+    // letting Node queue the child's output in the API process's heap. A step that
+    // outruns the disk used to be an unbounded memory grower as well as an
+    // unbounded disk grower. Once the sink is truncated it accepts (and discards)
+    // everything, so this never pauses a job forever.
+    const pipeData = (stream: NodeJS.ReadableStream) => (chunk: Buffer) => {
+      if (!log.write(chunk)) {
+        stream.pause();
+        log.onDrain(() => stream.resume());
+      }
+    };
+    if (child.stdout) child.stdout.on("data", pipeData(child.stdout));
+    if (child.stderr) child.stderr.on("data", pipeData(child.stderr));
 
     child.on("error", (err) => {
       if (settled) return;
@@ -469,10 +521,16 @@ function killGroup(pid: number | undefined): void {
 
 // ─── Stream helpers ────────────────────────────────────────────────────────────
 
-function write(log: WriteStream, s: string): void {
+/**
+ * Runner-authored framing line. Counts against the same byte cap as step output —
+ * there is deliberately no privileged channel that a noisy job cannot exhaust,
+ * because "the runner may always append" is exactly the unbounded write the cap
+ * exists to remove.
+ */
+function write(log: LogSink, s: string): void {
   log.write(s);
 }
 
-function endStream(log: WriteStream): Promise<void> {
-  return new Promise((resolve) => log.end(resolve));
+function endStream(log: LogSink): Promise<void> {
+  return log.end();
 }

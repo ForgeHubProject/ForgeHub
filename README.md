@@ -216,16 +216,34 @@ branch. **Retention** caps a repo's completed-run history: after each new run is
 enqueued, runs older than `FORGEHUB_CI_RETENTION` (default 200) are pruned — DB rows
 and their on-disk logs.
 
+**Tier 0 hardening.** A step's environment is **constructed from an allowlist**
+(`PATH`, locale, plus the runner's own `CI`/`HOME`/`GIT_TERMINAL_PROMPT`) with the
+workflow's `env:` layered on top — the API's own environment is never inherited, so
+`JWT_SECRET`, `DATABASE_URL`, the storage roots and any SMTP credential are
+*structurally absent* from every step. Per-job logs are **byte-capped**
+(`CI_MAX_LOG_BYTES`, default 10 MiB) with backpressure, and the log endpoint streams
+within the same bound, so a noisy step can neither fill the volume nor be replayed
+into the API's heap. The workspace clone uses `--no-hardlinks`, so a job's
+`.git/objects` are private copies rather than shared inodes with the canonical bare
+repo. The API container runs as a **non-root uid**, and CI logs/workspaces live on
+their **own volume** (`FORGEHUB_CI_ROOT`, `/ci` in the shipped compose stack) rather
+than beside the database. On boot the API sweeps leftover job workspaces and
+finalizes runs a restart orphaned — an orphaned run reads as a permanently pending
+check and would otherwise wedge branch protection forever.
+
 > ⚠️ **Security model — single-tenant, self-hosted only.** The runner executes
 > **repo-author-controlled shell** directly on the host as the API process user,
 > with no container/VM/user sandbox. It is therefore **hard-off unless you set
 > `FORGEHUB_CI=1`**, and only meant for an instance where every pusher is already
 > trusted with shell access. When `FORGEHUB_CI` is unset, pushes record nothing at
-> all — no runs, no parsing, and re-run is refused. The v1 job timeout, cancel, and
-> retention controls **bound blast radius and disk/CPU use — they are containment,
-> not isolation**: they do not sandbox the code. Multi-tenant isolation (containers,
-> ephemeral runners, egress control) is a later stage of the epic and must land
-> before untrusted authors can be allowed to run CI.
+> all — no runs, no parsing, and re-run is refused. The job timeout, cancel,
+> retention and Tier 0 controls **bound blast radius and disk/CPU use — they are
+> containment, not isolation**: they do not sandbox the code. In particular, a step
+> still runs as the API's OS user, and while one process is both the API and the
+> runner that user must be able to write the database and every bare repo — so a
+> step can still reach both by absolute path. Multi-tenant isolation (extracting the
+> runner, then containers, ephemeral runners, egress control) is a later stage of the
+> epic and must land before untrusted authors can be allowed to run CI.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -239,7 +257,10 @@ and their on-disk logs.
 
 **Env:** `FORGEHUB_CI=1` enables the runner (default: off). `CI_JOB_TIMEOUT`
 bounds each job in seconds (default: 600). `FORGEHUB_CI_RETENTION` caps a repo's
-retained completed runs (default: 200).
+retained completed runs (default: 200). `CI_MAX_LOG_BYTES` caps each job's log in
+bytes (default: 10 MiB) and also bounds what the log endpoint serves.
+`FORGEHUB_CI_ROOT` relocates CI logs + workspaces off the git/database volume
+(default: `<GIT_STORAGE_ROOT>-ci`; the shipped compose stack sets `/ci`).
 
 ### Git over HTTPS
 

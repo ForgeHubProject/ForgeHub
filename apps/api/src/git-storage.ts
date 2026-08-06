@@ -156,9 +156,15 @@ export async function removeAvatar(userId: string): Promise<void> {
 // separation the release assets use. Logs are keyed by
 // `<storageKey>/<runId>/<jobId>.log`; the runner clones each job into a temp
 // workspace under `<root>-ci/.work/` and deletes it when the job finishes.
+//
+// `FORGEHUB_CI_ROOT` relocates that tree wholesale. The shipped compose stack sets
+// it so the CI tree lands on its OWN volume: a job workspace must not be able to
+// sit next to the SQLite database and the bare repos, and a runaway job filling
+// its volume must not take the database's volume down with it.
 
 function ciRoot(): string {
-  return `${path.resolve(storageRoot())}-ci`;
+  const override = process.env["FORGEHUB_CI_ROOT"]?.trim();
+  return override ? path.resolve(override) : `${path.resolve(storageRoot())}-ci`;
 }
 
 /** Resolve a path under the CI root, guarding against traversal. */
@@ -185,6 +191,16 @@ export function ciRunDir(storageKey: string, runId: string): string {
 /** Throwaway per-job clone workspace: `<root>-ci/.work/<runId>-<jobId>`. */
 export function ciWorkspaceDir(runId: string, jobId: string): string {
   return ciPathFromKey(path.join(".work", `${runId}-${jobId}`));
+}
+
+/**
+ * The directory holding every throwaway job workspace: `<root>-ci/.work`.
+ * Everything under it is disposable by construction — a workspace only exists
+ * while its job is executing — which is what lets the boot sweep delete the
+ * whole tree unconditionally.
+ */
+export function ciWorkRoot(): string {
+  return ciPathFromKey(".work");
 }
 
 /** Ensure a directory exists (used before writing a log / cloning a workspace). */
