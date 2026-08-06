@@ -8,7 +8,7 @@ import {
 } from "../handlers/index.js";
 import type { StructuredDiff, DiffChange } from "../handlers/types.js";
 import { canRead, resolveRepo } from "../repo-access.js";
-import { activeFormatsAtCommit, resolveBlobSha, readBlobAsBuffer, BLOB_BUFFER_MAX } from "../git-utils.js";
+import { activeFormatsAtCommit, resolveBlobSha, readBlobAsBuffer } from "../git-utils.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
 import { compareGltfSceneSnapshots } from "../handlers/gltf-scene/compare.js";
 import { comparePlainTextSnapshots } from "../handlers/plain-text/compare.js";
@@ -103,22 +103,19 @@ export async function compareRoutes(app: FastifyInstance) {
               readBlobAsBuffer(storageKey, targetSnap.gitCommitSha, targetSnap.sourceFile),
             ]);
 
-            // Like /filediff, this path feeds whole buffers to the wasm engine
-            // and is genuinely capped. A file over the cap used to fall through
-            // silently to the snapshot fallback (or nothing); name it instead
-            // (#157) — the blob diff the caller asked for cannot be computed,
-            // and the size says why.
-            const oversized = [headRead, baseRead].find((r) => r.kind === "too-large");
-            if (oversized?.kind === "too-large") {
-              return reply.status(413).send({
-                error: "File too large to diff",
-                path: baseSnap.sourceFile,
-                size: oversized.size,
-                limit: BLOB_BUFFER_MAX,
-              });
-            }
-            // A missing/not-a-file blob is not an error here: the snapshot
-            // fallback below still has an answer, so leave that path alone.
+            // Anything short of two readable buffers — absent, a directory, or
+            // larger than the wasm engine's buffer — only disqualifies the
+            // *fast path*. Unlike /filediff, this route is not answering "what
+            // does this file look like at this commit": it compares two
+            // snapshots that are already ingested, and the fallback below builds
+            // a real comparison out of those entities without touching git.
+            //
+            // So an over-cap blob must not 413 here. Doing so replaces a working
+            // 200 with a hard failure for the exact two handlers the fast path
+            // serves, and contradicts the invariant this file documents below:
+            // "/filediff refuses the same file with a 404; here the fast path is
+            // skipped and the snapshot fallback serves." Falling through is not
+            // a lie about the file — nothing here ever claims it is missing.
             const baseBuffer = baseRead.kind === "ok" ? baseRead.buf : null;
             const headBuffer = headRead.kind === "ok" ? headRead.buf : null;
 

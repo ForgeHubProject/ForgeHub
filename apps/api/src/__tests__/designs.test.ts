@@ -51,6 +51,22 @@ function gltf(nodeName: string, translation: [number, number, number]): Buffer {
   }), "utf8");
 }
 
+/** The same scene as `gltf`, packed into a binary GLB container (12-byte header
+ *  + one JSON chunk) — what Blender writes when it exports a .glb. */
+function glb(nodeName: string, translation: [number, number, number]): Buffer {
+  const jsonBytes = gltf(nodeName, translation);
+  const pad = (4 - (jsonBytes.length % 4)) % 4;
+  const chunkData = Buffer.concat([jsonBytes, Buffer.alloc(pad, 0x20)]);
+  const chunkHeader = Buffer.alloc(8);
+  chunkHeader.writeUInt32LE(chunkData.length, 0);
+  chunkHeader.writeUInt32LE(0x4e4f534a, 4); // "JSON"
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(0x46546c67, 0); // "glTF"
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + chunkHeader.length + chunkData.length, 8);
+  return Buffer.concat([header, chunkHeader, chunkData]);
+}
+
 /** Build a multipart/form-data body carrying a single binary file part. */
 function multipart(filename: string, buf: Buffer, mimetype = "application/octet-stream") {
   const boundary = "----fhtest" + randomBytes(8).toString("hex");
@@ -187,6 +203,27 @@ describe("snapshot ingestion", () => {
     });
   });
 
+  it("ingests a binary .glb into a Snapshot with a real entity tree", async () => {
+    mockNewDesignFlow("design-glb", "gearbox.glb");
+    vi.mocked(prisma.design.update).mockImplementation((async (args: { data: { currentVersion: number } }) => ({
+      id: "design-glb", issueId: "issue-1", name: "gearbox.glb", currentVersion: args.data.currentVersion,
+      createdById: "user-1", createdBy: { handle: "alice" }, createdAt: NOW,
+      versions: [{ version: 1, contentType: "model/gltf-binary", size: 10, snapshotId: "snap-1", storageKey: "repo-1/design-glb/1", uploadedBy: { handle: "alice" }, createdAt: NOW }],
+    })) as never);
+
+    const res = await upload(app, ownerToken, "gearbox.glb", glb("Housing", [4, 0, -2]), "model/gltf-binary");
+    expect(res.statusCode).toBe(201);
+    expect(res.json().version.hasSnapshot).toBe(true);
+
+    // The GLB decoded — nodes and transforms, not just "a snapshot exists".
+    const entities = (vi.mocked(prisma.snapshot.create).mock.calls[0]![0] as {
+      data: { entities: { create: { name: string; path: string; posX: number; posY: number; posZ: number }[] } };
+    }).data.entities.create;
+    expect(entities.map((e) => e.name)).toEqual(["Housing"]);
+    expect(entities.map((e) => e.path)).toEqual(["housing"]);
+    expect([entities[0]!.posX, entities[0]!.posY, entities[0]!.posZ]).toEqual([4, 0, -2]);
+  });
+
   it("stores an image with NO snapshot (snapshotId null, isImage true)", async () => {
     mockNewDesignFlow("design-3", "mockup.png");
     vi.mocked(prisma.design.update).mockImplementation((async (args: { data: { currentVersion: number } }) => ({
@@ -250,6 +287,47 @@ describe("version compare", () => {
     // PARITY: byte-for-byte identical to what the PR/commit compare path computes.
     const expected = await gltfSceneHandler.diff(v1, v2);
     expect(body.changes).toEqual(expected.changes);
+  });
+
+  // Two .glb uploads: before the ingest path took bytes, neither version got a
+  // snapshot, so this compare could only ever fall through to mode=binary.
+  it("runs a semantic diff between two binary .glb versions", async () => {
+    const v1 = glb("Landing Gear", [0, 0, 0]);
+    const v2 = glb("Landing Gear", [5, 0, 0]);
+
+    mockNewDesignFlow("design-g", "landing-gear.glb");
+    mockDesignUpdate("design-g", "landing-gear.glb");
+    await upload(app, ownerToken, "landing-gear.glb", v1, "model/gltf-binary");
+    vi.mocked(prisma.design.findFirst).mockResolvedValueOnce({
+      id: "design-g", issueId: "issue-1", name: "landing-gear.glb", currentVersion: 1, createdById: "user-1", createdAt: NOW,
+    } as never);
+    mockDesignUpdate("design-g", "landing-gear.glb");
+    await upload(app, ownerToken, "landing-gear.glb", v2, "model/gltf-binary");
+
+    // Both .glb versions were ingested — that is what unlocks the semantic branch.
+    for (const call of vi.mocked(prisma.designVersion.create).mock.calls) {
+      expect((call[0] as { data: { snapshotId: string | null } }).data.snapshotId).toEqual(expect.stringContaining("snap-"));
+    }
+
+    vi.mocked(prisma.design.findFirst).mockResolvedValue({ id: "design-g", issueId: "issue-1", name: "landing-gear.glb" } as never);
+    vi.mocked(prisma.designVersion.findMany).mockResolvedValue([
+      { version: 1, storageKey: "repo-1/design-g/1", contentType: "model/gltf-binary", size: v1.length, snapshotId: "snap-1" },
+      { version: 2, storageKey: "repo-1/design-g/2", contentType: "model/gltf-binary", size: v2.length, snapshotId: "snap-2" },
+    ] as never);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/repos/alice/gearbox/issues/7/designs/design-g/compare?from=1&to=2",
+      headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.mode).toBe("semantic");
+    expect(body.format).toBe("gltf-scene");
+    const moved = body.changes.find((c: { path: string }) => c.path === "landing-gear");
+    const posChild = moved.children.find((ch: { path: string }) => ch.path === "position");
+    expect(posChild.before).toEqual([0, 0, 0]);
+    expect(posChild.after).toEqual([5, 0, 0]);
   });
 
   it("caches the diff (DiffCache) keyed by git blob shas", async () => {
