@@ -177,6 +177,47 @@ describe("GET job log", () => {
     const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/none/log" });
     expect(res.statusCode).toBe(404);
   });
+
+  it("404s when the recorded logPath is a directory, not a file", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: dir } as never);
+    const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  // The route used to readFile() the whole log into a string before replying, so a
+  // single request for a large log pulled it entirely into the API's heap. Logs
+  // written before the runner's cap existed are still on disk, so the SERVING side
+  // has to bound itself independently of the writing side (issue #86).
+  it("serves at most CI_MAX_LOG_BYTES of an oversized log and flags the truncation", async () => {
+    const bigPath = join(dir, "big.log");
+    await writeFile(bigPath, "Z".repeat(200_000), "utf8");
+    process.env["CI_MAX_LOG_BYTES"] = "4096";
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: bigPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-forgehub-log-truncated"]).toBe("true");
+      expect(Buffer.byteLength(res.rawPayload)).toBe(4096);
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
+  });
+
+  it("serves a normal log whole and does not flag it truncated", async () => {
+    process.env["CI_MAX_LOG_BYTES"] = "4096";
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-forgehub-log-truncated"]).toBe("false");
+      expect(res.body).toBe("=== Build ===\n$ echo hi\nhi\n");
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
+  });
 });
 
 // ─── POST re-run / cancel (writer-gated, v1) ─────────────────────────────────────

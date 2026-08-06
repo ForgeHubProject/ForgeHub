@@ -8,8 +8,21 @@ services:
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — see .env.example}"
       PORT: "3001"
       GIT_STORAGE_ROOT: "/data/git-storage"
+      # CI logs and job workspaces live on their OWN volume (issue #86). Without
+      # this they default to "<GIT_STORAGE_ROOT>-ci", i.e. /data/git-storage-ci —
+      # the same volume as the SQLite database and every bare repo. A CI job is
+      # repo-author-controlled code, so that placement meant a job's throwaway
+      # workspace sat directly beside the database file, and a job that filled the
+      # disk took the database's volume with it.
+      FORGEHUB_CI_ROOT: "/ci"
     volumes:
+      # forgehub-data: the durable forge — SQLite DB + bare repos. Losing it loses
+      #                the instance.
+      # forgehub-ci:   CI logs and workspaces. Entirely reconstructible; safe to
+      #                delete wholesale, and the one an operator should size/quota
+      #                for a runaway job.
       - forgehub-data:/data
+      - forgehub-ci:/ci
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
@@ -28,3 +41,4 @@ services:
 
 volumes:
   forgehub-data:
+  forgehub-ci:
