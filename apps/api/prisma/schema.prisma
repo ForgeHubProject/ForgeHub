@@ -1047,8 +1047,8 @@ model ProjectItem {
 // GitLab-style design management, reimagined for engineering files: design/artifact
 // files attach directly to an ISSUE and version across uploads (uploading a file
 // under the same design name bumps `currentVersion`). An FHR-recognized format is
-// ingested into a Snapshot on upload (via the SAME handler.ingestFromUtf8Text
-// pipeline commits use), so a version carries an entity tree — which lets
+// ingested into a Snapshot on upload (via the SAME handler.ingest pipeline
+// commits use), so a version carries an entity tree — which lets
 // version-vs-version compare reuse the SAME handler.diff() + DiffCache machinery as
 // PR diffs (semantic where ingested, visual for images, byte summary otherwise).
 // Handler eligibility is by extension via the global handler registry — designs are

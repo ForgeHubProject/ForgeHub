@@ -282,9 +282,9 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     // is here because "the client can tell" is the property that actually
     // matters at the HTTP layer, and it is worth pinning independently.
     //
-    // The gating itself — the thing that saves a consumer with no
-    // Content-Length to check — is pinned by the two `openBlobStream` unit
-    // tests below, which is where the discriminating coverage lives.
+    // The detection itself — the thing that saves a consumer with no
+    // Content-Length to check — is pinned by the `openBlobStream` unit tests
+    // below, which is where the discriminating coverage lives.
     const { res } = await open(url("big.bin", headSha));
     expect(res.statusCode).toBe(200);
     await new Promise<void>((resolve) => res.once("data", () => resolve()));
@@ -295,60 +295,60 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     expect(outcome.error).not.toBeNull();
   }, 30_000);
 
-  it("openBlobStream turns a non-zero git exit into a stdout error, not a silent EOF", async () => {
+  it("openBlobStream reports a non-zero git exit out-of-band, where a silent EOF cannot hide it", async () => {
     // The discriminating test for the trap: an oid git cannot read makes it exit
-    // 128 having written nothing. Left alone, stdout would simply end — a
-    // consumer piping it sees a successful empty read. It must error instead.
-    const { stream } = openBlobStream(repo.storageKey, "0".repeat(40));
-    const outcome = await new Promise<{ ended: boolean; error: Error | null }>((resolve) => {
-      stream.resume();
-      stream.on("end", () => resolve({ ended: true, error: null }));
-      stream.on("error", (error) => resolve({ ended: false, error }));
-    });
-    expect(outcome.ended).toBe(false);
-    expect(outcome.error).not.toBeNull();
-    expect(String(outcome.error)).toMatch(/git cat-file exited/);
+    // 128 having written nothing. stdout simply ends — a consumer piping it sees
+    // a successful empty read and nothing anywhere says otherwise. The failure
+    // has to arrive through `onFailure`, which is not on stdout's lifecycle and
+    // so cannot be pre-empted by that EOF.
+    const failures: Error[] = [];
+    const child = openBlobStream(repo.storageKey, "0".repeat(40), (e) => failures.push(e));
+    child.stdout.resume();
+    await new Promise<void>((resolve) => child.once("close", () => resolve()));
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0])).toMatch(/git cat-file exited/);
   });
 
-  it("openBlobStream errors even when git dies AFTER delivering bytes and stdout EOFs first", async () => {
-    // The other half of the trap, and the one the gating exists for: when git
-    // has already written a prefix, stdout's `end` and the child's `exit` race,
-    // and `end` usually wins. A naive implementation ends the relay right there
-    // — a consumer sees a clean EOF after a partial file and no error anywhere.
-    // Bytes must have flowed AND the stream must still error.
-    const { child, stream } = openBlobStream(repo.storageKey, bigOid);
+  it("openBlobStream reports a git death that lands AFTER stdout has already EOF'd", async () => {
+    // The other half of the trap, and the reason the report is out-of-band: when
+    // git has already written a prefix, stdout's `end` and the child's `exit`
+    // race, and `end` usually wins. Anything that tries to signal through the
+    // stream itself is a no-op by then — `destroy(err)` on an already-EOF'd
+    // stream returns silently. Bytes must have flowed, stdout must be allowed to
+    // end however it likes, and the failure must still be reported.
+    const failures: Error[] = [];
     let bytes = 0;
-    const outcome = await new Promise<{ ended: boolean; error: Error | null }>((resolve) => {
-      stream.on("data", (c: Buffer) => {
+    const child = openBlobStream(repo.storageKey, bigOid, (e) => failures.push(e));
+    await new Promise<void>((resolve) => {
+      child.stdout.on("data", (c: Buffer) => {
         bytes += c.length;
         // Kill only once we are provably mid-body, so this is the
         // wrote-then-failed case and not the wrote-nothing one above.
         if (bytes > 0) child.kill("SIGKILL");
       });
-      stream.on("end", () => resolve({ ended: true, error: null }));
-      stream.on("error", (error) => resolve({ ended: false, error }));
+      child.once("close", () => resolve());
     });
     expect(bytes).toBeGreaterThan(0);
     expect(bytes).toBeLessThan(LARGE_BYTES);
-    expect(outcome.ended).toBe(false);
-    expect(outcome.error).not.toBeNull();
+    expect(failures).toHaveLength(1);
   }, 30_000);
 
-  it("openBlobStream still ends cleanly on success — the gating must not break the happy path", async () => {
-    // The counterweight: a rule that turns every EOF into an error would pass
-    // both tests above and serve nothing. A whole small blob must arrive and
-    // the stream must end, not error.
-    const { stream } = openBlobStream(repo.storageKey, await smallOid());
-    const outcome = await new Promise<{ ended: boolean; error: Error | null; body: string }>((resolve) => {
+  it("openBlobStream stays silent on success — the failure path must not fire on a whole blob", async () => {
+    // The counterweight: a rule that reported every exit would pass both tests
+    // above and make every response an abort. A whole small blob must arrive,
+    // stdout must end, and `onFailure` must never be called.
+    const failures: Error[] = [];
+    const child = openBlobStream(repo.storageKey, await smallOid(), (e) => failures.push(e));
+    const outcome = await new Promise<{ ended: boolean; body: string }>((resolve) => {
       const chunks: Buffer[] = [];
-      stream.on("data", (c: Buffer) => chunks.push(c));
-      stream.on("end", () =>
-        resolve({ ended: true, error: null, body: Buffer.concat(chunks).toString() }));
-      stream.on("error", (error) => resolve({ ended: false, error, body: "" }));
+      child.stdout.on("data", (c: Buffer) => chunks.push(c));
+      child.stdout.on("end", () =>
+        resolve({ ended: true, body: Buffer.concat(chunks).toString() }));
     });
-    expect(outcome.error).toBeNull();
+    await new Promise<void>((resolve) => child.once("close", () => resolve()));
     expect(outcome.ended).toBe(true);
     expect(outcome.body).toBe("hello\n");
+    expect(failures).toEqual([]);
   });
 
   it("leaves no git process behind when the client disappears mid-stream", async () => {

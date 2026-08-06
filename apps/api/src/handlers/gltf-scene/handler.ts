@@ -34,8 +34,8 @@ function decodeGltfDocument(buf: Buffer): GltfDocument {
   return JSON.parse(buf.toString("utf8")) as GltfDocument;
 }
 
-async function ingestGltfUtf8(input: IngestInput): Promise<string> {
-  const { repoId, sourceFile, utf8Text, label, gitCommitSha } = input;
+async function ingestGltf(input: IngestInput): Promise<string> {
+  const { repoId, sourceFile, bytes, label, gitCommitSha } = input;
 
   if (gitCommitSha) {
     const existing = await prisma.snapshot.findFirst({
@@ -45,11 +45,13 @@ async function ingestGltfUtf8(input: IngestInput): Promise<string> {
     if (existing) return existing.id;
   }
 
+  // Same decode the diff path uses, so a .glb ingests into the same entity tree
+  // its .gltf equivalent would — the bytes are never stringified on the way in.
   let gltf: GltfDocument;
   try {
-    gltf = JSON.parse(utf8Text) as GltfDocument;
+    gltf = decodeGltfDocument(bytes);
   } catch {
-    throw new Error("Invalid JSON (expected glTF)");
+    throw new Error("Invalid glTF (expected JSON or GLB)");
   }
 
   const entities = parseGltf(gltf);
@@ -207,6 +209,6 @@ export const gltfSceneHandler: ArtifactHandler = {
   id: GLTF_SCENE_HANDLER_ID,
   capabilities: { semanticCompare: true, semanticMerge: false },
   matchesPath: matchesGltfPath,
-  ingestFromUtf8Text: ingestGltfUtf8,
+  ingest: ingestGltf,
   diff: diffGltf,
 };
