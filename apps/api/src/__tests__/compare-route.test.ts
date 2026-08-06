@@ -113,6 +113,12 @@ let repo: TestRepo;
 let app: FastifyInstance;
 let baseSha: string;
 let headSha: string;
+let bigBaseSha: string;
+let bigHeadSha: string;
+
+// Past the buffer the wasm diff engine is bound by, so the blob fast path
+// cannot run for this file. See the over-cap fall-through test below.
+const OVERSIZE_BYTES = 10 * 1024 * 1024 + 1;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -155,6 +161,10 @@ beforeAll(async () => {
     { "model.gltf": gltf(5), "notes.txt": "alpha\ngamma\n" },
     "move gear, edit notes",
   );
+  // Two revisions of a .gltf that is larger than the wasm engine's buffer, so
+  // both blob reads come back "too-large" and the fast path cannot run.
+  bigBaseSha = await makeCommit(repo.workDir, { "huge.gltf": "x".repeat(OVERSIZE_BYTES) }, "add oversized model");
+  bigHeadSha = await makeCommit(repo.workDir, { "huge.gltf": "y".repeat(OVERSIZE_BYTES) }, "edit oversized model");
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
   app = await createTestServer();
@@ -204,6 +214,22 @@ beforeEach(() => {
       sourceFile: "notes.txt",
       snapshotBody: null,
       entities: [],
+    },
+    {
+      id: "snap-big-base",
+      handlerId: "gltf-scene",
+      gitCommitSha: bigBaseSha,
+      sourceFile: "huge.gltf",
+      snapshotBody: null,
+      entities: [makeEntity({ snapshotId: "snap-big-base", name: "Gear" })],
+    },
+    {
+      id: "snap-big-target",
+      handlerId: "gltf-scene",
+      gitCommitSha: bigHeadSha,
+      sourceFile: "huge.gltf",
+      snapshotBody: null,
+      entities: [makeEntity({ snapshotId: "snap-big-target", name: "Gear Renamed" })],
     },
   ]);
 });
@@ -264,6 +290,24 @@ describe("GET /repos/:handle/:name/compare — official wasm fast path", () => {
     expect(body.changes[0].children.some((c: { path: string }) => c.path === "name")).toBe(true);
     expect(prisma.diffCache.create).not.toHaveBeenCalled();
   });
+
+  it("falls back to the snapshot compare for a blob over the wasm buffer — never 413s (#157)", async () => {
+    // Unlike /filediff, this route is not answering "what does this file look
+    // like at this commit". It compares two already-ingested snapshots, and the
+    // fallback below the fast path builds a real answer out of the Entity rows
+    // without touching git at all. A blob too large for the wasm engine only
+    // disqualifies the *fast path*; turning it into a 413 replaces a working
+    // 200 with a hard failure, which is the regression this pins.
+    const res = await get("base=snap-big-base&target=snap-big-target");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.format).toBe("gltf-scene");
+    // The name change from the ingested entities — a genuine comparison.
+    expect(body.changes).toHaveLength(1);
+    expect(body.changes[0].kind).toBe("modified");
+    // The oversized bytes were never handed to the engine.
+    expect(officialWasmDiff).not.toHaveBeenCalled();
+  }, 30_000);
 
   it("503s when the manifest is unreachable — never substitutes the built-in engine (#74)", async () => {
     // A cold-start manifest fetch failure is NOT "this extension has no official

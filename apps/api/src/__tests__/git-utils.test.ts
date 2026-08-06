@@ -21,6 +21,8 @@ import {
   performRebaseMerge,
   performRevert,
   blobSizeAtCommit,
+  statBlob,
+  openBlobStream,
 } from "../git-utils.js";
 
 const AUTHOR = { name: "Merl Merger", email: "merl@forgehub.io" };
@@ -596,5 +598,197 @@ describe("blobSizeAtCommit", () => {
     await expect(
       blobSizeAtCommit("test/definitely-not-a-repo.git", "HEAD", "kept.txt"),
     ).rejects.toThrow();
+  });
+});
+
+// ─── statBlob (#157 phase 1) ──────────────────────────────────────────────────
+//
+// `statBlob` exists so callers can tell apart the four things the old
+// `readBlobAsBuffer` reported as one `null`: absent, not-a-file, too big, and
+// git failed. Only the first of those is a 404, so the value of these tests is
+// entirely in the boundaries between the kinds.
+
+describe("statBlob", () => {
+  let statRepo: TestRepo;
+  let sha: string;
+  // A path containing a newline: the reason the request is NUL-framed (-z).
+  // Newline framing would split this into two bogus requests.
+  const NEWLINE_PATH = "odd\nname.txt";
+
+  beforeAll(async () => {
+    statRepo = await createTestRepo("test/stat-blob.git");
+    sha = await makeCommit(
+      statRepo.workDir,
+      { "kept.txt": "0123456789", "dir/nested.txt": "abc", [NEWLINE_PATH]: "xy" },
+      "init",
+    );
+  }, 30_000);
+
+  afterAll(async () => {
+    await statRepo.cleanup();
+  });
+
+  it("reports a file as a blob with its oid and exact size", async () => {
+    const stat = await statBlob(statRepo.storageKey, sha, "kept.txt");
+    expect(stat).toMatchObject({ kind: "blob", size: 10 });
+    // 40 hex today, 64 in a SHA-256 repository — the parser accepts both.
+    if (stat.kind === "blob") expect(stat.oid).toMatch(/^[0-9a-f]{40,64}$/);
+  });
+
+  it("reports a DIRECTORY as not-blob, never as a blob or as missing", async () => {
+    // `git show <sha>:<dir>` exits 0 and pretty-prints a tree listing, which is
+    // how a directory used to be served as if it were file bytes.
+    expect(await statBlob(statRepo.storageKey, sha, "dir")).toEqual({ kind: "not-blob" });
+  });
+
+  it("reports an absent path as missing", async () => {
+    expect(await statBlob(statRepo.storageKey, sha, "never-existed.txt")).toEqual({ kind: "missing" });
+  });
+
+  it("reports an unresolvable commit-ish as missing, not as a parse failure", async () => {
+    expect(await statBlob(statRepo.storageKey, "no-such-ref", "kept.txt")).toEqual({ kind: "missing" });
+  });
+
+  it("parses a path containing a newline (NUL-framed input)", async () => {
+    const stat = await statBlob(statRepo.storageKey, sha, NEWLINE_PATH);
+    expect(stat).toMatchObject({ kind: "blob", size: 2 });
+  });
+
+  it("reports git failing as error — distinct from a missing path", async () => {
+    const stat = await statBlob("test/definitely-not-a-repo.git", sha, "kept.txt");
+    expect(stat.kind).toBe("error");
+  });
+
+  it("reports a path the revision parser REFUSES as missing, not as error (#157)", async () => {
+    // These are the one family of negatives `cat-file --batch-check` does not
+    // report in-band: `<rev>:./x` and `<rev>:../x` have no meaning without a
+    // working tree, so git aborts with exit 128 before reading the request.
+    // They are still client-supplied paths that name nothing — `error` would
+    // become a 500, which is both dishonest and an unbounded 5xx source, since
+    // `filePath` comes straight off a query string on a public repo.
+    for (const p of ["../../../etc/passwd", "../outside.txt", "./kept.txt"]) {
+      expect([await statBlob(statRepo.storageKey, sha, p), p]).toEqual([{ kind: "missing" }, p]);
+    }
+  });
+
+  it("rejects a NUL in the path as invalid rather than misparsing it (#157)", async () => {
+    // NUL is the framing character of the `-z` request stream. Smuggling one in
+    // makes git answer two requests and emit two lines, which the anchored blob
+    // pattern rejects — reporting a file that exists as absent.
+    const stat = await statBlob(statRepo.storageKey, sha, `kept.txt\0${sha}:dir`);
+    expect(stat.kind).toBe("invalid");
+    // And it is genuinely a lie being prevented: the real path is a real blob.
+    expect(await statBlob(statRepo.storageKey, sha, "kept.txt")).toMatchObject({ kind: "blob" });
+  });
+
+  it("rejects a NUL in the commit-ish as invalid (#157)", async () => {
+    expect((await statBlob(statRepo.storageKey, `${sha}\0${sha}`, "kept.txt")).kind).toBe("invalid");
+  });
+});
+
+// ─── openBlobStream (#157 phase 1) ────────────────────────────────────────────
+//
+// The contract that matters here is the failure one, and it is easy to test the
+// wrong way round: whether a dying git is *noticed* depends entirely on how fast
+// the consumer is draining stdout, so a consumer that is paused proves nothing.
+// Every failure case below therefore drains at full speed, which is the case
+// where stdout has already EOF'd by the time the exit fires — the case an
+// earlier `child.stdout.destroy(err)` implementation silently did nothing in.
+describe("openBlobStream", () => {
+  let streamRepo: TestRepo;
+  let sha: string;
+  let oid: string;
+  let bigOid: string;
+  const BODY = "abcdefghij".repeat(1024); // 10 KiB
+  /**
+   * 8 MiB, for the mid-stream kill only. A small blob cannot be killed
+   * mid-stream at all: git writes the whole thing and exits before the signal
+   * lands, and a kill on an exited child is discarded. 8 MiB is far more than
+   * the pipe buffer, so git is still writing when the first chunk arrives.
+   */
+  const BIG_BODY = "x".repeat(8 * 1024 * 1024);
+
+  beforeAll(async () => {
+    streamRepo = await createTestRepo("test/open-blob-stream.git");
+    sha = await makeCommit(
+      streamRepo.workDir,
+      { "asset.bin": BODY, "huge.bin": BIG_BODY },
+      "init",
+    );
+    const stat = await statBlob(streamRepo.storageKey, sha, "asset.bin");
+    if (stat.kind !== "blob") throw new Error("fixture is not a blob");
+    oid = stat.oid;
+    const bigStat = await statBlob(streamRepo.storageKey, sha, "huge.bin");
+    if (bigStat.kind !== "blob") throw new Error("big fixture is not a blob");
+    bigOid = bigStat.oid;
+  }, 60_000);
+
+  afterAll(async () => {
+    await streamRepo.cleanup();
+  });
+
+  /** Drain a stream at full speed; resolve with the bytes once it ends. */
+  function drain(readable: NodeJS.ReadableStream): Promise<Buffer> {
+    return new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+      readable.on("data", (c: Buffer) => chunks.push(c));
+      readable.on("close", () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
+  it("streams the whole blob and never reports a failure on a clean read", async () => {
+    let failure: Error | null = null;
+    const child = openBlobStream(streamRepo.storageKey, oid, (e) => { failure = e; });
+    // Subscribe before draining: the child can exit while we await the bytes,
+    // and a `once` attached afterwards would wait for an event already past.
+    const closed = new Promise((r) => child.once("close", r));
+    const body = await drain(child.stdout);
+    await closed;
+    expect(body.toString("utf8")).toBe(BODY);
+    expect(failure).toBeNull();
+  });
+
+  it("reports a failure for a bad oid even though stdout EOFs cleanly", async () => {
+    // This is the shape that made the old guard a no-op: git exits 128 straight
+    // away, stdout produces no bytes and closes itself, and the exit handler
+    // then finds nothing left to destroy. Reporting out-of-band cannot lose
+    // that race, because it does not run one.
+    const failure = new Promise<Error>((resolve) => {
+      const child = openBlobStream(streamRepo.storageKey, "0".repeat(40), resolve);
+      void drain(child.stdout);
+    });
+    await expect(failure).resolves.toBeInstanceOf(Error);
+    await expect(failure).resolves.toHaveProperty("message", expect.stringMatching(/exited/));
+  });
+
+  it("reports a failure when the child is killed mid-stream, with the consumer draining", async () => {
+    // A SIGKILL with the consumer keeping up: stdout sees EOF first, exactly as
+    // in the bad-oid case, so the signal has to be observed on the child.
+    //
+    // "Mid-stream" has to be made true, not assumed. Killing straight after
+    // spawn against a 10 KiB blob races git to the finish and frequently loses:
+    // git writes all the bytes and exits 0 first, the signal is dropped on an
+    // exited child, and the test then waits out its timeout for a failure that
+    // legitimately never happened (worse on an idle machine, where git wins
+    // more often). So: an 8 MiB blob, which cannot fit in the pipe buffer, and
+    // the kill fires only once the first chunk proves bytes are flowing.
+    const failure = new Promise<Error>((resolve) => {
+      const child = openBlobStream(streamRepo.storageKey, bigOid, resolve);
+      child.stdout.once("data", () => child.kill("SIGKILL"));
+      void drain(child.stdout);
+    });
+    await expect(failure).resolves.toBeInstanceOf(Error);
+  });
+
+  it("reports a failure at most once", async () => {
+    const seen: Error[] = [];
+    const child = openBlobStream(streamRepo.storageKey, "0".repeat(40), (e) => seen.push(e));
+    const closed = new Promise((r) => child.once("close", r));
+    void drain(child.stdout);
+    await closed;
+    // A late kill on an already-dead child must not produce a second report.
+    child.kill("SIGKILL");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen).toHaveLength(1);
   });
 });
