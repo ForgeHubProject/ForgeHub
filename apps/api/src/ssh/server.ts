@@ -54,7 +54,14 @@ export function resetAuthFailures(ip: string): void {
   failMap.delete(ip);
 }
 
-/** Remove all expired failure records. Called periodically by startSshServer; exported for unit tests. */
+/**
+ * Remove all expired failure records. Called periodically by startSshServer.
+ *
+ * `isRateLimited` already drops an expired record when it reads one, but that only
+ * fires for an IP that comes back. An IP that fails five times and is never seen
+ * again keeps its entry forever, so a scan across many source addresses grows
+ * `failMap` without bound. This is the only thing that reclaims those.
+ */
 export function sweepExpiredFailures(): void {
   const now = Date.now();
   for (const [ip, rec] of failMap) {
@@ -62,6 +69,19 @@ export function sweepExpiredFailures(): void {
       failMap.delete(ip);
     }
   }
+}
+
+/**
+ * How many IPs `failMap` is currently holding. Test seam — nothing in the server
+ * reads it.
+ *
+ * The sweep is invisible through `isRateLimited`: that function lazily deletes an
+ * expired record as it reads it, so it answers `false` for an expired IP whether or
+ * not the sweep ever ran. A test written against it passes with the sweep gutted to
+ * a no-op (verified). Retention is only observable as a count.
+ */
+export function failureRecordCount(): number {
+  return failMap.size;
 }
 
 /**
