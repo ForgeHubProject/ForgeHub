@@ -406,6 +406,34 @@ Data (`forgehub.db` and `git-storage/`) lives on the `forgehub-data` named volum
 
 **Note on Postgres:** `apps/api/prisma/schema.prisma` targets SQLite, and the checked-in migrations under `apps/api/prisma/migrations/` are SQLite-dialect SQL — they will not run against Postgres as-is. Moving to Postgres for larger deployments means regenerating the migration history against a Postgres datasource first; that's a separate piece of work, not something this compose file does.
 
+### Upgrading a database created before the migration history was repaired
+
+Skip this unless the API container exits at boot saying migrations did not apply. A
+fresh install needs nothing here.
+
+The migration history had fallen 37 tables behind `schema.prisma`, so for a while
+`prisma migrate deploy` could not build a working database and the schema was
+reaching deployments through `prisma db push` instead. `20260807000000_catch_up_schema`
+repairs the history. A database that was built by `db push` already has everything
+that migration creates, so applying it fails on "table already exists".
+
+The fix is to record it as applied without running it — one command, once:
+
+```bash
+docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma api \
+  migrate resolve --applied 20260807000000_catch_up_schema
+docker compose up -d
+```
+
+Nothing is written to your data either way; a failed `migrate deploy` rolls back
+before touching anything. If the boot error is something other than "table already
+exists", this is the wrong fix — it would mark a migration applied that never ran,
+and hide whatever the real problem is.
+
+Migrations are now covered by `apps/api/src/__tests__/migration-drift.test.ts`,
+which fails CI if `schema.prisma` moves without one, or if the history stops
+applying cleanly onto an empty database.
+
 ## Clone / push walkthrough
 
 If you have the `forge` CLI installed, `forge login http://localhost:3001` handles registration-to-credential in one step (prompts for email/password, mints a PAT, stores it via git's credential helper) — skip straight to `git clone`/`git push` afterward. The manual walkthrough below is the same flow spelled out over raw `curl`.
