@@ -53,6 +53,7 @@ import { resolvePatBearer } from "./pat-auth.js";
 import { hasScope, type PatScope } from "./scopes.js";
 import { sessionActive } from "./session-service.js";
 import { backfillImplicitWatches } from "./watch-service.js";
+import { ciStartupRecovery } from "./ci/boot.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -217,6 +218,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // safe; lives HERE (not in buildServer) so test servers never touch it.
       await backfillImplicitWatches().catch((err) => {
         app.log.warn({ err }, "implicit-watch backfill failed");
+      });
+      // CI restart recovery (issue #86): sweep leaked job workspaces and finalize
+      // runs the last shutdown orphaned — an orphaned run reads as a permanently
+      // pending check and wedges branch protection. Same placement rationale as
+      // the backfill above: production boot only, never a test server.
+      await ciStartupRecovery().catch((err) => {
+        app.log.warn({ err }, "CI startup recovery failed");
       });
       return app.listen({ port, host: "0.0.0.0" }).then(() => {
         app.log.info(`Listening on http://localhost:${port}`);
