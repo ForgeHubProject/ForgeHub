@@ -1,5 +1,6 @@
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +23,7 @@ vi.mock("../ci/runner.js", () => ({
 import { prisma } from "../prisma.js";
 import { cancelRun, isCiEnabled } from "../ci/runner.js";
 import { hashToken } from "../tokens.js";
+import { LogSink } from "../ci/log-sink.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -176,6 +178,101 @@ describe("GET job log", () => {
     vi.mocked(prisma.checkRun.findFirst).mockResolvedValue(null as never);
     const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/none/log" });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("404s when the recorded logPath is a directory, not a file", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+    vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: dir } as never);
+    const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  // The route used to readFile() the whole log into a string before replying, so a
+  // single request for a large log pulled it entirely into the API's heap. Logs
+  // written before the runner's cap existed are still on disk, so the SERVING side
+  // has to bound itself independently of the writing side (issue #86).
+  it("serves at most CI_MAX_LOG_BYTES of an oversized log and flags the truncation", async () => {
+    const bigPath = join(dir, "big.log");
+    await writeFile(bigPath, "Z".repeat(200_000), "utf8");
+    process.env["CI_MAX_LOG_BYTES"] = "4096";
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: bigPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-forgehub-log-truncated"]).toBe("true");
+      expect(Buffer.byteLength(res.rawPayload)).toBe(4096);
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
+  });
+
+  // REGRESSION (issue #86): the truncation notice has to reach a READER, not just a
+  // header. The only in-tree consumer of this endpoint (`getCheckLog` in apps/web)
+  // returns `res.text()` and drops every header, and so does `curl … | less`. A
+  // response that silently stops is indistinguishable from a job that died quietly,
+  // which is precisely the confusion the marker exists to prevent. So the marker
+  // must be in the BODY — and inside the byte bound, not appended past it.
+  it("puts a truncation marker in the body of an over-cap log, within the cap", async () => {
+    const bigPath = join(dir, "big-marker.log");
+    await writeFile(bigPath, "Z".repeat(200_000), "utf8");
+    process.env["CI_MAX_LOG_BYTES"] = "4096";
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: bigPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain("log truncated");
+      expect(res.body).toContain("CI_MAX_LOG_BYTES");
+      // The marker is the LAST thing in the body — a reader who scrolls to the end
+      // of the log finds the explanation there.
+      expect(res.body.trimEnd().endsWith("---")).toBe(true);
+      // …and it did not cost us the bound.
+      expect(Buffer.byteLength(res.rawPayload)).toBe(4096);
+      expect(res.headers["content-length"]).toBe("4096");
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
+  });
+
+  // The runner's own sink keeps its marker inside the cap, so a log it truncated is
+  // served WHOLE (size <= cap) with the runner's marker intact. This is the path a
+  // real `yes > /dev/stdout` job takes end to end.
+  it("serves a runner-truncated log whole, marker included", async () => {
+    const cap = 4096;
+    const sinkPath = join(dir, "runner-truncated.log");
+    const sink = new LogSink(createWriteStream(sinkPath, { flags: "w" }), cap);
+    for (let i = 0; i < 5000; i++) sink.write("noise noise noise\n");
+    await sink.end();
+
+    process.env["CI_MAX_LOG_BYTES"] = String(cap);
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath: sinkPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      // Not over-cap on disk, so the route does not need to cut it at all…
+      expect(res.headers["x-forgehub-log-truncated"]).toBe("false");
+      // …and the runner's own marker is what the reader sees.
+      expect(res.body).toContain("log truncated");
+      expect(Buffer.byteLength(res.rawPayload)).toBeLessThanOrEqual(cap);
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
+  });
+
+  it("serves a normal log whole and does not flag it truncated", async () => {
+    process.env["CI_MAX_LOG_BYTES"] = "4096";
+    try {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(publicRepo() as never);
+      vi.mocked(prisma.checkRun.findFirst).mockResolvedValue({ logPath } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/owner/widget/actions/runs/run-1/checks/chk-1/log" });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-forgehub-log-truncated"]).toBe("false");
+      expect(res.body).toBe("=== Build ===\n$ echo hi\nhi\n");
+    } finally {
+      delete process.env["CI_MAX_LOG_BYTES"];
+    }
   });
 });
 

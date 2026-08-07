@@ -1,10 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { summarizeCheckRuns, type CheckSummary } from "../ci/summary.js";
 import { createRerun } from "../ci/trigger.js";
 import { cancelRun, isCiEnabled } from "../ci/runner.js";
+import { maxLogBytes, serveTruncationMarker } from "../ci/log-sink.js";
 
 /**
  * Actions-style CI read API (issue #86).
@@ -175,6 +178,14 @@ export async function ciRoutes(app: FastifyInstance) {
   });
 
   // ── GET job log (text/plain) ──────────────────────────────────────────────────
+  // STREAMED, and bounded (issue #86). This used to `readFile(...,"utf8")` the whole
+  // log into a string before replying: a large log was pulled entirely into the API
+  // process's heap, and one reader of one big log could push the process over its
+  // memory limit — no authentication needed beyond read access to the repo, and
+  // trivially repeatable. The runner now caps what it writes (`ci/log-sink.ts`), but
+  // this route must not depend on that: logs written before the cap existed are
+  // still on disk, and a serving path that is only safe because of a writing path
+  // is one refactor away from being unsafe again.
   app.get("/repos/:handle/:name/actions/runs/:id/checks/:checkId/log", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name, id, checkId } = request.params as { handle: string; name: string; id: string; checkId: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
@@ -187,13 +198,53 @@ export async function ciRoutes(app: FastifyInstance) {
     });
     if (!check || !check.logPath) return reply.status(404).send({ error: "Log not found" });
 
-    let content: string;
+    let size: number;
     try {
-      content = await readFile(check.logPath, "utf8");
+      const st = await stat(check.logPath);
+      if (!st.isFile()) return reply.status(404).send({ error: "Log not found" });
+      size = st.size;
     } catch {
       return reply.status(404).send({ error: "Log not found" });
     }
-    return reply.type("text/plain").send(content);
+
+    // Serve at most the first `cap` bytes. Reading from the START (rather than
+    // tailing) keeps the step framing and the earliest error — the part a reader
+    // actually diagnoses from — and matches how the runner truncates.
+    const cap = maxLogBytes();
+    const truncated = size > cap;
+
+    reply.type("text/plain; charset=utf-8");
+    reply.header("x-forgehub-log-truncated", truncated ? "true" : "false");
+
+    if (!truncated) {
+      reply.header("content-length", String(size));
+      return reply.send(createReadStream(check.logPath));
+    }
+
+    // A log bigger than the cap is one the runner's sink did NOT write — it predates
+    // the cap, or the cap was lowered since. Cutting it silently is the failure this
+    // route had before: the reader gets a log that simply stops, with no way to tell
+    // a truncated log from a job that died quietly. The `x-forgehub-log-truncated`
+    // header is not enough on its own, because the only in-tree consumer
+    // (`getCheckLog` in apps/web) reads the BODY and drops the headers, and so does
+    // anyone piping this endpoint through `curl`. So the marker goes in the body,
+    // and it is carved OUT OF the cap rather than added to it — the response stays
+    // within `cap` bytes, which is the whole point of the bound.
+    const marker = serveTruncationMarker(cap);
+    const markerBytes = Buffer.from(marker, "utf8");
+    const headBytes = Math.max(0, cap - markerBytes.length);
+
+    reply.header("content-length", String(headBytes + markerBytes.length));
+    return reply.send(
+      Readable.from(
+        (async function* () {
+          if (headBytes > 0) {
+            yield* createReadStream(check.logPath as string, { start: 0, end: headBytes - 1 });
+          }
+          yield markerBytes;
+        })(),
+      ),
+    );
   });
 
   // ── POST re-run (writer-gated) ────────────────────────────────────────────────

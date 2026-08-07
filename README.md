@@ -216,16 +216,54 @@ branch. **Retention** caps a repo's completed-run history: after each new run is
 enqueued, runs older than `FORGEHUB_CI_RETENTION` (default 200) are pruned — DB rows
 and their on-disk logs.
 
+**Tier 0 hardening.** A step's environment is **constructed from an allowlist**
+(`PATH`, locale, plus the runner's own `CI`/`HOME`/`GIT_TERMINAL_PROMPT`) with the
+workflow's `env:` layered on top — the API's own environment is not inherited, so
+`JWT_SECRET`, `DATABASE_URL`, the storage roots and any SMTP credential no longer
+reach a step *by default*. (Read the security note below for what this does **not**
+mean.) Per-job logs are **byte-capped** (`CI_MAX_LOG_BYTES`, default 10 MiB) with
+backpressure, and the log endpoint streams within the same bound and always ends a
+cut log with a visible truncation marker, so a noisy step can neither fill the
+volume nor be replayed into the API's heap. The workspace clone uses
+`--no-hardlinks`, so a job's `.git/objects` are private copies rather than shared
+inodes with the canonical bare repo. The API container runs as a **non-root uid**,
+and CI logs/workspaces get their **own volume** (`FORGEHUB_CI_ROOT`, `/ci` in the
+shipped compose stack) rather than sitting beside the database. On boot the API
+sweeps leftover job workspaces and finalizes runs a restart orphaned — an orphaned
+run reads as a permanently pending check and would otherwise wedge branch
+protection forever.
+
 > ⚠️ **Security model — single-tenant, self-hosted only.** The runner executes
 > **repo-author-controlled shell** directly on the host as the API process user,
 > with no container/VM/user sandbox. It is therefore **hard-off unless you set
 > `FORGEHUB_CI=1`**, and only meant for an instance where every pusher is already
 > trusted with shell access. When `FORGEHUB_CI` is unset, pushes record nothing at
-> all — no runs, no parsing, and re-run is refused. The v1 job timeout, cancel, and
-> retention controls **bound blast radius and disk/CPU use — they are containment,
-> not isolation**: they do not sandbox the code. Multi-tenant isolation (containers,
-> ephemeral runners, egress control) is a later stage of the epic and must land
-> before untrusted authors can be allowed to run CI.
+> all — no runs, no parsing, and re-run is refused. The job timeout, cancel,
+> retention and Tier 0 controls **bound blast radius and disk/CPU use — they are
+> containment, not isolation**: they do not sandbox the code. In particular, a step
+> still runs as the API's OS user, and while one process is both the API and the
+> runner that user must be able to write the database and every bare repo — so a
+> step can still reach both by absolute path. Multi-tenant isolation (extracting the
+> runner, then containers, ephemeral runners, egress control) is a later stage of the
+> epic and must land before untrusted authors can be allowed to run CI.
+>
+> **A step can still obtain `JWT_SECRET`.** The environment allowlist above is not
+> a secrecy guarantee and must not be relied on as one. The runner spawns each step
+> as a direct child of the API process under the same OS user, and Linux exposes a
+> process's exec-time environment at `/proc/<pid>/environ` to anyone with matching
+> credentials — so `tr '\0' '\n' < /proc/1/environ` inside the API container hands a
+> step every variable the API was started with, verbatim. Moving the secret into a
+> file (`JWT_SECRET_FILE`, a Docker secret) does not help either: a step running as
+> the API's uid can read any file the API can read. **While one process is both the
+> API and the CI runner, every secret the API holds is reachable by any step**, and
+> a leaked `JWT_SECRET` mints sessions for any user — including admins —
+> indefinitely, and keeps doing so after the run ends. What the allowlist buys is
+> the removal of the *accidental* leak (a step that logs `env`, a tool that uploads
+> its environment with a crash report) and the environment half of the real boundary,
+> which arrives when the runner becomes a separate process under its own uid. Until
+> then, treat every CI author as already holding your `JWT_SECRET`, and rotate it if
+> that assumption ever stops being acceptable. This is pinned by an executable test
+> (`apps/api/src/__tests__/ci-step-env-residual.test.ts`) so the claim cannot drift.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -239,7 +277,34 @@ and their on-disk logs.
 
 **Env:** `FORGEHUB_CI=1` enables the runner (default: off). `CI_JOB_TIMEOUT`
 bounds each job in seconds (default: 600). `FORGEHUB_CI_RETENTION` caps a repo's
-retained completed runs (default: 200).
+retained completed runs (default: 200). `CI_MAX_LOG_BYTES` caps each job's log in
+bytes (default: 10 MiB) and also bounds what the log endpoint serves.
+`FORGEHUB_CI_ROOT` relocates CI logs + workspaces off the git/database volume
+(default: `<GIT_STORAGE_ROOT>-ci`; the shipped compose stack sets `/ci`).
+
+> **What the CI volume split does and does not do.** Separating `forgehub-ci` from
+> `forgehub-data` gives the CI tree its own lifecycle and its own mount point: it
+> can be wiped wholesale without touching the forge, a job workspace no longer sits
+> in the same directory tree as the database and the bare repos, and an operator has
+> somewhere to point a size limit. It does **not**, on its own, stop a runaway job
+> from filling the disk under the database — two Docker named volumes live on the
+> same host filesystem unless you deliberately back `forgehub-ci` with a separate
+> device or an fs-level quota. The thing that actually bounds log growth is
+> `CI_MAX_LOG_BYTES`; the split is what makes a quota *possible*.
+
+> **Upgrading an existing install.** Setting `FORGEHUB_CI_ROOT` (which the shipped
+> `docker-compose.yml` now does) moves the CI tree to a new location. Anything under
+> the OLD root — `<GIT_STORAGE_ROOT>-ci`, i.e. `/data/git-storage-ci` on the stock
+> stack — is no longer visible to retention pruning or to the boot sweep, so it will
+> sit there forever. The boot sweep deletes leftover *workspaces* at the old root as
+> well as the new one, but old per-run **logs** are not migrated. They are safe to
+> delete once you no longer need the history:
+>
+> ```sh
+> docker compose run --rm --entrypoint sh api -c 'rm -rf /data/git-storage-ci'
+> ```
+>
+> Old runs keep their DB rows; only their log files go, so their log endpoint 404s.
 
 ### Git over HTTPS
 

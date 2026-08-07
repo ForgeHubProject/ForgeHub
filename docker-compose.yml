@@ -8,8 +8,32 @@ services:
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — see .env.example}"
       PORT: "3001"
       GIT_STORAGE_ROOT: "/data/git-storage"
+      # CI logs and job workspaces live on their OWN volume (issue #86). Without
+      # this they default to "<GIT_STORAGE_ROOT>-ci", i.e. /data/git-storage-ci —
+      # the same volume as the SQLite database and every bare repo. A CI job is
+      # repo-author-controlled code, so that placement put a job's throwaway
+      # workspace directly beside the database file.
+      #
+      # UPGRADING an install that ran without this: whatever is already under
+      # /data/git-storage-ci stays there and is no longer pruned by retention. The
+      # boot sweep still clears leftover workspaces there; old logs are yours to
+      # delete (see README, "Upgrading an existing install").
+      FORGEHUB_CI_ROOT: "/ci"
     volumes:
+      # forgehub-data: the durable forge — SQLite DB + bare repos. Losing it loses
+      #                the instance.
+      # forgehub-ci:   CI logs and workspaces. Entirely reconstructible; safe to
+      #                delete wholesale.
+      #
+      # BE PRECISE ABOUT WHAT THIS SPLIT BUYS: separate lifecycles, a workspace that
+      # is not in the same tree as the database, and a mount point you can put a
+      # quota on. It does NOT by itself stop a runaway job from filling the disk the
+      # database sits on — by default both named volumes live on the SAME host
+      # filesystem (/var/lib/docker/volumes). If that matters to you, back
+      # forgehub-ci with its own device or an fs-level quota. The actual bound on
+      # log growth is CI_MAX_LOG_BYTES, not this split.
       - forgehub-data:/data
+      - forgehub-ci:/ci
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
@@ -28,3 +52,4 @@ services:
 
 volumes:
   forgehub-data:
+  forgehub-ci:

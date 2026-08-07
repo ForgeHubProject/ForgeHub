@@ -113,3 +113,46 @@ describe("moveBareRepo", () => {
     expect(after.isBare).toBe(true);
   });
 });
+
+// ─── CI storage root (issue #86) ─────────────────────────────────────────────
+//
+// The CI tree defaults to a sibling of the git storage root, which on the shipped
+// compose stack put job workspaces on the SAME volume as the SQLite database and
+// every bare repo. `FORGEHUB_CI_ROOT` relocates it onto its own volume; compose
+// now sets it. These pin both halves so the default cannot silently return.
+
+describe("CI storage root", () => {
+  afterEach(() => {
+    delete process.env["FORGEHUB_CI_ROOT"];
+  });
+
+  it("defaults to a sibling of the git storage root", async () => {
+    const { ciWorkRoot, ciLogPath } = await import("../git-storage.js");
+    expect(ciWorkRoot()).toBe(join(`${storageRoot}-ci`, ".work"));
+    expect(ciLogPath("alice/widget.git", "run-1", "build")).toBe(
+      join(`${storageRoot}-ci`, "alice/widget.git", "run-1", "build.log"),
+    );
+  });
+
+  it("relocates the whole CI tree — logs and workspaces — when FORGEHUB_CI_ROOT is set", async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), "fh-ci-root-"));
+    process.env["FORGEHUB_CI_ROOT"] = elsewhere;
+    const { ciWorkRoot, ciLogPath, ciWorkspaceDir, ciRunDir } = await import("../git-storage.js");
+
+    expect(ciWorkRoot()).toBe(join(elsewhere, ".work"));
+    expect(ciWorkspaceDir("run-1", "build")).toBe(join(elsewhere, ".work", "run-1-build"));
+    expect(ciRunDir("alice/widget.git", "run-1")).toBe(join(elsewhere, "alice/widget.git", "run-1"));
+    expect(ciLogPath("alice/widget.git", "run-1", "build")).toBe(
+      join(elsewhere, "alice/widget.git", "run-1", "build.log"),
+    );
+
+    // The point of the override: nothing CI writes lands under the DB/repo volume.
+    expect(ciWorkRoot().startsWith(storageRoot)).toBe(false);
+  });
+
+  it("still refuses traversal out of the relocated root", async () => {
+    process.env["FORGEHUB_CI_ROOT"] = "/tmp/fh-ci-traversal";
+    const { ciRunDir } = await import("../git-storage.js");
+    expect(() => ciRunDir("../../etc", "run-1")).toThrow(/Invalid CI storage key path/);
+  });
+});
