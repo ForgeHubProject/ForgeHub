@@ -95,10 +95,34 @@ echo "Applying database migrations..."
 # Call the workspace-local binary rather than `npx`: npx wants a writable npm cache
 # and may attempt a network fetch, neither of which an unprivileged — possibly
 # offline — container should depend on at boot.
-if [ -x /repo/node_modules/.bin/prisma ]; then
-  /repo/node_modules/.bin/prisma migrate deploy
-else
-  npx prisma migrate deploy
+PRISMA_BIN="npx prisma"
+[ -x /repo/node_modules/.bin/prisma ] && PRISMA_BIN="/repo/node_modules/.bin/prisma"
+
+# One upgrade case needs a human: a database built by `prisma db push` back when the
+# migration history was 37 tables behind schema.prisma. It already HAS every table
+# the catch-up migration creates, so `migrate deploy` stops on "table already
+# exists" — correctly, but with an error that says nothing about what to do. The
+# answer is to baseline: record the migration as applied without running it.
+#
+# Detected by failure rather than by inspecting the database, so this cannot misfire
+# on a deployment that is simply broken for some other reason.
+if ! $PRISMA_BIN migrate deploy; then
+  cat >&2 <<'EOF'
+
+ForgeHub: migrations did not apply.
+
+If this database was created by an earlier ForgeHub — before the migration history
+was repaired — its tables already exist and the catch-up migration has nothing to
+do. Record it as applied, once, and start the stack again:
+
+  docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma api \
+    migrate resolve --applied 20260807000000_catch_up_schema
+
+Check the error above first: if it is NOT "table already exists", baselining is the
+wrong answer and will hide a real problem. Your data is untouched either way —
+nothing was written.
+EOF
+  exit 1
 fi
 
 exec "$@"
