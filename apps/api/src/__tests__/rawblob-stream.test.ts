@@ -51,6 +51,12 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { createTestRepo, makeCommit, type TestRepo } from "./helpers/git.js";
 import { createTestServer } from "./helpers/server.js";
+import {
+  MAX_CONCURRENT_RAWBLOB_STREAMS,
+  tryAcquireRawblobStream,
+  releaseRawblobStream,
+  activeRawblobStreams,
+} from "../rawblob-http.js";
 
 const execFile = promisify(execFileCb);
 
@@ -317,6 +323,100 @@ describe("GET/HEAD /rawblob — the abort never fires on a healthy response", ()
     } finally {
       agent.destroy();
     }
+  }, 60_000);
+});
+
+describe("GET /rawblob — validators, caching, and the stream cap (#157 hardening)", () => {
+  // The pure decision logic (visibility split, weak comparison, cap floor) is
+  // unit-tested cross-platform in rawblob-http.test.ts; what belongs HERE is
+  // only what needs the real route on a real socket: that the headers actually
+  // reach the wire, that a 304 short-circuits before any git child is spawned,
+  // and that the route releases its slot when the response closes.
+
+  async function blobOid(): Promise<string> {
+    const { stdout } = await execFile("git", ["rev-parse", `${sha}:huge.bin`], {
+      cwd: repo.workDir,
+    });
+    return stdout.trim();
+  }
+
+  function headOnly(path: string, headers: http.OutgoingHttpHeaders = {}): Promise<{
+    status: number;
+    headers: http.IncomingHttpHeaders;
+    bytes: number;
+  }> {
+    return new Promise((resolve, reject) => {
+      const req = http.get(`${baseUrl}${path}`, { headers }, (res) => {
+        let bytes = 0;
+        res.on("data", (c: Buffer) => { bytes += c.length; });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, bytes }));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+    });
+  }
+
+  it("emits the oid ETag, the public cache policy, nosniff, and Accept-Ranges: none", async () => {
+    const oid = await blobOid();
+    const res = await headOnly(RAWBLOB());
+    expect(res.status).toBe(200);
+    expect(res.headers["etag"]).toBe(`"${oid}"`);
+    // MOCK_REPO is PUBLIC; the private branch of the split is unit-tested.
+    expect(res.headers["cache-control"]).toBe("public, max-age=3600, immutable");
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["accept-ranges"]).toBe("none");
+  });
+
+  it("answers If-None-Match with a bodiless 304 that repeats the validators", async () => {
+    const oid = await blobOid();
+    const res = await headOnly(RAWBLOB(), { "if-none-match": `"${oid}"` });
+    expect(res.status).toBe(304);
+    expect(res.bytes).toBe(0);
+    expect(res.headers["etag"]).toBe(`"${oid}"`);
+    expect(res.headers["cache-control"]).toBe("public, max-age=3600, immutable");
+  });
+
+  it("refuses the request past the cap with 503 + Retry-After, and recovers on release", async () => {
+    // Saturate the shared counter directly — the route and this test import the
+    // same module — so the refusal is deterministic rather than racing five
+    // slow downloads against each other.
+    const claimed: number[] = [];
+    while (tryAcquireRawblobStream()) claimed.push(1);
+    try {
+      const refused = await headOnly(RAWBLOB());
+      expect(refused.status).toBe(503);
+      expect(refused.headers["retry-after"]).toBe("5");
+      expect(refused.headers["cache-control"]).toBe("no-store");
+    } finally {
+      for (const _ of claimed) releaseRawblobStream();
+    }
+    const ok = await headOnly(RAWBLOB());
+    expect(ok.status).toBe(200);
+  });
+
+  it("still serves 304s while saturated — the conditional path spawns nothing", async () => {
+    const oid = await blobOid();
+    const claimed: number[] = [];
+    while (tryAcquireRawblobStream()) claimed.push(1);
+    try {
+      const res = await headOnly(RAWBLOB(), { "if-none-match": `"${oid}"` });
+      expect(res.status).toBe(304);
+    } finally {
+      for (const _ of claimed) releaseRawblobStream();
+    }
+  });
+
+  it("releases its slot when the response closes, including on client disconnect", async () => {
+    expect(activeRawblobStreams()).toBe(0);
+    // A completed fast download and an aborted slow one must both return to 0.
+    const done = await consume(RAWBLOB(), { deadline: 30_000 });
+    expect(done.kind).toBe("complete");
+    const cut = await consume(RAWBLOB(), { deadline: 400, slowFor: 30_000, slowPause: 200 });
+    expect(cut.kind).not.toBe("complete");
+    // Give the close handlers the same beat the child-reaper test allows.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(activeRawblobStreams()).toBe(0);
+    expect(MAX_CONCURRENT_RAWBLOB_STREAMS).toBeGreaterThan(0);
   }, 60_000);
 });
 
