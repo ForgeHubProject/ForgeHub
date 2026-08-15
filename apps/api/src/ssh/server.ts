@@ -299,7 +299,8 @@ function onSession(app: FastifyInstance, actor: SshActor, ip: string, accept: ()
   session.on("subsystem", (_accept, reject) => reject());
 }
 
-function onAuthentication(
+/** Exported as a test seam — the ssh2 `Server` wiring in `startSshServer` is the only production caller. */
+export function onAuthentication(
   app: FastifyInstance,
   ctx: AuthContext,
   ip: string,
@@ -349,9 +350,12 @@ function onAuthentication(
           ? { kind: "user", userId: actor.userId, sshKeyId: actor.sshKeyId }
           : { kind: "deploy", deployKeyId: actor.deployKeyId, repoId: actor.repoId };
       app.log.info({ fingerprint, ip, actor: actorInfo }, "ssh: auth succeeded");
+      // Reset only here, after a VERIFIED signature. Fingerprints are not secret, so
+      // clearing on the unsigned probe would let anyone holding a registered public
+      // key reset the limiter without ever proving possession of the private key.
+      resetAuthFailures(ip);
     }
 
-    resetAuthFailures(ip);
     bind(actor);
     ctx.accept();
   })().catch((err) => {
