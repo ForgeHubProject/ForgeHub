@@ -11,6 +11,12 @@ import {
 } from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
+import {
+  etagMatches,
+  rawblobCacheControl,
+  tryAcquireRawblobStream,
+  releaseRawblobStream,
+} from "../rawblob-http.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
 // the two git blobs. This is the bridge that lets the commit/PR file views show
@@ -207,6 +213,39 @@ export async function fileDiffRoutes(app: FastifyInstance) {
           return reply.status(500).send({ error: "Failed to read file content at this commit" });
       }
 
+      // The blob oid is a strong validator for free: the URL pins sha+path, so
+      // the bytes this response would carry can never change. A client that
+      // presents the oid back gets its 304 before any git child is spawned —
+      // which is also why the conditional path sits above the stream cap.
+      const etag = `"${stat.oid}"`;
+      const setValidatorHeaders = () =>
+        reply
+          .header("ETag", etag)
+          .header("Cache-Control", rawblobCacheControl(repo.visibility))
+          .header("X-Content-Type-Options", "nosniff")
+          .header("Accept-Ranges", "none");
+      if (etagMatches(request.headers["if-none-match"], etag)) {
+        return setValidatorHeaders().status(304).send();
+      }
+
+      if (!tryAcquireRawblobStream()) {
+        // Each live stream pins a git child for the connection's lifetime, so
+        // the cap bounds children, not bytes. 503 + Retry-After instead of
+        // queueing: a queued request would hold the client in limbo while the
+        // server accumulates promised work it cannot shed.
+        return reply
+          .status(503)
+          .header("Cache-Control", "no-store")
+          .header("Retry-After", "5")
+          .send({ error: "Too many concurrent raw downloads; retry shortly" });
+      }
+      let slotReleased = false;
+      const releaseSlot = () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        releaseRawblobStream();
+      };
+
       // Content-Length comes from the pre-flight, not from a buffer: Fastify
       // only computes it for Buffers, and without it the response goes chunked
       // and a client cannot tell a truncated download from a complete one.
@@ -246,11 +285,16 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         reply.raw.destroy();
         socket?.destroy();
       });
-      reply.raw.once("close", () => child.kill());
-      return reply
+      // "close" fires once per response — normal completion, mid-stream abort,
+      // or client disconnect — so it is the single place both the child reaper
+      // and the stream-slot release belong.
+      reply.raw.once("close", () => {
+        child.kill();
+        releaseSlot();
+      });
+      return setValidatorHeaders()
         .header("Content-Type", "application/octet-stream")
         .header("Content-Length", String(stat.size))
-        .header("Cache-Control", "public, max-age=3600")
         .send(child.stdout);
     },
   );
