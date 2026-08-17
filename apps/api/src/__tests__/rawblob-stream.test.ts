@@ -407,7 +407,10 @@ describe("GET /rawblob — validators, caching, and the stream cap (#157 hardeni
   });
 
   it("releases its slot when the response closes, including on client disconnect", async () => {
-    expect(activeRawblobStreams()).toBe(0);
+    // Slots from the tests above release on socket close, not on test
+    // completion, so under full-suite load the counter can still be draining
+    // here. Poll it down to 0 before starting; the assertions below stay strict.
+    await vi.waitFor(() => expect(activeRawblobStreams()).toBe(0), { timeout: 5000 });
     // A completed fast download and an aborted slow one must both return to 0.
     const done = await consume(RAWBLOB(), { deadline: 30_000 });
     expect(done.kind).toBe("complete");
