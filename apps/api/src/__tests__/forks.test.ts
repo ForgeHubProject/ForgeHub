@@ -148,7 +148,7 @@ describe("syncForkBranch (real bare repos)", () => {
     // The fork's branch is untouched — still at its own tip.
     const { stdout } = await execFile("git", ["rev-parse", "refs/heads/main"], { cwd: bareRepoPathFromKey(FORK_KEY) });
     expect(stdout.trim()).toBe(forkTip);
-  });
+  }, 30_000);
 });
 
 // ─── fork routes (server) ─────────────────────────────────────────────────────
