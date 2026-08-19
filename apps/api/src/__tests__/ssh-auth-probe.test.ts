@@ -32,8 +32,31 @@ function mustParseKey(key: string | Buffer): ParsedKey {
   return parsed;
 }
 
-const userKeys = sshUtils.generateKeyPairSync("ed25519");
-const strangerKeys = sshUtils.generateKeyPairSync("ed25519");
+/**
+ * ssh2's own key generator occasionally emits an OpenSSH private key that its
+ * own parser then rejects with "Malformed OpenSSH private key". Measured at
+ * roughly 0.23% per key (7 unparsable in 3000 ed25519 pairs on this host), and
+ * because these are generated at module scope, a bad draw fails the whole file
+ * before a single test runs — an intermittent red CI on code that is fine.
+ *
+ * The fault is per-key and generation is cheap, so redraw instead of asserting.
+ * Both halves are checked because the test uses both, and a pair is only useful
+ * if it round-trips as a whole.
+ */
+function generateParsableKeyPair(): { public: string; private: string } {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const keys = sshUtils.generateKeyPairSync("ed25519");
+    const parsedPriv = sshUtils.parseKey(keys.private);
+    const parsedPub = sshUtils.parseKey(keys.public);
+    if (!(parsedPriv instanceof Error) && !(parsedPub instanceof Error)) return keys;
+  }
+  // At the measured rate this is about 1 in 10^22 — so it means the generator
+  // is broken outright, not that we were unlucky, and the message should say so.
+  throw new Error("ssh2 produced no parsable ed25519 key pair in 8 attempts");
+}
+
+const userKeys = generateParsableKeyPair();
+const strangerKeys = generateParsableKeyPair();
 
 const rawUserPub = mustParseKey(userKeys.public).getPublicSSH();
 const parsedUserPriv = mustParseKey(userKeys.private);
