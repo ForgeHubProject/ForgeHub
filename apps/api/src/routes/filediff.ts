@@ -10,13 +10,8 @@ import {
   DIFF_BUFFER_MAX,
 } from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
+import { rawblobMaxBytes, RAWBLOB_SHARED_MAX_AGE_SECONDS } from "../rawblob-limits.js";
 import { officialHandlerId, officialWasmDiff } from "../fhr/official-handlers.js";
-import {
-  etagMatches,
-  rawblobCacheControl,
-  tryAcquireRawblobStream,
-  releaseRawblobStream,
-} from "../rawblob-http.js";
 
 // Semantic diff for a single file across one commit, computed on demand from
 // the two git blobs. This is the bridge that lets the commit/PR file views show
@@ -171,21 +166,32 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
   // Raw file bytes at a commit, as application/octet-stream — used by client
   // renderers that need the actual file (the gltf-scene 3D viewport fetches the
-  // head blob to build its mesh). Binary-safe, unlike the utf-8 /blob endpoints.
+  // head blob to build its mesh), and by anyone who just wants the file.
+  // Binary-safe, unlike the utf-8 /blob endpoints.
   //
-  // There is deliberately NO size limit here. A contributor who can push an
-  // arbitrarily large file has to be able to fetch it back; someone who commits
-  // a huge asset is accepting the cost of their own connection, not asking the
-  // server to decide for them. That is affordable because the response is
-  // streamed straight off `git cat-file blob`: memory is O(highWaterMark) per
-  // request rather than O(filesize), so there is no resource for a ceiling to
-  // protect. The size-first pre-flight (statBlob) is what makes it safe — the
-  // 404/500 decision is made while headers are still writable, before a byte of
-  // content is touched.
-  app.get(
-    "/repos/:handle/:name/rawblob",
-    { preHandler: [app.optionalAuthenticate] },
-    async (request, reply) => {
+  // There is deliberately NO size limit here by default. A contributor who can
+  // push an arbitrarily large file has to be able to fetch it back; someone who
+  // commits a huge asset is accepting the cost of their own connection, not
+  // asking the server to decide for them. That is affordable because the
+  // response is streamed straight off `git cat-file blob`: memory is
+  // O(highWaterMark) per request rather than O(filesize), so there is no
+  // resource for a ceiling to protect. (An operator may still opt into one —
+  // see rawblob-limits.ts — but nothing is imposed on them.)
+  //
+  // The shape is decide-then-pump: one `cat-file --batch-check` pre-flight
+  // settles 400/404/413/304 and yields the exact size *before a single header
+  // is written*, then git's stdout is piped to the socket. Past that point the
+  // only way to signal failure is to abort the connection, so nothing below the
+  // pre-flight is allowed to be a judgement call.
+  //
+  // HEAD is registered explicitly rather than via Fastify's exposeHeadRoute,
+  // which would run this handler in full and throw a spawned git child away.
+  app.route({
+    method: ["GET", "HEAD"],
+    url: "/repos/:handle/:name/rawblob",
+    exposeHeadRoute: false,
+    preHandler: [app.optionalAuthenticate],
+    handler: async (request, reply) => {
       const { handle, name } = request.params as { handle: string; name: string };
       const { path: filePath, sha } = request.query as { path?: string; sha?: string };
       const userId = (request as { user?: { sub: string } }).user?.sub;
@@ -195,9 +201,13 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       }
       const repo = await resolveRepo(handle, name);
       if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
-      if (!repo.storageKey) return reply.status(404).send({ error: "Repository has no storage" });
+      const storageKey = repo.storageKey;
+      if (!storageKey) return reply.status(404).send({ error: "Repository has no storage" });
 
-      const stat = await statBlob(repo.storageKey, sha, filePath);
+      // Everything that can refuse the request happens here, while the headers
+      // are still writable. Past this point the only way to signal failure is to
+      // abort the socket, so nothing below is allowed to be a judgement call.
+      const stat = await statBlob(storageKey, sha, filePath);
       switch (stat.kind) {
         case "missing":
         // A tree/tag/commit at that path is not file bytes, and this route only
@@ -213,49 +223,93 @@ export async function fileDiffRoutes(app: FastifyInstance) {
           return reply.status(500).send({ error: "Failed to read file content at this commit" });
       }
 
-      // The blob oid is a strong validator for free: the URL pins sha+path, so
-      // the bytes this response would carry can never change. A client that
-      // presents the oid back gets its 304 before any git child is spawned —
-      // which is also why the conditional path sits above the stream cap.
+      // There is no size limit by default. An operator may opt into one; when
+      // they haven't, this branch does not exist.
+      const maxBytes = rawblobMaxBytes();
+      if (maxBytes !== null && stat.size > maxBytes) {
+        return reply.status(413).send({
+          error: "File too large to serve",
+          path: filePath,
+          size: stat.size,
+          limit: maxBytes,
+        });
+      }
+
+      // The blob oid is a perfect strong validator and costs nothing — it is
+      // already in hand from the pre-flight. (@fastify/etag would hash the body
+      // instead, which on a multi-gigabyte blob is exactly the O(filesize) work
+      // streaming exists to avoid.) The same unchanged file at many commits
+      // shares one ETag, so a client re-fetching it across revisions gets 304s
+      // from different URLs.
       const etag = `"${stat.oid}"`;
-      const setValidatorHeaders = () =>
+      const isPublic = repo.visibility === "PUBLIC";
+      const cacheControl = `${isPublic ? "public" : "private"}, ${
+        // `immutable` is only truthful when the URL pins content. This route
+        // resolves `sha` through git, so it also accepts a branch or tag name,
+        // for which the same URL yields different bytes over time — those get
+        // revalidation instead. (There is no separate ref-name variant of this
+        // route; the two cases are the same URL shape, told apart here.)
+        isCommitPinned(sha)
+          ? // A commit-pinned URL's *bytes* never change, so a year and
+            // `immutable` are honest — but the repo's *visibility* can change,
+            // and a public→private flip must not leave a CDN serving the old
+            // bytes for a year with revalidation suppressed. `s-maxage` bounds
+            // only the shared copy; the browser cache that already has the
+            // bytes keeps the full year. Private repos never reach a shared
+            // cache in the first place, so they don't need it.
+            `max-age=31536000${isPublic ? `, s-maxage=${RAWBLOB_SHARED_MAX_AGE_SECONDS}` : ""}, immutable`
+          : "no-cache"
+      }`;
+
+      // Answered from the pre-flight alone: a validated 304 must not cost a git
+      // child, which is the entire point of using the oid as the validator.
+      if (ifNoneMatchHits(request.headers["if-none-match"], etag)) {
+        return reply.status(304).header("ETag", etag).header("Cache-Control", cacheControl).send();
+      }
+
+      const sendHeaders = () =>
         reply
+          .header("Content-Type", "application/octet-stream")
+          // Content-Length comes from the pre-flight, not from a buffer:
+          // Fastify only computes it for Buffers, and without it the response
+          // goes chunked and a client cannot tell a truncated download from a
+          // complete one, or show progress. On a very large file that is the
+          // whole difference between "downloading" and "hung".
+          .header("Content-Length", String(stat.size))
           .header("ETag", etag)
-          .header("Cache-Control", rawblobCacheControl(repo.visibility))
-          .header("X-Content-Type-Options", "nosniff")
-          .header("Accept-Ranges", "none");
-      if (etagMatches(request.headers["if-none-match"], etag)) {
-        return setValidatorHeaders().status(304).send();
-      }
+          .header("Cache-Control", cacheControl)
+          // Honest: git blobs are zlib-deflated with no random access, so the
+          // origin cannot satisfy a Range. Saying `none` stops download managers
+          // from attempting resumes that would silently restart.
+          .header("Accept-Ranges", "none")
+          .header("X-Content-Type-Options", "nosniff");
 
-      if (!tryAcquireRawblobStream()) {
-        // Each live stream pins a git child for the connection's lifetime, so
-        // the cap bounds children, not bytes. 503 + Retry-After instead of
-        // queueing: a queued request would hold the client in limbo while the
-        // server accumulates promised work it cannot shed.
-        return reply
-          .status(503)
-          .header("Cache-Control", "no-store")
-          .header("Retry-After", "5")
-          .send({ error: "Too many concurrent raw downloads; retry shortly" });
-      }
-      let slotReleased = false;
-      const releaseSlot = () => {
-        if (slotReleased) return;
-        slotReleased = true;
-        releaseRawblobStream();
-      };
+      // The whole HEAD answer is already in hand. Returning here is what keeps
+      // a HEAD from spawning a git child only to throw its output away.
+      if (request.method === "HEAD") return sendHeaders().send();
 
-      // Content-Length comes from the pre-flight, not from a buffer: Fastify
-      // only computes it for Buffers, and without it the response goes chunked
-      // and a client cannot tell a truncated download from a complete one.
+      // Nothing below counts, paces, times or bounds this transfer, and nothing
+      // is allowed to: a download that is making progress is never interrupted
+      // *by this process*, however slow it is and however large the blob,
+      // because there is no mechanism here that could interrupt it. (The proxy
+      // in front is not equally free of them — nginx's `send_timeout` imposes a
+      // sub-KiB/s rate floor, documented in apps/web/nginx.conf. That is not a
+      // reason to add anything here.) In particular this code MUST NOT
+      // call `socket.setTimeout`. Doing so cancels the `keepAliveTimeout` that
+      // Node arms from its own `finish` handler and leaks the connection reaper
+      // API-wide; and a socket idle timer cannot distinguish a slow reader from
+      // a stalled one anyway, because under backpressure it is reset on write
+      // dispatch rather than on bytes leaving the host. `rawblob-limits.ts`
+      // records both findings and what bounds the route instead (nginx's
+      // per-client `limit_conn`, Node's own connection reaping, TCP
+      // backpressure).
       //
       // If git dies mid-stream its stdout just EOFs, so Fastify ends the body
-      // short of that Content-Length and the socket then sits there, looking
-      // like a download still in flight, until an unrelated keep-alive timeout
-      // reaps it (72s under Fastify's default). Content-Length is what makes
-      // the truncation *detectable*; cutting the connection is what makes it
-      // detectable NOW instead of a minute and a bit later.
+      // short of the Content-Length above and the socket then sits there,
+      // looking like a download still in flight, until an unrelated keep-alive
+      // timeout reaps it (72s under Fastify's default). Content-Length is what
+      // makes the truncation *detectable*; cutting the connection is what makes
+      // it detectable NOW instead of a minute and a bit later.
       //
       // It has to be the SOCKET, not `reply.raw`. Node detaches the socket from
       // the response the instant a body is ended — short or not — after which
@@ -268,14 +322,14 @@ export async function fileDiffRoutes(app: FastifyInstance) {
       // how big the blob is or how long the transfer takes — only to git itself
       // failing. A slow client stays served for as long as it keeps reading.
       const socket = reply.raw.socket;
-      const child = openBlobStream(repo.storageKey, stat.oid, () => {
-        // A HEAD has no body to truncate: its whole answer came from the
-        // pre-flight, and Node discards the stream. It also finishes long
-        // before a large blob is done draining, so the kill-on-close below
-        // lands on a still-running child and lands here — where tearing down
-        // the connection would kill a perfectly good keep-alive socket. It is
-        // not theoretical: measured over one reused socket, every second HEAD
-        // came back ECONNRESET before this line existed.
+      const child = openBlobStream(storageKey, stat.oid, () => {
+        // A HEAD cannot reach this line any more — it is answered above without
+        // ever spawning a child. The guard stays because the failure it names is
+        // real and cheap to keep out: a HEAD finishes long before a large blob
+        // has drained, so the kill-on-close below lands on a still-running child
+        // and reports a failure here, where tearing down the connection would
+        // kill a perfectly good keep-alive socket. Measured over one reused
+        // socket, every second HEAD came back ECONNRESET without it.
         if (request.method === "HEAD") return;
         // On a GET, `cat-file blob` exits 0 only after handing over the whole
         // object, so a failure means the body on the wire is short and this
@@ -285,17 +339,33 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         reply.raw.destroy();
         socket?.destroy();
       });
-      // "close" fires once per response — normal completion, mid-stream abort,
-      // or client disconnect — so it is the single place both the child reaper
-      // and the stream-slot release belong.
-      reply.raw.once("close", () => {
-        child.kill();
-        releaseSlot();
-      });
-      return setValidatorHeaders()
-        .header("Content-Type", "application/octet-stream")
-        .header("Content-Length", String(stat.size))
-        .send(child.stdout);
+      // Fastify destroys the payload on disconnect and git dies on EPIPE, but
+      // killing explicitly is deterministic and cheap — with no size ceiling, an
+      // abandoned multi-gigabyte download must not leave a git process pinned.
+      // This fires on normal completion too, where it is a no-op on an already
+      // exited child.
+      reply.raw.once("close", () => child.kill());
+      sendHeaders();
+      return reply.send(child.stdout);
     },
-  );
+  });
+}
+
+/** Does `sha` name an immutable object id (rather than a branch/tag that moves)? */
+function isCommitPinned(sha: string): boolean {
+  return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(sha);
+}
+
+/**
+ * RFC 9110 If-None-Match: a comma-separated list, `*`, or weak (`W/"…"`) forms.
+ * Comparison is weak, which is what a conditional GET calls for.
+ */
+function ifNoneMatchHits(header: string | string[] | undefined, etag: string): boolean {
+  if (!header) return false;
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  const strip = (v: string) => v.trim().replace(/^W\//, "");
+  return raw.split(",").some((candidate) => {
+    const value = strip(candidate);
+    return value === "*" || value === etag;
+  });
 }
