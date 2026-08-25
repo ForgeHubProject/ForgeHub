@@ -236,15 +236,72 @@ describe("POST /auth/login", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // Both case-insensitivity tests assert on the LAST call: this suite never
+  // clears mock call history, so toHaveBeenCalledWith would be satisfied by
+  // any earlier test's lookup and the assertion would pin nothing.
   it("email lookup is case-insensitive", async () => {
     await app.inject({
       method: "POST",
       url: "/auth/login",
       payload: { email: "ALICE@EXAMPLE.COM", password: "hunter12" },
     });
-    expect(vi.mocked(prisma.user.findUnique)).toHaveBeenCalledWith(
+    expect(vi.mocked(prisma.user.findUnique)).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { email: "alice@example.com" } }),
     );
+  });
+
+  // The identifier field also takes a handle (GitHub's "Username or email
+  // address"). handleSchema forbids "@", so the two grammars cannot overlap
+  // and the route dispatches on that character alone.
+  it("200 when the identifier is a handle, resolved via the handle column", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "alice", password: "hunter12" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.handle).toBe("alice");
+    expect(vi.mocked(prisma.user.findUnique)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { handle: "alice" } }),
+    );
+  });
+
+  it("handle lookup is case-insensitive, matching /users/:handle", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "ALICE", password: "hunter12" },
+    });
+    expect(vi.mocked(prisma.user.findUnique)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { handle: "alice" } }),
+    );
+  });
+
+  it("a padded identifier is trimmed before validation, not rejected", async () => {
+    // Whitespace-padded pastes are routine; both grammars reject padding, so
+    // the trim must happen before the schema sees the value.
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "  alice@example.com  ", password: "hunter12" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(prisma.user.findUnique)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { email: "alice@example.com" } }),
+    );
+  });
+
+  it("400 for an identifier that is neither an email nor a handle", async () => {
+    // Cleared here because the suite does not reset call history between tests.
+    vi.mocked(prisma.user.findUnique).mockClear();
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "-not/a/login-", password: "hunter12" },
+    });
+    expect(res.statusCode).toBe(400);
+    // Validation failed before any lookup — the DB must not have been consulted.
+    expect(vi.mocked(prisma.user.findUnique)).not.toHaveBeenCalled();
   });
 
   it("response does not include passwordHash", async () => {
