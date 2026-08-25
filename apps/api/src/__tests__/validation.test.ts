@@ -119,8 +119,15 @@ describe("loginBodySchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects invalid email", () => {
-    expect(loginBodySchema.safeParse({ email: "bad", password: "pass" }).success).toBe(false);
+  // The identifier is an email OR a handle (GitHub's "Username or email
+  // address"), so a bare word like "bad" is now a valid handle — only input
+  // failing both grammars is rejected.
+  it("accepts a handle as the identifier", () => {
+    expect(loginBodySchema.safeParse({ email: "octocat", password: "pass" }).success).toBe(true);
+  });
+
+  it("rejects an identifier that is neither an email nor a handle", () => {
+    expect(loginBodySchema.safeParse({ email: "-not/a/login-", password: "pass" }).success).toBe(false);
   });
 
   it("rejects empty password", () => {
