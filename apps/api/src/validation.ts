@@ -22,7 +22,22 @@ export const registerBodySchema = z.object({
 });
 
 export const loginBodySchema = z.object({
-  email: z.string().email(),
+  /**
+   * Sign-in identifier: an email address or a handle, same as GitHub's
+   * "Username or email address" field. The two grammars cannot collide —
+   * handleSchema forbids "@" — so the route tells them apart by that
+   * character alone. The wire field keeps its historical name `email` so
+   * existing clients are untouched.
+   *
+   * Trimmed BEFORE validation: both grammars reject surrounding whitespace,
+   * so a pasted trailing space would otherwise 400 a perfectly good
+   * identifier — and a post-parse trim can never run. (Passwords are not
+   * trimmed; a space there may be real.)
+   */
+  email: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : v),
+    z.union([z.string().email(), handleSchema]),
+  ),
   password: z.string().min(1).max(128),
 });
 

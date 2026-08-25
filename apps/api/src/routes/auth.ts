@@ -92,10 +92,17 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
 
-    const email = parsed.data.email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Email or handle, told apart by "@" (handleSchema forbids it, so the two
+    // grammars cannot overlap). Both are stored lowercased — registration
+    // lowercases them and /users/:handle looks up lowercased — so one
+    // normalization serves both lookups. Trimming already happened in the
+    // schema, before validation (see loginBodySchema).
+    const identifier = parsed.data.email.toLowerCase();
+    const user = identifier.includes("@")
+      ? await prisma.user.findUnique({ where: { email: identifier } })
+      : await prisma.user.findUnique({ where: { handle: identifier } });
     if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
-      return reply.status(401).send({ error: "Invalid email or password" });
+      return reply.status(401).send({ error: "Incorrect username, email, or password" });
     }
 
     const token = await issueSessionToken(request, reply, user.id);

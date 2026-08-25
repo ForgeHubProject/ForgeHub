@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { login, register } from "../api";
+import { ApiError, login, register } from "../api";
 import { ForgeLogo } from "../components/ForgeLogo";
 import { Button, Field, TextInput } from "../ui";
 import type { User } from "../types";
@@ -24,6 +24,13 @@ export function LoginPage({ onAuth }: Props) {
   useDocumentTitle(isLogin ? "Sign in · ForgeHub" : "Sign up · ForgeHub");
 
   function switchMode(next: Mode) {
+    // A handle typed at sign-in would be stranded in what becomes a
+    // type="email" field, where native validation blocks submit — migrate it
+    // to the Username field it was meant for.
+    if (next === "register" && email && !email.includes("@")) {
+      if (!handle) setHandle(email.trim());
+      setEmail("");
+    }
     setMode(next);
     setError(null);
   }
@@ -33,11 +40,23 @@ export function LoginPage({ onAuth }: Props) {
     setError(null);
     setLoading(true);
     try {
+      // Trimmed because paste and mobile keyboards routinely append a space,
+      // and neither identifier grammar accepts surrounding whitespace. The
+      // password is sent verbatim — a space there may be real.
+      const identifier = email.trim();
       const res = isLogin
-        ? await login(email, password)
-        : await register(email, password, handle, displayName || undefined);
+        ? await login(identifier, password)
+        : await register(identifier, password, handle.trim(), displayName || undefined);
       onAuth(res.token, res.user);
     } catch (err) {
+      if (isLogin && err instanceof ApiError && err.status === 400 && err.fieldErrors?.email) {
+        // The identifier failed validation — the request never reached the
+        // password check, so the credentials message would point the user at
+        // the wrong field. (Only when the server blames the email field: a
+        // 400 about the password must not be pinned on the identifier.)
+        setError("Enter a valid username or email address.");
+        return;
+      }
       const fallback = isLogin
         ? "Unable to sign in. Please check your details and try again."
         : "Unable to create your account. Please try again.";
@@ -102,15 +121,18 @@ export function LoginPage({ onAuth }: Props) {
               </>
             )}
 
-            <Field label="Email address" required>
+            {/* At sign-in this accepts a handle too (GitHub's "Username or email
+                address"), so it must be type="text" there — type="email" makes
+                the browser reject a handle before the request is ever sent. */}
+            <Field label={isLogin ? "Username or email address" : "Email address"} required>
               {(id) => (
                 <TextInput
                   id={id}
-                  type="email"
+                  type={isLogin ? "text" : "email"}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  autoComplete="email"
+                  placeholder={isLogin ? "octocat or you@example.com" : "you@example.com"}
+                  autoComplete={isLogin ? "username" : "email"}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}

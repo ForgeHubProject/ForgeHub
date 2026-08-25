@@ -19,10 +19,13 @@ import type {
  */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** Per-field messages from a zod 400 (`details.fieldErrors`), when the server sent them. */
+  readonly fieldErrors?: Record<string, string[]>;
+  constructor(status: number, message: string, fieldErrors?: Record<string, string[]>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.fieldErrors = fieldErrors;
   }
 }
 
@@ -160,8 +163,11 @@ export async function fetchRawBlob(
     { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
   );
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.blob();
 }
@@ -183,8 +189,11 @@ async function req<T>(
     },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -920,8 +929,11 @@ export async function downloadArchive(
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -1736,8 +1748,11 @@ export async function downloadReleaseAsset(
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -2175,8 +2190,11 @@ export async function getCheckLog(
     { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
   );
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.text();
 }
@@ -2263,8 +2281,11 @@ export async function uploadDesign(
     body: form,
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.json() as Promise<{ design: Design; version: DesignVersion }>;
 }
@@ -2297,8 +2318,11 @@ export async function fetchDesignVersionBlob(
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.blob();
 }
@@ -2417,8 +2441,11 @@ export async function uploadAvatar(
     body: form,
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: { fieldErrors?: Record<string, string[]> };
+    };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.json() as Promise<{ avatarKey: string; contentType: string; size: number }>;
 }
