@@ -17,6 +17,13 @@ const HANDLER_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 // chunk sibling "renderer-gltf-scene-3d.js" that a lite bundle dynamic-imports.
 const RENDERER_ASSET_RE = /^renderer-[a-z0-9][a-z0-9-]*\.js$/;
 const CACHE_TTL_MS = 60 * 60 * 1000;
+// A MISS is cached only briefly. Caching it for the full hour turned one
+// transient upstream failure into an hour of 404s for a bundle GitHub was
+// serving fine the whole time — observed live after an API restart cleared a
+// warm cache into a burst of concurrent fetches. Same policy as the wasm side
+// (official-handlers.ts): successes are memoized, failures are retried. The
+// short window still absorbs a request stampede while upstream is down.
+const MISS_TTL_MS = 30 * 1000;
 
 type CacheEntry = { js: string | null; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
@@ -91,7 +98,7 @@ export async function rendererRoutes(app: FastifyInstance) {
 
     const hit = cache.get(filename);
     let js: string | null;
-    if (hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
+    if (hit && Date.now() - hit.fetchedAt < (hit.js === null ? MISS_TTL_MS : CACHE_TTL_MS)) {
       js = hit.js;
     } else {
       let url: string | null;

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getBlame, getBlob, resolveRef } from "../api";
+import { fetchRawBlob, getBlame, getBlob, resolveRef } from "../api";
 import { Breadcrumbs, Skeleton, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
-import { resolveFileViewer } from "../views/fileViewerRegistry";
+import { useSemanticFormatsReady } from "../lib/fhrFormats";
+import { isSemanticFilename, resolveFileViewer } from "../views/fileViewerRegistry";
 import { CodeViewer } from "../views/viewers/CodeViewer";
 import type { LineRange } from "../views/fileViewerTypes";
 
@@ -120,9 +121,28 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
   const lineCount = content?.split("\n").length ?? 0;
   const sizeKb = content ? content.length / 1024 : 0;
 
-  const Viewer = blameOn ? CodeViewer : resolveFileViewer(filename);
+  // Manifest-mapped files (e.g. .glb) get the FHR renderer, which fetches its
+  // own raw bytes — the text fetch below is skipped for them, because decoding
+  // a binary model as a string is exactly the mojibake this path replaces.
+  //
+  // The fetch waits for the manifest to SETTLE, not merely for the set to be
+  // non-empty: the set starts empty while the manifest is in flight, and
+  // treating that gap as "not semantic" dispatched a doomed whole-binary text
+  // fetch on every cold load of a .glb (and flashed the error card for files
+  // past the text route's size cap). Settling is one cached round-trip per
+  // app session, and a failed manifest settles empty so text files degrade to
+  // exactly the old behavior rather than waiting forever.
+  const { extensions: semanticExts, settled: manifestSettled } = useSemanticFormatsReady();
+  const semantic = isSemanticFilename(filename, semanticExts);
+  const Viewer = blameOn ? CodeViewer : resolveFileViewer(filename, semanticExts);
 
   useEffect(() => {
+    if (!manifestSettled) return; // still loading; the skeleton stays up
+    if (semantic) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -131,7 +151,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load file"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [token, handle, repoName, path, ref]);
+  }, [token, handle, repoName, path, ref, semantic, manifestSettled]);
 
   // Keep the selection in sync with browser back/forward and manual hash edits.
   useEffect(() => {
@@ -186,9 +206,15 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     void navigator.clipboard.writeText(content).then(() => toast("File contents copied", { tone: "success" }));
   }
 
-  function download() {
-    if (content === null) return;
-    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+  async function download() {
+    // Semantic files never had text content — download the true bytes instead.
+    const blob = semantic
+      ? await fetchRawBlob(token, handle, repoName, path, ref).catch(() => null)
+      : content !== null
+        ? new Blob([content], { type: "text/plain;charset=utf-8" })
+        : null;
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
@@ -232,7 +258,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     );
   }
 
-  if (error || content === null) {
+  if (error || (content === null && !semantic)) {
     return (
       <div>
         {breadcrumb}
@@ -250,16 +276,30 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
         {/* File header bar */}
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-fh-canvas border-b border-fh-border">
           <div className="flex items-center gap-3 text-fh-sm text-fh-fg-muted min-w-0">
-            <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{lineCount}</span> lines</span>
-            <span className="text-fh-border-strong">·</span>
-            <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{sizeKb.toFixed(sizeKb < 10 ? 1 : 0)}</span> KB</span>
+            {/* Line/size stats describe the text fetch — meaningless for a
+                semantic (binary) file, whose viewer reports its own facts. */}
+            {!semantic && (
+              <>
+                <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{lineCount}</span> lines</span>
+                <span className="text-fh-border-strong">·</span>
+                <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{sizeKb.toFixed(sizeKb < 10 ? 1 : 0)}</span> KB</span>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <HeaderAction icon={<BlameIcon />} onClick={toggleBlame} active={blameOn}>Blame</HeaderAction>
+            {!semantic && (
+              <>
+                <HeaderAction icon={<BlameIcon />} onClick={toggleBlame} active={blameOn}>Blame</HeaderAction>
+              </>
+            )}
             <HeaderAction icon={<LinkIcon />} onClick={copyPermalink}>Permalink</HeaderAction>
-            <HeaderAction icon={<CodeGlyph />} onClick={openRaw}>Raw</HeaderAction>
-            <HeaderAction icon={<CopyIcon />} onClick={copy}>Copy</HeaderAction>
-            <HeaderAction icon={<DownloadIcon />} onClick={download}>Download</HeaderAction>
+            {!semantic && (
+              <>
+                <HeaderAction icon={<CodeGlyph />} onClick={openRaw}>Raw</HeaderAction>
+                <HeaderAction icon={<CopyIcon />} onClick={copy}>Copy</HeaderAction>
+              </>
+            )}
+            <HeaderAction icon={<DownloadIcon />} onClick={() => void download()}>Download</HeaderAction>
           </div>
         </div>
 
@@ -269,11 +309,12 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
           </div>
         ) : (
           <Viewer
-            content={content}
+            content={content ?? ""}
             path={path}
             filename={filename}
             gitRef={ref}
             repoBase={repoBase}
+            token={token}
             selectedRange={selectedRange}
             onLineSelect={handleLineSelect}
             blame={blameOn ? blame : undefined}

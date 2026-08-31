@@ -115,4 +115,34 @@ describe("GET /renderers/:asset", () => {
     await app.inject({ method: "GET", url: "/renderers/gltf-scene" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("a miss is retried once its short TTL lapses — one failure must not 404 for an hour", async () => {
+    // First request: upstream down → 404, and the miss is cached.
+    let up = false;
+    const fetchMock = vi.fn(async () =>
+      up ? new Response("export default {};", { status: 200 }) : new Response("nope", { status: 500 }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const miss = await app.inject({ method: "GET", url: "/renderers/gltf-scene" });
+    expect(miss.statusCode).toBe(404);
+
+    // Within the miss TTL the cached failure answers — upstream is not hammered.
+    up = true;
+    const still = await app.inject({ method: "GET", url: "/renderers/gltf-scene" });
+    expect(still.statusCode).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Past the miss TTL the fetch is retried and recovers. (The success TTL is
+    // an hour — the old behavior cached the FAILURE that long too, which turned
+    // one transient upstream error into an hour-long outage.)
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 31_000);
+      const recovered = await app.inject({ method: "GET", url: "/renderers/gltf-scene" });
+      expect(recovered.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
