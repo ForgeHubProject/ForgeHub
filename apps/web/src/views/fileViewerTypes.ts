@@ -9,6 +9,11 @@ export type FileViewerProps = {
   path: string;     // full path from repo root, e.g. "src/components/App.tsx"
   filename: string; // basename only, e.g. "App.tsx"
   gitRef: string;   // git ref (branch name or commit sha)
+  /**
+   * Auth token, for viewers that fetch their own bytes (the FHR viewer pulls
+   * the raw blob; text viewers receive `content` and never need this).
+   */
+  token?: string | null;
   /** Repo base path (e.g. "/alice/repo"), used to build blame commit links. */
   repoBase?: string;
   /** Currently selected line range (highlighted), driven by the URL hash. */
