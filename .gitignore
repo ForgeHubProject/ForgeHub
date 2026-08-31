@@ -373,6 +373,9 @@ tags
 
 test-data/repo-test/
 apps/api/git-storage/
+# SSH transport state — holds the PRIVATE host key the server generates on
+# first start (see .env.example, FORGEHUB_SSH_PORT). Never commit it.
+apps/api/git-storage-ssh/
 
 # Created by https://www.toptal.com/developers/gitignore/api/dotenv,node,rust,go,goland
 # Edit at https://www.toptal.com/developers/gitignore?templates=dotenv,node,rust,go,goland
