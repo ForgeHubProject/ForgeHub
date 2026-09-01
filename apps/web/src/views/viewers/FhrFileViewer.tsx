@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { API_BASE, fetchRawBlob } from "../../api";
+import { fetchRawBlob } from "../../api";
 import { loadSemanticFormats } from "../../lib/fhrFormats";
 import { loadRendererBundle } from "../../lib/rendererBundle";
 import type { RendererInstance } from "../../lib/rendererBundle";
@@ -10,25 +10,17 @@ import type { FileViewerProps } from "../fileViewerTypes";
  * fetches the raw blob and mounts the handler's renderer bundle in
  * `mode: "view"` — the same bundle the diff view uses, minus the diff.
  *
+ * There is deliberately NO size ceiling here. A file of any size loads and
+ * renders — serving large models is the product's point, and /rawblob streams
+ * without a cap for exactly that reason (#157). An earlier revision put a
+ * 25 MiB consent gate in front of the fetch; it read as "ForgeHub can't show
+ * this file", which is the impression the whole pipeline exists to avoid.
+ *
  * Everything that can go wrong (manifest gap, bundle load failure, mount
  * throw, blob 404) degrades to an honest binary-file card with a download
  * button. The one thing this viewer exists to prevent is the previous
  * behavior: model bytes decoded as a string and rendered as mojibake.
  */
-
-/**
- * Above this size the bytes are fetched only after an explicit click, with the
- * real cost on the button — the same honest-cost principle as the Tier B
- * consent gate. Below it the model just loads: a click-through on every small
- * file would tax the common case to protect the rare one.
- */
-export const VIEW_AUTO_LOAD_MAX_BYTES = 25 * 1024 * 1024;
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** Repo coordinates out of `repoBase` ("/alice/repo"). */
 function parseRepoBase(repoBase: string): { handle: string; repoName: string } | null {
@@ -39,7 +31,6 @@ function parseRepoBase(repoBase: string): { handle: string; repoName: string } |
 
 type Phase =
   | { kind: "loading" }
-  | { kind: "gate"; size: number }
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
@@ -47,13 +38,6 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
   const hostRef = useRef<HTMLDivElement | null>(null);
   const instRef = useRef<RendererInstance | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
-  // Consent is keyed to the exact file — a bare boolean survives blob→blob
-  // navigation (this component stays mounted across splat changes) and one
-  // click would unlock every later large file. Derived, so no reset effect
-  // can race the fetch effect.
-  const fileKey = `${gitRef}:${path}`;
-  const [consentedKey, setConsentedKey] = useState<string | null>(null);
-  const consented = consentedKey === fileKey;
 
   const repo = parseRepoBase(repoBase ?? "");
 
@@ -71,30 +55,6 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
     setPhase({ kind: "loading" });
 
     (async () => {
-      // Size first, bytes second: the auto-load ceiling needs the size BEFORE
-      // the download it exists to gate. /rawblob answers HEAD from its
-      // pre-flight without spawning git for the body.
-      const headRes = await fetch(
-        `${API_BASE}/repos/${repo.handle}/${repo.repoName}/rawblob?path=${encodeURIComponent(path)}&sha=${encodeURIComponent(gitRef)}`,
-        { method: "HEAD", headers: token ? { Authorization: `Bearer ${token}` } : {} },
-      );
-      if (cancelled) return;
-      if (!headRes.ok) {
-        setPhase({
-          kind: "error",
-          message:
-            headRes.status === 404
-              ? "File not found at this ref."
-              : `Could not load the file (HTTP ${headRes.status}).`,
-        });
-        return;
-      }
-      const size = Number(headRes.headers.get("content-length") ?? 0);
-      if (size > VIEW_AUTO_LOAD_MAX_BYTES && !consented) {
-        setPhase({ kind: "gate", size });
-        return;
-      }
-
       const [blob, formats] = await Promise.all([
         fetchRawBlob(token ?? null, repo.handle, repo.repoName, path, gitRef),
         loadSemanticFormats(),
@@ -135,7 +95,7 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
       revokeAll();
     };
     // repo is derived from repoBase; using its parts keeps the deps primitive.
-  }, [repo?.handle, repo?.repoName, path, filename, gitRef, token, consented]);
+  }, [repo?.handle, repo?.repoName, path, filename, gitRef, token]);
 
   async function download() {
     if (!repo) return;
@@ -148,23 +108,6 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  if (phase.kind === "gate") {
-    return (
-      <div className="p-12 text-center text-fh-fg-muted">
-        <p className="text-fh-sm font-medium text-fh-fg">
-          This file is {formatBytes(phase.size)} — larger than the {formatBytes(VIEW_AUTO_LOAD_MAX_BYTES)} auto-load ceiling.
-        </p>
-        <button
-          type="button"
-          onClick={() => setConsentedKey(fileKey)}
-          className="mt-3 inline-flex items-center h-7 px-3 text-fh-sm rounded-md border border-fh-border bg-fh-surface text-fh-fg hover:bg-fh-surface-muted cursor-pointer"
-        >
-          Load 3D view ({formatBytes(phase.size)})
-        </button>
-      </div>
-    );
   }
 
   if (phase.kind === "error") {
