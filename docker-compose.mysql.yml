@@ -1,0 +1,48 @@
+# MySQL overlay — merge with docker-compose.yml to use MySQL instead of SQLite.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d --build
+#   podman compose -f docker-compose.yml -f docker-compose.mysql.yml up -d --build
+#
+# Required in .env (add alongside the existing JWT_SECRET):
+#   MYSQL_PASSWORD=<strong random password>
+#   MYSQL_ROOT_PASSWORD=<strong random password>
+#
+# On first start Prisma runs `db push` which creates all tables with
+# MySQL-appropriate DDL.  On subsequent starts it runs `db push` again
+# (idempotent for additive schema changes).
+#
+# Data lives in the `forgehub-mysqldata` named volume — separate from the
+# default `forgehub-data` volume so switching providers does not mix files.
+
+version: "2.4"
+
+services:
+  mysql:
+    image: docker.io/library/mysql:8.4
+    environment:
+      MYSQL_DATABASE: forgehub
+      MYSQL_USER: forgehub
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+    volumes:
+      - forgehub-mysqldata:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      # `mysqladmin ping --silent` returns 0 once mysqld is accepting connections.
+      # No credentials needed for this check — it uses the unauthenticated ping.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  forgehub:
+    environment:
+      DATABASE_URL: "mysql://forgehub:${MYSQL_PASSWORD}@mysql:3306/forgehub"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  forgehub-mysqldata:

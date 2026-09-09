@@ -1,0 +1,44 @@
+# PostgreSQL overlay — merge with docker-compose.yml to use PostgreSQL instead of SQLite.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+#   podman compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+#
+# Required in .env (add alongside the existing JWT_SECRET):
+#   POSTGRES_PASSWORD=<strong random password>
+#
+# On first start Prisma runs `db push` which creates all tables with
+# PostgreSQL-appropriate DDL.  On subsequent starts it runs `db push` again
+# (idempotent for additive schema changes).
+#
+# Data lives in the `forgehub-pgdata` named volume — separate from the default
+# `forgehub-data` volume so switching providers does not mix files.
+
+version: "2.4"
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: forgehub
+      POSTGRES_USER: forgehub
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+    volumes:
+      - forgehub-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgehub -d forgehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  forgehub:
+    environment:
+      DATABASE_URL: "postgresql://forgehub:${POSTGRES_PASSWORD}@postgres:5432/forgehub"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  forgehub-pgdata:
