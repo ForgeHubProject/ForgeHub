@@ -2,7 +2,7 @@
 #   docker build -f apps/api/Dockerfile -t forgehub-api .
 #   podman build -f apps/api/Dockerfile -t forgehub-api .
 
-FROM node:22-slim AS build
+FROM docker.io/library/node:22-slim AS build
 # openssl: prisma's postinstall ("prepare": "prisma generate") needs it to pick an engine.
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -18,7 +18,7 @@ WORKDIR /repo/apps/api
 RUN npx prisma generate
 RUN npm run build
 
-FROM node:22-slim
+FROM docker.io/library/node:22-slim
 # git: git-http.ts and ingest.ts shell out to the real git binary.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates openssl \
