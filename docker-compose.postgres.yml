@@ -39,8 +39,8 @@ services:
       start_period: 30s
 
   forgehub:
-    image: docker.io/touficmajdalani/forgehub:latest
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
+    image: ghcr.io/touficmajdalani/forgehub:latest
+    # Also published to docker.io/touficmajdalani/forgehub:latest.
     # Building from source instead of the published image:
     # build: .
     environment:
