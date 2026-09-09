@@ -3,11 +3,13 @@ generator client {
 }
 
 datasource db {
-  // All three providers are generated into the Prisma client so the same image
-  // works with SQLite (default), PostgreSQL, or MySQL — selected at runtime by
-  // DATABASE_URL scheme (file:// → sqlite, postgres[ql]:// → postgresql,
-  // mysql:// → mysql).  See docker-compose.postgres.yml / docker-compose.mysql.yml.
-  provider = ["sqlite", "postgresql", "mysql"]
+  // Provider is selected at build time via the DATABASE_PROVIDER env var
+  // (default: sqlite).  The Prisma client is generated for ONE provider per
+  // image build — docker-compose.postgres.yml / docker-compose.mysql.yml pass
+  // the right DATABASE_PROVIDER build arg automatically.
+  // Bare-metal: set DATABASE_PROVIDER=postgresql|mysql|sqlite in your shell
+  // before running `npm run db:push` / `npm run dev:api`.
+  provider = env("DATABASE_PROVIDER")
   url      = env("DATABASE_URL")
 }
 

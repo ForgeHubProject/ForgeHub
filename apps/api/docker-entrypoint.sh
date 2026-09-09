@@ -101,6 +101,13 @@ db_provider() {
   esac
 }
 
+# Ensure DATABASE_PROVIDER is set — Prisma reads it at runtime via env("DATABASE_PROVIDER").
+# In Docker deployments the compose file sets it explicitly; bare-metal users may omit it,
+# in which case we derive it from DATABASE_URL.
+if [ -z "${DATABASE_PROVIDER:-}" ]; then
+  export DATABASE_PROVIDER="$(db_provider)"
+fi
+
 # ── Wait for external DB to accept TCP connections ────────────────────────────
 # SQLite is local — nothing to wait for.  PostgreSQL/MySQL containers need a
 # few seconds to initialise; we probe the TCP port rather than shipping extra
