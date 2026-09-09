@@ -9,7 +9,10 @@ version: "2.4"
 
 services:
   forgehub:
-    build: .
+    image: docker.io/touficmajdalani/forgehub:latest
+    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
+    # Building from source instead of the published image:
+    # build: .
     environment:
       DATABASE_URL: "file:/data/forgehub.db"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — see .env.example}"
