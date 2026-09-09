@@ -1,0 +1,135 @@
+name: Publish container images
+
+# Triggers:
+#   push to main  → builds latest + sha-tagged images
+#   tag v*.*.*    → builds semver-tagged images + updates latest
+#
+# Works with docker buildx (GitHub Actions default) and is OCI-compatible,
+# so the same images can be pulled with `podman pull`.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # required to push to ghcr.io
+
+jobs:
+  publish:
+    name: Build and push ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: apps/api/Dockerfile
+            image_name: forgehub-api
+          - service: web
+            dockerfile: apps/web/Dockerfile
+            image_name: forgehub-web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU lets buildx cross-compile arm64 images on amd64 runners.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── registry logins ──────────────────────────────────────────────────────
+      # ghcr.io — always available via GITHUB_TOKEN.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub — enabled when DOCKERHUB_TOKEN secret is set.
+      # Set repository variables: DOCKERHUB_USERNAME (vars, not secret).
+      # Set repository secrets: DOCKERHUB_TOKEN.
+      - name: Log in to Docker Hub
+        if: ${{ vars.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # quay.io — enabled when QUAY_PASSWORD secret is set.
+      # Set repository variables: QUAY_USERNAME (vars, not secret).
+      # Set repository secrets: QUAY_PASSWORD.
+      - name: Log in to quay.io
+        if: ${{ vars.QUAY_USERNAME != '' && secrets.QUAY_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ vars.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      # ── image list ───────────────────────────────────────────────────────────
+      # Build the list of image references that this run should tag. ghcr.io is
+      # always included; the other two are conditional on their credentials.
+      - name: Compute image list
+        id: images
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          QUAY_USERNAME: ${{ vars.QUAY_USERNAME }}
+          IMAGE_NAME: ${{ matrix.image_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          LIST="ghcr.io/${OWNER,,}/${IMAGE_NAME}"
+          if [[ -n "$DOCKERHUB_USERNAME" ]]; then
+            LIST="${LIST}"$'\n'"docker.io/${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+          fi
+          if [[ -n "$QUAY_USERNAME" ]]; then
+            LIST="${LIST}"$'\n'"quay.io/${QUAY_USERNAME}/${IMAGE_NAME}"
+          fi
+          printf 'list<<EOF\n%s\nEOF\n' "$LIST" >> "$GITHUB_OUTPUT"
+
+      # ── OCI metadata ─────────────────────────────────────────────────────────
+      # Generates tags (semver on tag, branch+sha on push) and OCI labels.
+      - name: Generate metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.images.outputs.list }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # ── build + push ─────────────────────────────────────────────────────────
+      # Builds linux/amd64 and linux/arm64 in one pass and pushes all tags.
+      # Layer cache is shared across matrix legs via GitHub Actions cache.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
+      - name: Image digest
+        run: echo "${{ steps.meta.outputs.tags }}" | head -1

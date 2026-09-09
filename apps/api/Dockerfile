@@ -1,5 +1,6 @@
 # Build context is the repo root (needed for npm workspaces):
 #   docker build -f apps/api/Dockerfile -t forgehub-api .
+#   podman build -f apps/api/Dockerfile -t forgehub-api .
 
 FROM node:22-slim AS build
 # openssl: prisma's postinstall ("prepare": "prisma generate") needs it to pick an engine.
@@ -69,5 +70,19 @@ ENV NPM_CONFIG_CACHE=/home/forgehub/.npm
 USER ${FORGEHUB_UID}:${FORGEHUB_GID}
 
 EXPOSE 3001
+# SSH git transport port is runtime-configurable via FORGEHUB_SSH_PORT.
+# Expose it at the container/compose level rather than here.
+
+# OCI image metadata — populated by docker/metadata-action in CI.
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.title="ForgeHub API" \
+      org.opencontainers.image.description="ForgeHub API server — Fastify, Prisma/SQLite, built-in SSH git transport" \
+      org.opencontainers.image.licenses="MIT"
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]
