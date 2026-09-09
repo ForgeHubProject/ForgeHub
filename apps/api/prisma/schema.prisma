@@ -3,7 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  // All three providers are generated into the Prisma client so the same image
+  // works with SQLite (default), PostgreSQL, or MySQL — selected at runtime by
+  // DATABASE_URL scheme (file:// → sqlite, postgres[ql]:// → postgresql,
+  // mysql:// → mysql).  See docker-compose.postgres.yml / docker-compose.mysql.yml.
+  provider = ["sqlite", "postgresql", "mysql"]
   url      = env("DATABASE_URL")
 }
 
@@ -564,8 +568,9 @@ enum CrossRefSourceType {
  * straight from the URL without an id lookup. Denormalized display data (actor
  * handle, label name/color, ref source) lives in `data` (JSON string) so history
  * survives label/user deletion — no FKs to mutable records. `data` is a JSON
- * string rather than a Json column because the datasource is SQLite (matching the
- * repo's existing String-encoded-JSON convention, e.g. DiffCache.result).
+ * string rather than a Json column — keeping the schema portable across all
+ * supported providers (sqlite, postgresql, mysql), matching the repo's
+ * String-encoded-JSON convention (e.g. DiffCache.result).
  */
 model TimelineEvent {
   id            String                  @id @default(cuid())
