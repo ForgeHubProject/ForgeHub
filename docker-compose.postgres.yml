@@ -5,8 +5,8 @@
 # Quick start:
 #   cp .env.postgres.example .env.postgres
 #   # Edit .env.postgres — set JWT_SECRET and POSTGRES_PASSWORD
-#   docker compose -f docker-compose.postgres.yml --env-file .env.postgres up -d --build
-#   podman compose -f docker-compose.postgres.yml --env-file .env.postgres up -d --build
+#   docker compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
+#   podman compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
 #
 # On first boot Prisma runs `db push` to create the schema with PostgreSQL DDL.
 # Subsequent boots are idempotent (additive schema changes only).
@@ -42,11 +42,7 @@ services:
     image: docker.io/touficmajdalani/forgehub:latest
     # Also published to ghcr.io/touficmajdalani/forgehub:latest.
     # Building from source instead of the published image:
-    # build:
-    #   context: .
-    #   args:
-    #     DATABASE_PROVIDER: postgresql
-    #     DATABASE_URL_BUILD: "postgresql://user:pass@localhost:5432/forgehub"
+    # build: .
     environment:
       DATABASE_URL: "postgresql://forgehub:${POSTGRES_PASSWORD}@postgres:5432/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.postgres — see .env.postgres.example}"

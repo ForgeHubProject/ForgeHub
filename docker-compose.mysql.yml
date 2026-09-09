@@ -5,8 +5,8 @@
 # Quick start:
 #   cp .env.mysql.example .env.mysql
 #   # Edit .env.mysql — set JWT_SECRET, MYSQL_PASSWORD, and MYSQL_ROOT_PASSWORD
-#   docker compose -f docker-compose.mysql.yml --env-file .env.mysql up -d --build
-#   podman compose -f docker-compose.mysql.yml --env-file .env.mysql up -d --build
+#   docker compose -f docker-compose.mysql.yml --env-file .env.mysql up -d
+#   podman compose -f docker-compose.mysql.yml --env-file .env.mysql up -d
 #
 # On first boot Prisma runs `db push` to create the schema with MySQL DDL.
 # Subsequent boots are idempotent (additive schema changes only).
@@ -45,11 +45,7 @@ services:
     image: docker.io/touficmajdalani/forgehub:latest
     # Also published to ghcr.io/touficmajdalani/forgehub:latest.
     # Building from source instead of the published image:
-    # build:
-    #   context: .
-    #   args:
-    #     DATABASE_PROVIDER: mysql
-    #     DATABASE_URL_BUILD: "mysql://user:pass@localhost:3306/forgehub"
+    # build: .
     environment:
       DATABASE_URL: "mysql://forgehub:${MYSQL_PASSWORD}@mysql:3306/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.mysql — see .env.mysql.example}"
