@@ -20,9 +20,12 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
-# DATABASE_URL must be set for `prisma generate` with a multi-provider schema;
-# a dummy file:// URL is enough — no real DB is touched at build time.
-ENV DATABASE_URL="file:/tmp/.build-dummy.db"
+# DATABASE_PROVIDER selects which Prisma client to generate (sqlite|postgresql|mysql).
+# DATABASE_URL_BUILD is a syntactically valid dummy for that provider — no real DB.
+ARG DATABASE_PROVIDER=sqlite
+ARG DATABASE_URL_BUILD="file:/tmp/.build-dummy.db"
+ENV DATABASE_PROVIDER=${DATABASE_PROVIDER}
+ENV DATABASE_URL=${DATABASE_URL_BUILD}
 RUN npm ci
 COPY apps/api apps/api
 WORKDIR /repo/apps/api
@@ -38,7 +41,10 @@ COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/api/prisma apps/api/prisma
-ENV DATABASE_URL="file:/tmp/.build-dummy.db"
+ARG DATABASE_PROVIDER=sqlite
+ARG DATABASE_URL_BUILD="file:/tmp/.build-dummy.db"
+ENV DATABASE_PROVIDER=${DATABASE_PROVIDER}
+ENV DATABASE_URL=${DATABASE_URL_BUILD}
 RUN npm ci
 COPY apps/web apps/web
 WORKDIR /repo/apps/web
