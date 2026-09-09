@@ -45,7 +45,6 @@ services:
         DATABASE_PROVIDER: postgresql
         DATABASE_URL_BUILD: "postgresql://user:pass@localhost:5432/forgehub"
     environment:
-      DATABASE_PROVIDER: postgresql
       DATABASE_URL: "postgresql://forgehub:${POSTGRES_PASSWORD}@postgres:5432/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.postgres — see .env.postgres.example}"
       PORT: "3001"
