@@ -27,10 +27,8 @@ jobs:
         include:
           - service: api
             dockerfile: apps/api/Dockerfile
-            image_name: forgehub-api
           - service: web
             dockerfile: apps/web/Dockerfile
-            image_name: forgehub-web
 
     steps:
       - name: Checkout
@@ -77,30 +75,35 @@ jobs:
       # ── image list ───────────────────────────────────────────────────────────
       # Build the list of image references that this run should tag. ghcr.io is
       # always included; the other two are conditional on their credentials.
+      # ── image list ───────────────────────────────────────────────────────────
+      # Single repo "forgehub" across all registries; tags are prefixed with
+      # the service name (api-latest, web-latest, api-1.0.0, web-1.0.0 …).
       - name: Compute image list
         id: images
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           QUAY_USERNAME: ${{ vars.QUAY_USERNAME }}
-          IMAGE_NAME: ${{ matrix.image_name }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          LIST="ghcr.io/${OWNER,,}/${IMAGE_NAME}"
+          LIST="ghcr.io/${OWNER,,}/forgehub"
           if [[ -n "$DOCKERHUB_USERNAME" ]]; then
-            LIST="${LIST}"$'\n'"docker.io/${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+            LIST="${LIST}"$'\n'"docker.io/${DOCKERHUB_USERNAME}/forgehub"
           fi
           if [[ -n "$QUAY_USERNAME" ]]; then
-            LIST="${LIST}"$'\n'"quay.io/${QUAY_USERNAME}/${IMAGE_NAME}"
+            LIST="${LIST}"$'\n'"quay.io/${QUAY_USERNAME}/forgehub"
           fi
           printf 'list<<EOF\n%s\nEOF\n' "$LIST" >> "$GITHUB_OUTPUT"
 
       # ── OCI metadata ─────────────────────────────────────────────────────────
-      # Generates tags (semver on tag, branch+sha on push) and OCI labels.
+      # All tags are prefixed with the service name so both images live in
+      # one repo: api-latest / web-latest, api-1.2.3 / web-1.2.3, etc.
       - name: Generate metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.images.outputs.list }}
+          flavor: |
+            prefix=${{ matrix.service }}-,onlatest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
