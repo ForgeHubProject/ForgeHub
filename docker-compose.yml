@@ -19,6 +19,24 @@ services:
       # boot sweep still clears leftover workspaces there; old logs are yours to
       # delete (see README, "Upgrading an existing install").
       FORGEHUB_CI_ROOT: "/ci"
+      # Optional features — forwarded from the host .env file.
+      # CI runner (off by default — see .env.example security note before enabling):
+      FORGEHUB_CI: "${FORGEHUB_CI:-}"
+      # SSH git transport (issue #116). Set FORGEHUB_SSH_PORT in .env to enable;
+      # also uncomment the `ports` block below so the port is reachable on the host.
+      # SSH is TCP — it cannot go through the nginx web container and must be
+      # exposed directly from the api container.
+      FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
+      # Explicit hostname used in the SSH clone URL shown in the web UI.
+      # When unset the browser's hostname is used (correct for most deployments).
+      FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
+    # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set in .env.
+    # SSH is TCP — nginx cannot proxy it, so this port must be exposed here on
+    # the api service directly, not via the web service. The host port and the
+    # container port are the same; to map port 22 externally, use a host
+    # firewall rule or load-balancer redirect rather than changing this line.
+    # ports:
+    #   - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       # forgehub-data: the durable forge — SQLite DB + bare repos. Losing it loses
       #                the instance.

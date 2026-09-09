@@ -5,8 +5,8 @@ import type { FastifyInstance } from "fastify";
 import ssh2 from "ssh2";
 import type { AuthContext, ServerChannel, Session } from "ssh2";
 import { bareRepoPathFromKey, sshHostKeyPath } from "../git-storage.js";
-import { prisma } from "../prisma.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
+import { resolveRepo, canRead, canWrite, type RepoAccessInput } from "../repo-access.js";
 import { fingerprintFromRaw } from "./keys.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
 
@@ -100,14 +100,6 @@ type GitService = "git-upload-pack" | "git-receive-pack";
 
 type ParsedGitCommand = { service: GitService; ownerHandle: string; repoName: string };
 
-type AccessRepo = {
-  id: string;
-  ownerId: string;
-  visibility: "PUBLIC" | "PRIVATE";
-  storageKey: string | null;
-  collaborators: Array<{ userId: string; role: "READER" | "WRITER" }>;
-};
-
 // ─── command parsing ──────────────────────────────────────────────────────────
 
 /**
@@ -133,35 +125,26 @@ export function parseGitCommand(command: string): ParsedGitCommand | null {
   return { service, ownerHandle: segments[0].toLowerCase(), repoName: segments[1].toLowerCase() };
 }
 
-// ─── access decisions (mirror git-http.ts) ────────────────────────────────────
-
-function userCanRead(repo: AccessRepo, userId: string): boolean {
-  if (repo.visibility === "PUBLIC") return true;
-  if (userId === repo.ownerId) return true;
-  return repo.collaborators.some((c) => c.userId === userId);
-}
-
-function userCanWrite(repo: AccessRepo, userId: string): boolean {
-  if (userId === repo.ownerId) return true;
-  return repo.collaborators.some((c) => c.userId === userId && c.role === "WRITER");
-}
+// ─── access decisions ─────────────────────────────────────────────────────────
 
 export type AccessDecision = { allowed: true } | { allowed: false; reason: string };
 
+type RepoForAccess = RepoAccessInput & { id: string; storageKey?: string | null };
+
 /**
- * Decide whether `actor` may run `service` against `repo`. User SSH keys use the
- * exact HTTP checks (public read; owner/writer for the rest). A deploy key is
- * bound to its own repo — cross-repo use is refused — grants read there always,
- * and grants write only when it is NOT read-only and the service is receive-pack.
+ * Decide whether `actor` may run `service` against `repo`. User SSH keys delegate
+ * to `canRead`/`canWrite` from repo-access — identical to the HTTP checks and
+ * org/team-aware. A deploy key is repo-scoped: cross-repo use is refused, read is
+ * always granted on its own repo, write only when not flagged read-only.
  */
-export function decideAccess(actor: SshActor, repo: AccessRepo, service: GitService): AccessDecision {
+export function decideAccess(actor: SshActor, repo: RepoForAccess, service: GitService): AccessDecision {
   const wantsWrite = service === "git-receive-pack";
 
   if (actor.kind === "user") {
     if (wantsWrite) {
-      return userCanWrite(repo, actor.userId) ? { allowed: true } : { allowed: false, reason: "Write access denied" };
+      return canWrite(repo, actor.userId) ? { allowed: true } : { allowed: false, reason: "Write access denied" };
     }
-    return userCanRead(repo, actor.userId) ? { allowed: true } : { allowed: false, reason: "Repository not found" };
+    return canRead(repo, actor.userId) ? { allowed: true } : { allowed: false, reason: "Repository not found" };
   }
 
   // Deploy key: repo-scoped credential.
@@ -217,10 +200,7 @@ async function handleExec(
     return;
   }
 
-  const repo = (await prisma.repo.findFirst({
-    where: { name: parsed.repoName, owner: { handle: parsed.ownerHandle } },
-    include: { collaborators: { select: { userId: true, role: true } } },
-  })) as AccessRepo | null;
+  const repo = await resolveRepo(parsed.ownerHandle, parsed.repoName);
 
   if (!repo || !repo.storageKey) {
     fail(stream, "repository not found");
