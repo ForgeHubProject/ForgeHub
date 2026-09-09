@@ -42,8 +42,8 @@ services:
       start_period: 45s
 
   forgehub:
-    image: docker.io/touficmajdalani/forgehub:latest-mysql
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest-mysql.
+    image: docker.io/touficmajdalani/forgehub:latest
+    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
     # Building from source instead of the published image:
     # build:
     #   context: .

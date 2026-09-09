@@ -152,6 +152,19 @@ echo "Applying database migrations..."
 PRISMA_BIN="npx prisma"
 [ -x /repo/node_modules/.bin/prisma ] && PRISMA_BIN="/repo/node_modules/.bin/prisma"
 
+# ── Runtime provider patch ────────────────────────────────────────────────────
+# The image is built with provider = "sqlite". For PostgreSQL / MySQL, patch the
+# schema and regenerate the Prisma client in-place. The generated JS in
+# node_modules/.prisma/client/ is writable inside the container (union-fs layer).
+# prisma generate only rewrites JS wrappers — no binary download needed.
+SCHEMA_FILE="/app/api/prisma/schema.prisma"
+PROVIDER="$(db_provider)"
+if [ "$PROVIDER" != "sqlite" ]; then
+  echo "Switching Prisma provider to $PROVIDER..."
+  sed -i "s/provider = \"sqlite\"/provider = \"${PROVIDER}\"/" "$SCHEMA_FILE"
+  $PRISMA_BIN generate --schema="$SCHEMA_FILE"
+fi
+
 case "$(db_provider)" in
   sqlite)
     # SQLite: replay the SQL migration files (existing behaviour — SQLite-specific
