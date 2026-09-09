@@ -3,13 +3,11 @@ generator client {
 }
 
 datasource db {
-  // Provider is selected at build time via the DATABASE_PROVIDER env var
-  // (default: sqlite).  The Prisma client is generated for ONE provider per
-  // image build — docker-compose.postgres.yml / docker-compose.mysql.yml pass
-  // the right DATABASE_PROVIDER build arg automatically.
-  // Bare-metal: set DATABASE_PROVIDER=postgresql|mysql|sqlite in your shell
-  // before running `npm run db:push` / `npm run dev:api`.
-  provider = env("DATABASE_PROVIDER")
+  // Prisma 6 requires a literal provider string — no env() or array allowed.
+  // Docker builds for PostgreSQL/MySQL patch this line at build time via sed
+  // (see DATABASE_PROVIDER ARG in Dockerfile / docker-compose.postgres.yml).
+  // For bare-metal non-SQLite: change this value locally before `npm run db:generate`.
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 

@@ -48,7 +48,6 @@ services:
         DATABASE_PROVIDER: mysql
         DATABASE_URL_BUILD: "mysql://user:pass@localhost:3306/forgehub"
     environment:
-      DATABASE_PROVIDER: mysql
       DATABASE_URL: "mysql://forgehub:${MYSQL_PASSWORD}@mysql:3306/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.mysql — see .env.mysql.example}"
       PORT: "3001"

@@ -14,9 +14,9 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
 ARG DATABASE_PROVIDER=sqlite
 ARG DATABASE_URL_BUILD="file:/tmp/.build-dummy.db"
-ENV DATABASE_PROVIDER=${DATABASE_PROVIDER}
 ENV DATABASE_URL=${DATABASE_URL_BUILD}
-RUN npm ci
+RUN sed -i "s/provider = \"sqlite\"/provider = \"${DATABASE_PROVIDER}\"/" \
+      apps/api/prisma/schema.prisma && npm ci
 COPY apps/api apps/api
 WORKDIR /repo/apps/api
 RUN npx prisma generate
