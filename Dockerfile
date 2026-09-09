@@ -20,14 +20,12 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
-# Prisma 6 requires a literal provider string in schema.prisma.
-# Patch it at build time for non-sqlite targets; sqlite is already the default.
-# DATABASE_URL_BUILD must be a syntactically valid URL for the chosen provider.
-ARG DATABASE_PROVIDER=sqlite
+# Always build with the sqlite provider. The entrypoint patches schema.prisma
+# and re-runs prisma generate at container start when DATABASE_URL points at
+# PostgreSQL or MySQL — no separate image variant required.
 ARG DATABASE_URL_BUILD="file:/tmp/.build-dummy.db"
 ENV DATABASE_URL=${DATABASE_URL_BUILD}
-RUN sed -i "s/provider = \"sqlite\"/provider = \"${DATABASE_PROVIDER}\"/" \
-      apps/api/prisma/schema.prisma && npm ci
+RUN npm ci
 COPY apps/api apps/api
 WORKDIR /repo/apps/api
 RUN npx prisma generate
@@ -42,11 +40,9 @@ COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/api/prisma apps/api/prisma
-ARG DATABASE_PROVIDER=sqlite
 ARG DATABASE_URL_BUILD="file:/tmp/.build-dummy.db"
 ENV DATABASE_URL=${DATABASE_URL_BUILD}
-RUN sed -i "s/provider = \"sqlite\"/provider = \"${DATABASE_PROVIDER}\"/" \
-      apps/api/prisma/schema.prisma && npm ci
+RUN npm ci
 COPY apps/web apps/web
 WORKDIR /repo/apps/web
 ARG VITE_API_URL=""
