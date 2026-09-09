@@ -8,10 +8,8 @@
 version: "2.4"
 
 services:
-  api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+  forgehub:
+    build: .
     environment:
       DATABASE_URL: "file:/data/forgehub.db"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — see .env.example}"
@@ -33,17 +31,16 @@ services:
       FORGEHUB_CI: "${FORGEHUB_CI:-}"
       # SSH git transport (issue #116). Set FORGEHUB_SSH_PORT in .env to enable;
       # also uncomment the `ports` block below so the port is reachable on the host.
-      # SSH is TCP — it cannot go through the nginx web container and must be
-      # exposed directly from the api container.
+      # SSH is TCP — nginx cannot proxy it; the API binds it directly.
       FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
       # Explicit hostname used in the SSH clone URL shown in the web UI.
       # When unset the browser's hostname is used (correct for most deployments).
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
+    ports:
+      - "${WEB_PORT:-8080}:80"
     # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set in .env.
-    # SSH is TCP — nginx cannot proxy it, so this port must be exposed here on
-    # the api service directly, not via the web service. The host port and the
-    # container port are the same; to map port 22 externally, use a host
-    # firewall rule or load-balancer redirect rather than changing this line.
+    # The host port and the container port must match; to map port 22
+    # externally use a host firewall rule or load-balancer redirect.
     # ports:
     #   - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
@@ -63,22 +60,12 @@ services:
       - forgehub-ci:/ci
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # Checks through nginx → API so both processes must be up to pass.
+      test: ["CMD", "node", "-e", "fetch('http://localhost/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 30s
-
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    depends_on:
-      api:
-        condition: service_healthy
-    restart: on-failure
-    ports:
-      - "${WEB_PORT:-8080}:80"
 
 volumes:
   forgehub-data:

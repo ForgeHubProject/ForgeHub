@@ -1,11 +1,11 @@
-name: Publish container images
+name: Publish container image
 
 # Triggers:
-#   push to main  → builds latest + sha-tagged images
-#   tag v*.*.*    → builds semver-tagged images + updates latest
+#   push to main  → builds latest + sha-tagged image
+#   tag v*.*.*    → builds semver-tagged image + updates latest
 #
-# Works with docker buildx (GitHub Actions default) and is OCI-compatible,
-# so the same images can be pulled with `podman pull`.
+# Produces a single `forgehub` image containing both the API (Node.js) and the
+# web frontend (nginx). OCI-compatible; pull with docker or podman.
 
 on:
   push:
@@ -19,16 +19,8 @@ permissions:
 
 jobs:
   publish:
-    name: Build and push ${{ matrix.service }}
+    name: Build and push forgehub
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: api
-            dockerfile: apps/api/Dockerfile
-          - service: web
-            dockerfile: apps/web/Dockerfile
 
     steps:
       - name: Checkout
@@ -73,11 +65,7 @@ jobs:
           password: ${{ secrets.QUAY_PASSWORD }}
 
       # ── image list ───────────────────────────────────────────────────────────
-      # Build the list of image references that this run should tag. ghcr.io is
-      # always included; the other two are conditional on their credentials.
-      # ── image list ───────────────────────────────────────────────────────────
-      # Single repo "forgehub" across all registries; tags are prefixed with
-      # the service name (api-latest, web-latest, api-1.0.0, web-1.0.0 …).
+      # ghcr.io always; Docker Hub and quay.io conditional on credentials.
       - name: Compute image list
         id: images
         env:
@@ -95,15 +83,11 @@ jobs:
           printf 'list<<EOF\n%s\nEOF\n' "$LIST" >> "$GITHUB_OUTPUT"
 
       # ── OCI metadata ─────────────────────────────────────────────────────────
-      # All tags are prefixed with the service name so both images live in
-      # one repo: api-latest / web-latest, api-1.2.3 / web-1.2.3, etc.
       - name: Generate metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.images.outputs.list }}
-          flavor: |
-            prefix=${{ matrix.service }}-,onlatest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -116,13 +100,11 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # ── build + push ─────────────────────────────────────────────────────────
-      # Builds linux/amd64 and linux/arm64 in one pass and pushes all tags.
-      # Layer cache is shared across matrix legs via GitHub Actions cache.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -131,8 +113,8 @@ jobs:
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VCS_REF=${{ github.sha }}
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Image digest
         run: echo "${{ steps.meta.outputs.tags }}" | head -1
