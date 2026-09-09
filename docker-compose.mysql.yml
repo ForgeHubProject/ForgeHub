@@ -42,10 +42,14 @@ services:
       start_period: 45s
 
   forgehub:
-    image: docker.io/touficmajdalani/forgehub:latest
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
-    # Building from source instead of the published image:
-    # build: .
+    image: docker.io/touficmajdalani/forgehub:latest-mysql
+    # Also published to ghcr.io/touficmajdalani/forgehub:latest-mysql.
+    # Building from source (with MySQL Prisma client baked in):
+    # build:
+    #   context: .
+    #   args:
+    #     DATABASE_PROVIDER: mysql
+    #     DATABASE_URL_BUILD: "mysql://user:pass@localhost:3306/forgehub"
     environment:
       DATABASE_URL: "mysql://forgehub:${MYSQL_PASSWORD}@mysql:3306/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.mysql — see .env.mysql.example}"

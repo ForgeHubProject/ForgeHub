@@ -39,10 +39,14 @@ services:
       start_period: 30s
 
   forgehub:
-    image: ghcr.io/touficmajdalani/forgehub:latest
-    # Also published to docker.io/touficmajdalani/forgehub:latest.
-    # Building from source instead of the published image:
-    # build: .
+    image: ghcr.io/touficmajdalani/forgehub:latest-postgres
+    # Also published to docker.io/touficmajdalani/forgehub:latest-postgres.
+    # Building from source (with PostgreSQL Prisma client baked in):
+    # build:
+    #   context: .
+    #   args:
+    #     DATABASE_PROVIDER: postgresql
+    #     DATABASE_URL_BUILD: "postgresql://user:pass@localhost:5432/forgehub"
     environment:
       DATABASE_URL: "postgresql://forgehub:${POSTGRES_PASSWORD}@postgres:5432/forgehub"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.postgres — see .env.postgres.example}"
