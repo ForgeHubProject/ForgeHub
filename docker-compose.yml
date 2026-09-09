@@ -1,3 +1,12 @@
+# Compose file format 2.4:
+#   - docker-compose (v1 legacy), docker compose (v2 plugin),
+#     podman-compose, and podman compose all parse this version.
+#   - Format 2.x is the only schema that supports both top-level named
+#     volumes AND depends_on: condition: service_healthy.  Format 3.x
+#     dropped the condition syntax; no-version (Compose Spec) breaks
+#     docker-compose v1 on top-level volumes.
+version: "2.4"
+
 services:
   api:
     build:
@@ -52,11 +61,13 @@ services:
       # log growth is CI_MAX_LOG_BYTES, not this split.
       - forgehub-data:/data
       - forgehub-ci:/ci
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   web:
     build:
@@ -65,6 +76,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    restart: on-failure
     ports:
       - "${WEB_PORT:-8080}:80"
 

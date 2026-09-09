@@ -2,7 +2,7 @@
 #   docker build -f apps/web/Dockerfile -t forgehub-web .
 #   podman build -f apps/web/Dockerfile -t forgehub-web .
 
-FROM node:22-slim AS build
+FROM docker.io/library/node:22-slim AS build
 # openssl: npm ci runs every workspace's "prepare" script, including api's `prisma generate`.
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
