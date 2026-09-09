@@ -11,6 +11,8 @@ apps/api/.env
 .env
 .env.*
 !.env.example
+!.env.postgres.example
+!.env.mysql.example
 coverage/
 .DS_Store
 *.log
