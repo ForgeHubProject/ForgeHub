@@ -39,6 +39,14 @@ services:
       # Explicit hostname used in the SSH clone URL shown in the web UI.
       # When unset the browser's hostname is used (correct for most deployments).
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
+      PUBLIC_URL: "${PUBLIC_URL:-}"
+      SMTP_URL: "${SMTP_URL:-}"
+      MAIL_FROM: "${MAIL_FROM:-}"
+      UNSUBSCRIBE_SECRET: "${UNSUBSCRIBE_SECRET:-}"
+      CI_JOB_TIMEOUT: "${CI_JOB_TIMEOUT:-}"
+      CI_MAX_LOG_BYTES: "${CI_MAX_LOG_BYTES:-}"
+      AVATAR_MAX_BYTES: "${AVATAR_MAX_BYTES:-}"
+      FORGEHUB_RAWBLOB_MAX_BYTES: "${FORGEHUB_RAWBLOB_MAX_BYTES:-}"
     ports:
       - "${WEB_PORT:-8080}:80"
     # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set in .env.
