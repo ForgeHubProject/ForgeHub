@@ -1,11 +1,13 @@
 name: Publish container image
 
 # Triggers:
-#   push to main  → builds latest + sha-tagged image
-#   tag v*.*.*    → builds semver-tagged image + updates latest
+#   push to main  → builds latest + sha-tagged image (all three DB variants)
+#   tag v*.*.*    → builds semver-tagged image + updates latest (all three DB variants)
 #
-# Produces a single `forgehub` image containing both the API (Node.js) and the
-# web frontend (nginx). OCI-compatible; pull with docker or podman.
+# Tags produced per variant:
+#   sqlite     → :latest, :main, :sha-<short>, :v1.2.3, :1.2, :1
+#   postgresql → :latest-postgres, :main-postgres, :sha-<short>-postgres, :v1.2.3-postgres, …
+#   mysql      → :latest-mysql,    :main-mysql,    :sha-<short>-mysql,    :v1.2.3-mysql,    …
 
 on:
   push:
@@ -19,8 +21,22 @@ permissions:
 
 jobs:
   publish:
-    name: Build and push forgehub
+    name: Build and push forgehub (${{ matrix.provider }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: sqlite
+            suffix: ""
+            url: "file:/tmp/.build-dummy.db"
+          - provider: postgresql
+            suffix: "-postgres"
+            url: "postgresql://user:pass@localhost:5432/forgehub"
+          - provider: mysql
+            suffix: "-mysql"
+            url: "mysql://user:pass@localhost:3306/forgehub"
 
     steps:
       - name: Checkout
@@ -34,7 +50,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # ── registry logins ──────────────────────────────────────────────────────
-      # ghcr.io — always available via GITHUB_TOKEN.
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
         with:
@@ -42,9 +57,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Docker Hub — enabled when DOCKERHUB_TOKEN secret is set.
-      # Set repository variables: DOCKERHUB_USERNAME (vars, not secret).
-      # Set repository secrets: DOCKERHUB_TOKEN.
       - name: Log in to Docker Hub
         if: ${{ vars.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
@@ -53,9 +65,6 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # quay.io — enabled when QUAY_PASSWORD secret is set.
-      # Set repository variables: QUAY_USERNAME (vars, not secret).
-      # Set repository secrets: QUAY_PASSWORD.
       - name: Log in to quay.io
         if: ${{ vars.QUAY_USERNAME != '' && secrets.QUAY_PASSWORD != '' }}
         uses: docker/login-action@v3
@@ -65,7 +74,6 @@ jobs:
           password: ${{ secrets.QUAY_PASSWORD }}
 
       # ── image list ───────────────────────────────────────────────────────────
-      # ghcr.io always; Docker Hub and quay.io conditional on credentials.
       - name: Compute image list
         id: images
         env:
@@ -88,6 +96,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.images.outputs.list }}
+          flavor: |
+            suffix=${{ matrix.suffix }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -110,11 +120,13 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            DATABASE_PROVIDER=${{ matrix.provider }}
+            DATABASE_URL_BUILD=${{ matrix.url }}
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VCS_REF=${{ github.sha }}
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.provider }}
+          cache-to: type=gha,scope=${{ matrix.provider }},mode=max
 
       - name: Image digest
         run: echo "${{ steps.meta.outputs.tags }}" | head -1

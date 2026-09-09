@@ -39,8 +39,8 @@ services:
       start_period: 30s
 
   forgehub:
-    image: docker.io/touficmajdalani/forgehub:latest
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
+    image: docker.io/touficmajdalani/forgehub:latest-postgres
+    # Also published to ghcr.io/touficmajdalani/forgehub:latest-postgres.
     # Building from source instead of the published image:
     # build:
     #   context: .
