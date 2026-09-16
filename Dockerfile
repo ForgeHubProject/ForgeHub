@@ -66,7 +66,9 @@ ENV HOME=/root
 ENV NPM_CONFIG_CACHE=/root/.npm
 
 # ── API ───────────────────────────────────────────────────────────────────────
-WORKDIR /app/api
+# Use the same path layout as apps/api/Dockerfile so Node.js module resolution
+# from dist/server.js walks up to /repo/node_modules correctly.
+WORKDIR /repo/apps/api
 COPY --from=api-build /repo/node_modules /repo/node_modules
 COPY --from=api-build /repo/apps/api/dist ./dist
 COPY --from=api-build /repo/apps/api/prisma ./prisma
