@@ -43,7 +43,7 @@ services:
 
   forgehub:
     image: docker.io/touficmajdalani/forgehub:latest-mysql
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest-mysql.
+    # Also published to ghcr.io/forgehubproject/forgehub:latest-mysql and quay.io/encryptdev88/forgehub:latest-mysql.
     # Building from source (with MySQL Prisma client baked in):
     # build:
     #   context: .
