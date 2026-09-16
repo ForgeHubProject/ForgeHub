@@ -10,7 +10,7 @@ version: "2.4"
 services:
   forgehub:
     image: docker.io/touficmajdalani/forgehub:latest
-    # Also published to ghcr.io/touficmajdalani/forgehub:latest.
+    # Also published to ghcr.io/forgehubproject/forgehub:latest and quay.io/encryptdev88/forgehub:latest.
     # Building from source instead of the published image:
     # build: .
     environment:
