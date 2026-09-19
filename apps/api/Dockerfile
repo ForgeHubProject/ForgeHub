@@ -18,6 +18,11 @@ ENV DATABASE_URL=${DATABASE_URL_BUILD}
 RUN sed -i "s/provider = \"sqlite\"/provider = \"${DATABASE_PROVIDER}\"/" \
       apps/api/prisma/schema.prisma && npm ci
 COPY apps/api apps/api
+# COPY apps/api above overwrites schema.prisma with the pristine (sqlite) copy
+# from the build context, undoing the patch above. Re-patch before generate,
+# or every non-sqlite image ships a client generated for sqlite.
+RUN sed -i "s/provider = \"sqlite\"/provider = \"${DATABASE_PROVIDER}\"/" \
+      apps/api/prisma/schema.prisma
 WORKDIR /repo/apps/api
 RUN npx prisma generate
 RUN npm run build
