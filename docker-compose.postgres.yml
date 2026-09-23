@@ -66,9 +66,8 @@ services:
       FORGEHUB_RAWBLOB_MAX_BYTES: "${FORGEHUB_RAWBLOB_MAX_BYTES:-}"
     ports:
       - "${WEB_PORT:-8080}:80"
-    # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set.
-    # ports:
-    #   - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+      # SSH git transport: active now that FORGEHUB_SSH_PORT is set in .env.postgres.
+      - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       - forgehub-data:/data
       - forgehub-ci:/ci
