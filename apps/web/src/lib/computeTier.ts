@@ -29,16 +29,19 @@ export function isComputeTier(v: unknown): v is ComputeTier {
 // ─── capability detection (Tier B) ──────────────────────────────────────────────
 
 /**
- * Per-blob ceiling above which Tier B is withheld entirely — deliberately the
- * SAME number as the server's MAX_WASM_BYTES (fhr/official-handlers.ts), and
- * for a stronger version of the same reason. A wasm diff call can't be
- * interrupted from JS; the server at least runs it in a worker it can kill on
- * timeout, while browserWasm.ts runs it on the page's main thread, where a hang
- * freezes the tab. Offering the browser an input the server itself refuses to
- * attempt would be backwards. SPEC-RENDERING open question 3 floats a 200 MB
- * combined ceiling; that needs the worker port first (see browserWasm.ts).
+ * Per-blob ceiling above which Tier B is withheld entirely. Unpinned from the
+ * server's MAX_WASM_BYTES (issue #185, #177 closed): browserWasm.ts now runs
+ * the wasm call in a Worker it can terminate on timeout, the same shape as the
+ * server's own worker, so the "the browser can't kill a hung call" reason that
+ * pinned this to the server's number no longer applies.
+ *
+ * This value is a conservative bump, not the measured ceiling SPEC-RENDERING
+ * open question 3 floats (a 200 MB combined budget): that number wants real
+ * browser memory profiling across representative 50–200 MB scenes, which
+ * hasn't been run yet. Treat this as "big enough that the worker port alone
+ * unblocks most real files" pending that measurement, not as the final answer.
  */
-export const TIER_B_MAX_BLOB_BYTES = 8 * 1024 * 1024;
+export const TIER_B_MAX_BLOB_BYTES = 32 * 1024 * 1024;
 
 /** Tier-S latency past which the reactive "render on your machine?" nudge shows. */
 export const TIER_S_SLOW_MS = 4000;
@@ -53,6 +56,8 @@ export type MetaNeed = {
   clientTierActive?: boolean;
   /** A Tier-S request passed the threshold; the nudge offers alternatives. */
   serverSlow?: boolean;
+  /** The server refused (413) — the offload card needs SHAs immediately, not lazily. */
+  oversized?: boolean;
 };
 
 /**
@@ -66,7 +71,7 @@ export type MetaNeed = {
  */
 export function needsFileDiffMeta(need: MetaNeed): boolean {
   if (!need.semantic) return false;
-  return Boolean(need.pillEngaged || need.clientTierActive || need.serverSlow);
+  return Boolean(need.pillEngaged || need.clientTierActive || need.serverSlow || need.oversized);
 }
 
 /** WebAssembly support probe, parameterized for tests via `scope`. */

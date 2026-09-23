@@ -148,18 +148,18 @@ describe("assessBrowserTier (capability detection)", () => {
     if (!a.available) expect(a.reason).toContain("gltf-scene");
   });
 
-  // Regression (#66 P4 review): the ceiling is PER BLOB and matches the
-  // server's MAX_WASM_BYTES — the browser runs the same synchronous wasm call
-  // on its main thread, with no worker to kill, so it may not accept an input
-  // the server refuses. A pair that only breaches when summed is still fine.
+  // Regression (#66 P4 review): the ceiling is PER BLOB. A pair that only
+  // breaches when summed is still fine.
   it("is unavailable above the per-blob ceiling", () => {
     const a = assessBrowserTier(meta({ headSize: TIER_B_MAX_BLOB_BYTES + 1 }), true);
     expect(a.available).toBe(false);
     if (!a.available) expect(a.reason).toContain("too large");
   });
 
-  it("matches the server's per-blob wasm ceiling exactly", () => {
-    expect(TIER_B_MAX_BLOB_BYTES).toBe(8 * 1024 * 1024);
+  // Regression (#185/#177): unpinned from the server's MAX_WASM_BYTES once the
+  // browser ran its wasm call in a killable Worker instead of the main thread.
+  it("is independent of the server's wasm ceiling", () => {
+    expect(TIER_B_MAX_BLOB_BYTES).toBe(32 * 1024 * 1024);
   });
 
   it("allows a pair whose combined size exceeds one blob's ceiling", () => {
