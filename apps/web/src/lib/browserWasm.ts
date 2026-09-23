@@ -1,6 +1,7 @@
 import { API_BASE } from "../api";
-import type { DiffChange } from "../types";
-import type { GoConstructor } from "./wasm_exec";
+import { parseDiffOutput, type BrowserStructuredDiff } from "./wasmHandlerLoad";
+
+export type { BrowserStructuredDiff };
 
 // Tier-B compute: run the official FHR handler's wasm build IN THE BROWSER
 // (issue #66 P4, SPEC-RENDERING §4). This is the client twin of the API's
@@ -16,116 +17,163 @@ import type { GoConstructor } from "./wasm_exec";
 // (SPEC-RENDERING P6); community compute belongs to the consented sandbox
 // (#70), not this module.
 //
-// The wasm runs on the MAIN THREAD, and that is the weak point of this module,
-// not a settled one: `handler.diff()` is a synchronous call with no timeout and
-// no abort path, so a pathological input freezes the viewer's tab outright. The
-// only thing standing between a user and that is capability detection
-// (computeTier.ts TIER_B_MAX_BLOB_BYTES), which is why that ceiling is pinned to
-// the server's own per-blob MAX_WASM_BYTES rather than anything larger — the
-// server refuses to attempt more than that even with a worker it can kill, so
-// offering the browser more would be backwards. Raising it is a worker port,
-// not a constant change.
+// The wasm runs in a dedicated Web Worker (issue #177 — closed: it used to run
+// on the main thread, where a hang froze the tab). browserWasmWorker.ts is the
+// worker entry point; this module spawns it, sends bytes over, and bounds each
+// diff() call with a wall-clock timeout that terminates and respawns the
+// worker on overrun — the same shape as the server's WasmWorkerHandler in
+// fhr/wasm-runtime.ts, ported from node:worker_threads to the Worker API.
 
-/** The structured diff a wasm handler produces — same wire shape the server returns. */
-export type BrowserStructuredDiff = { version: string; format: string; changes: DiffChange[] };
+/** Per-call bound; a hang past this kills the worker and the next call respawns it. */
+export const BROWSER_WASM_TIMEOUT_MS = 15_000;
 
-/** The callable a loaded wasm build registers: bytes in, raw JSON string out. */
-export type BrowserWasmHandler = { diff(base: Uint8Array, head: Uint8Array): string };
+/** The subset of the Worker surface used here, injectable for tests. */
+export type WorkerLike = {
+  postMessage(msg: unknown): void;
+  terminate(): void;
+  onmessage: ((ev: MessageEvent) => void) | null;
+  onerror: ((ev: ErrorEvent) => void) | null;
+};
 
 export type BrowserWasmDeps = {
   fetchImpl: typeof fetch;
-  instantiate: (bytes: ArrayBuffer, handlerId: string) => Promise<BrowserWasmHandler>;
+  createWorker: () => WorkerLike;
+  timeoutMs: number;
 };
+
+function defaultCreateWorker(): WorkerLike {
+  return new Worker(new URL("./browserWasmWorker.ts", import.meta.url), {
+    type: "module",
+  }) as unknown as WorkerLike;
+}
 
 const defaultDeps: BrowserWasmDeps = {
   fetchImpl: (...args: Parameters<typeof fetch>) => fetch(...args),
-  instantiate: instantiateOnPage,
+  createWorker: defaultCreateWorker,
+  timeoutMs: BROWSER_WASM_TIMEOUT_MS,
 };
+
+type Pending = { resolve: (raw: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 /**
- * The two ambient things instantiation reaches for, injectable so the
- * global-discovery logic below is testable without a real Go build.
+ * Runs one handler's wasm build in a Worker. Each diff() is bounded by a
+ * timeout; a call that overruns terminates the worker (a synchronous wasm call
+ * can't be interrupted otherwise) and rejects, and the next call transparently
+ * respawns it.
  */
-export type PageInstantiateDeps = {
-  /** Installs `globalThis.Go` (the vendored wasm_exec runtime). */
-  loadGoRuntime: () => Promise<void>;
-  instantiateWasm: (
-    bytes: ArrayBuffer,
-    imports: WebAssembly.Imports,
-  ) => Promise<{ instance: WebAssembly.Instance }>;
-  scope: Record<string, unknown>;
-};
+export class WorkerWasmHandler {
+  private worker: WorkerLike | null = null;
+  private readyP: Promise<void> | null = null;
+  private pending = new Map<number, Pending>();
+  private seq = 0;
 
-const pageDeps: PageInstantiateDeps = {
-  loadGoRuntime: async () => {
-    await import("./wasm_exec.js"); // side effect: installs globalThis.Go
-  },
-  instantiateWasm: (bytes, imports) => WebAssembly.instantiate(bytes, imports),
-  scope: globalThis as unknown as Record<string, unknown>,
-};
+  constructor(
+    private readonly bytes: ArrayBuffer,
+    private readonly handlerId: string,
+    private readonly createWorker: () => WorkerLike,
+    private readonly timeoutMs: number,
+  ) {}
 
-// Instantiate a GOOS=js handler build on this page — mirrors the API's
-// wasm-worker.cjs: snapshot the __forgeHandler* globals, run the program (it
-// registers its api synchronously, then parks on select{}), and pick up the
-// global it added.
-export async function instantiateOnPage(
-  bytes: ArrayBuffer,
-  handlerId: string,
-  deps: PageInstantiateDeps = pageDeps,
-): Promise<BrowserWasmHandler> {
-  await deps.loadGoRuntime();
-  const g = deps.scope;
-  const Go = g["Go"] as GoConstructor | undefined;
-  if (!Go) throw new Error(`wasm ${handlerId}: Go runtime failed to load`);
+  private spawn(): Promise<void> {
+    return new Promise<void>((resolveReady, rejectReady) => {
+      const worker = this.createWorker();
+      this.worker = worker;
+      let ready = false;
 
-  const handlerGlobals = () => Object.keys(g).filter((k) => k.startsWith("__forgeHandler"));
-  const before = new Set(handlerGlobals());
-
-  const go = new Go();
-  const { instance } = await deps.instantiateWasm(bytes, go.importObject);
-  void go.run(instance);
-
-  const key = handlerGlobals().find((k) => {
-    const api = g[k] as { diff?: unknown } | undefined;
-    return !before.has(k) && typeof api?.diff === "function";
-  });
-  if (!key) throw new Error(`wasm ${handlerId}: registered no diff() global`);
-  return g[key] as BrowserWasmHandler;
-}
-
-/** Parse a wasm handler's JSON diff output — same contract as the server runtime. */
-export function parseDiffOutput(raw: string, handlerId: string): BrowserStructuredDiff {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error(`wasm ${handlerId}: unparseable diff output`);
+      worker.onmessage = (ev: MessageEvent) => {
+        const msg = ev.data as { type: string; id?: number; raw?: string; error?: string };
+        if (msg.type === "ready") {
+          ready = true;
+          resolveReady();
+        } else if (msg.type === "init-error") {
+          rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
+        } else if (msg.type === "result" && msg.id !== undefined) {
+          const p = this.pending.get(msg.id);
+          if (!p) return;
+          clearTimeout(p.timer);
+          this.pending.delete(msg.id);
+          if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
+          else p.resolve(msg.raw ?? "");
+        }
+      };
+      worker.onerror = (ev: ErrorEvent) => {
+        const err = new Error(ev.message || `wasm ${this.handlerId}: worker error`);
+        if (!ready) rejectReady(err);
+        // Only act if this is still the live worker — a terminated worker's
+        // late error must not tear down a freshly respawned replacement.
+        if (this.worker === worker) this.fail(err);
+      };
+      worker.postMessage({ type: "init", bytes: this.bytes, handlerId: this.handlerId });
+    });
   }
-  const obj = parsed as { error?: string; format?: string; changes?: DiffChange[] };
-  if (obj.error) throw new Error(`wasm ${handlerId}: ${obj.error}`);
-  return { version: "1.0", format: obj.format ?? handlerId, changes: obj.changes ?? [] };
+
+  /** Reject all in-flight calls and tear the worker down so the next call respawns. */
+  private fail(err: Error): void {
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
+    this.pending.clear();
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    this.readyP = null;
+  }
+
+  private ensure(): Promise<void> {
+    if (!this.readyP) this.readyP = this.spawn();
+    return this.readyP;
+  }
+
+  async diff(base: Uint8Array, head: Uint8Array): Promise<string> {
+    await this.ensure();
+    const worker = this.worker;
+    if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
+
+    return new Promise<string>((resolve, reject) => {
+      const id = ++this.seq;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        // Hung call: kill the worker so it can't wedge future calls; next diff respawns.
+        const err = new Error(`wasm ${this.handlerId}: diff timed out after ${this.timeoutMs}ms`);
+        this.fail(err);
+        reject(err);
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      worker.postMessage({ type: "diff", id, base, head });
+    });
+  }
 }
 
-// One in-flight/loaded instance per handler — the build is a singleton module.
-const cache = new Map<string, Promise<BrowserWasmHandler>>();
+// One in-flight/loaded handler per wasm build — the build is a singleton module.
+const cache = new Map<string, Promise<WorkerWasmHandler>>();
 
-/** Test hook: drop memoized handler instances. */
+/** Test hook: drop memoized handler instances (and their workers). */
 export function __resetBrowserHandlers(): void {
+  for (const p of cache.values()) {
+    p.then((h) => (h as unknown as { worker: WorkerLike | null }).worker?.terminate()).catch(() => {});
+  }
   cache.clear();
 }
 
 /**
- * Fetch a handler's official wasm build through the API proxy and instantiate
- * it, memoized per handler so repeated diffs reuse one instance. A failed load
- * is not memoized, allowing a retry after a transient error.
+ * Fetch a handler's official wasm build through the API proxy and spawn its
+ * worker, memoized per handler so repeated diffs reuse one instance. A failed
+ * load is not memoized, allowing a retry after a transient error.
  */
-export function loadBrowserHandler(handlerId: string, deps: BrowserWasmDeps = defaultDeps): Promise<BrowserWasmHandler> {
+export function loadBrowserHandler(handlerId: string, deps: BrowserWasmDeps = defaultDeps): Promise<WorkerWasmHandler> {
   let p = cache.get(handlerId);
   if (!p) {
     p = (async () => {
       const res = await deps.fetchImpl(`${API_BASE}/handlers/${encodeURIComponent(handlerId)}`);
       if (!res.ok) throw new Error(`wasm build for '${handlerId}' unavailable (HTTP ${res.status})`);
-      return deps.instantiate(await res.arrayBuffer(), handlerId);
+      const bytes = await res.arrayBuffer();
+      const handler = new WorkerWasmHandler(bytes, handlerId, deps.createWorker, deps.timeoutMs);
+      // Surface init failures now (spawn + wait for "ready") so a bad build
+      // fails the load rather than the first diff.
+      await (handler as unknown as { ensure(): Promise<void> }).ensure();
+      return handler;
     })();
     p.catch(() => cache.delete(handlerId));
     cache.set(handlerId, p);
@@ -146,5 +194,6 @@ export async function browserWasmDiff(
   deps: BrowserWasmDeps = defaultDeps,
 ): Promise<BrowserStructuredDiff> {
   const handler = await loadBrowserHandler(handlerId, deps);
-  return parseDiffOutput(handler.diff(base, head), handlerId);
+  const raw = await handler.diff(base, head);
+  return parseDiffOutput(raw, handlerId);
 }
