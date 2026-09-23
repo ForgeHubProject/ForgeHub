@@ -23,13 +23,14 @@ import {
   BrowserComputeGate,
   BuildMismatchBanner,
   LocalHandoffPanel,
+  OversizedFileCard,
   SlowServerNudge,
   useFileDiffMeta,
 } from "./computeTierUi";
 import { resolveBaseFileDiffViewer } from "../fileDiffViewerRegistry";
 import { FormatNotEnabledCard } from "./FormatNotEnabledCard";
 
-type Status = "loading" | "ready" | "empty" | "error" | "fallback" | "not-enabled";
+type Status = "loading" | "ready" | "empty" | "error" | "fallback" | "not-enabled" | "too-large";
 
 // The blob envelope a renderer receives (SPEC-RENDERING §2b, @fhr/types
 // RendererBlobs). Declared locally so the web app needs no build-time dep on
@@ -113,7 +114,12 @@ export function FhrFileDiffViewer({
     repoBase,
     path,
     headRef,
-    needsFileDiffMeta({ semantic: true, clientTierActive: tier !== "server", serverSlow: slow }),
+    needsFileDiffMeta({
+      semantic: true,
+      clientTierActive: tier !== "server",
+      serverSlow: slow,
+      oversized: status === "too-large",
+    }),
   );
 
   const browserReady =
@@ -225,6 +231,13 @@ export function FhrFileDiffViewer({
           setStatus("fallback");
           return;
         }
+        // 413: the server refused (file over DIFF_BUFFER_MAX) — offer the
+        // offload options instead of a dead-end message (#185).
+        if (tier === "server" && e instanceof ApiError && e.status === 413) {
+          setMessage(e.message);
+          setStatus("too-large");
+          return;
+        }
         setMessage(e instanceof Error ? e.message : String(e));
         setStatus("error");
       } finally {
@@ -309,6 +322,9 @@ export function FhrFileDiffViewer({
           </p>
         ))}
       {status === "empty" && <p className="text-sm text-gh-muted italic">No semantic changes detected.</p>}
+      {status === "too-large" && (
+        <OversizedFileCard message={message} meta={meta} onSwitchToBrowser={changeTier} />
+      )}
       {status === "error" && (
         <p className="text-sm text-gh-muted italic">Semantic diff unavailable: {message}</p>
       )}

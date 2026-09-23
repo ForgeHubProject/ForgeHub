@@ -379,6 +379,53 @@ export function SlowServerNudge({
   );
 }
 
+// ─── 413: too-large-for-the-server offload card ─────────────────────────────────
+
+/**
+ * Replaces the dead-end "Semantic diff unavailable" line when /filediff 413s
+ * (issue #185): the server refused, so this offers the two ways to compute it
+ * off-server instead of stopping. The Tier L command is always shown once meta
+ * has loaded — zero download, no ceiling. Tier B is offered only where
+ * feasible: it shares the same wasm engine and has its own (independent, see
+ * computeTier.ts) per-blob ceiling, so a file oversized enough for the server
+ * is often oversized for Tier B too.
+ */
+export function OversizedFileCard({
+  message,
+  meta,
+  onSwitchToBrowser,
+}: {
+  message: string;
+  meta: FileDiffMeta | null;
+  onSwitchToBrowser: (t: ComputeTier) => void;
+}) {
+  const browserOk = meta !== null && assessBrowserTier(meta).available;
+  return (
+    <div className="px-4 py-3">
+      <p className="text-fh-sm text-fh-fg-muted">{message}. Compute it yourself instead:</p>
+      {meta ? (
+        <div className="mt-3">
+          <p className="text-fh-sm text-fh-fg-muted">
+            Render on your machine — nothing downloads from ForgeHub:
+          </p>
+          <CopyableCommand command={forgeDiffCommand(meta.path, meta.baseSha, meta.headSha)} />
+        </div>
+      ) : (
+        <p className="mt-3 text-fh-sm text-fh-fg-subtle italic">Resolving revisions…</p>
+      )}
+      {browserOk && (
+        <button
+          type="button"
+          onClick={() => onSwitchToBrowser("browser")}
+          className={cx("mt-3", nudgeButtonCls)}
+        >
+          Compute in browser ({browserDownloadLabel(meta!)})
+        </button>
+      )}
+    </div>
+  );
+}
+
 const nudgeButtonCls = cx(
   "inline-flex items-center rounded-md border border-fh-border bg-fh-surface px-2.5 py-1",
   "text-fh-xs font-medium text-fh-fg cursor-pointer transition-colors hover:border-fh-border-strong",
