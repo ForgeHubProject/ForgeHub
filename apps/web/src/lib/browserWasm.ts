@@ -53,7 +53,12 @@ const defaultDeps: BrowserWasmDeps = {
   timeoutMs: BROWSER_WASM_TIMEOUT_MS,
 };
 
-type Pending = { resolve: (raw: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
+type WorkerResult = { raw?: string; bytes?: Uint8Array; mediaType?: string };
+type Pending = {
+  resolve: (r: WorkerResult) => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 /**
  * Runs one handler's wasm build in a Worker. Each diff() is bounded by a
@@ -66,6 +71,8 @@ export class WorkerWasmHandler {
   private readyP: Promise<void> | null = null;
   private pending = new Map<number, Pending>();
   private seq = 0;
+  /** The handler's preview media type (FHR SPEC §7); null when it has none. Known once ready. */
+  previewType: string | null = null;
 
   constructor(
     private readonly bytes: ArrayBuffer,
@@ -81,9 +88,18 @@ export class WorkerWasmHandler {
       let ready = false;
 
       worker.onmessage = (ev: MessageEvent) => {
-        const msg = ev.data as { type: string; id?: number; raw?: string; error?: string };
+        const msg = ev.data as {
+          type: string;
+          id?: number;
+          raw?: string;
+          bytes?: Uint8Array;
+          mediaType?: string;
+          previewType?: string | null;
+          error?: string;
+        };
         if (msg.type === "ready") {
           ready = true;
+          this.previewType = msg.previewType ?? null;
           resolveReady();
         } else if (msg.type === "init-error") {
           rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
@@ -93,7 +109,7 @@ export class WorkerWasmHandler {
           clearTimeout(p.timer);
           this.pending.delete(msg.id);
           if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
-          else p.resolve(msg.raw ?? "");
+          else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
         }
       };
       worker.onerror = (ev: ErrorEvent) => {
@@ -126,23 +142,36 @@ export class WorkerWasmHandler {
     return this.readyP;
   }
 
-  async diff(base: Uint8Array, head: Uint8Array): Promise<string> {
+  /** One bounded call into the worker; a call that overruns kills the worker. */
+  private async call(what: "diff" | "preview", payload: Record<string, unknown>): Promise<WorkerResult> {
     await this.ensure();
     const worker = this.worker;
     if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
 
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<WorkerResult>((resolve, reject) => {
       const id = ++this.seq;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        // Hung call: kill the worker so it can't wedge future calls; next diff respawns.
-        const err = new Error(`wasm ${this.handlerId}: diff timed out after ${this.timeoutMs}ms`);
+        // Hung call: kill the worker so it can't wedge future calls; next call respawns.
+        const err = new Error(`wasm ${this.handlerId}: ${what} timed out after ${this.timeoutMs}ms`);
         this.fail(err);
         reject(err);
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      worker.postMessage({ type: "diff", id, base, head });
+      worker.postMessage({ type: what, id, ...payload });
     });
+  }
+
+  async diff(base: Uint8Array, head: Uint8Array): Promise<string> {
+    return (await this.call("diff", { base, head })).raw ?? "";
+  }
+
+  /** The handler's preview of one blob (FHR SPEC §7). Rejects when it has none. */
+  async preview(blob: Uint8Array): Promise<{ bytes: Uint8Array; mediaType: string }> {
+    if (!this.previewType) throw new Error(`wasm ${this.handlerId}: handler has no preview`);
+    const { bytes, mediaType } = await this.call("preview", { blob });
+    if (!bytes) throw new Error(`wasm ${this.handlerId}: preview returned no bytes`);
+    return { bytes, mediaType: mediaType ?? this.previewType };
   }
 }
 
@@ -196,4 +225,19 @@ export async function browserWasmDiff(
   const handler = await loadBrowserHandler(handlerId, deps);
   const raw = await handler.diff(base, head);
   return parseDiffOutput(raw, handlerId);
+}
+
+/**
+ * The handler's preview of one blob, computed in the browser like the diff
+ * (Tier B), or null when the handler has no preview call. The caller already
+ * holds the bytes it diffed, so nothing extra is downloaded.
+ */
+export async function browserWasmPreview(
+  handlerId: string,
+  blob: Uint8Array,
+  deps: BrowserWasmDeps = defaultDeps,
+): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
+  const handler = await loadBrowserHandler(handlerId, deps);
+  if (!handler.previewType) return null;
+  return handler.preview(blob);
 }

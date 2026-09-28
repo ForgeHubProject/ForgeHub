@@ -10,8 +10,29 @@ import type { GoConstructor } from "./wasm_exec";
 /** The structured diff a wasm handler produces — same wire shape the server returns. */
 export type BrowserStructuredDiff = { version: string; format: string; changes: DiffChange[] };
 
-/** The callable a loaded wasm build registers: bytes in, raw JSON string out. */
-export type BrowserWasmHandler = { diff(base: Uint8Array, head: Uint8Array): string };
+/** What a handler's optional preview call answers (FHR SPEC §7). */
+export type WasmPreviewResult = { mediaType?: string; blob?: Uint8Array; error?: string };
+
+/**
+ * The callable a loaded wasm build registers: bytes in, raw JSON string out —
+ * plus, on handlers that declare one, `preview`, which answers an object so a
+ * large preview never round-trips through base64.
+ */
+export type BrowserWasmHandler = {
+  diff(base: Uint8Array, head: Uint8Array): string;
+  info?(): string;
+  preview?(blob: Uint8Array): WasmPreviewResult;
+};
+
+/** The handler's preview media type, or null when it has no preview call. */
+export function previewTypeOf(handler: BrowserWasmHandler): string | null {
+  if (typeof handler.preview !== "function") return null;
+  try {
+    return (JSON.parse(handler.info?.() ?? "{}") as { preview?: string }).preview ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The two ambient things instantiation reaches for, injectable so the
