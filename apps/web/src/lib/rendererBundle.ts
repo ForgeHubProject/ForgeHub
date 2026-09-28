@@ -7,6 +7,8 @@ export type RendererMountProps = {
   mode: "view" | "diff" | "merge";
   diff?: unknown;
   blobs?: unknown;
+  /** The handler's previews of the same sides (FHR SPEC §7), when it has them. */
+  previews?: unknown;
   theme?: "light" | "dark";
   onEvent?: (e: unknown) => void;
 };

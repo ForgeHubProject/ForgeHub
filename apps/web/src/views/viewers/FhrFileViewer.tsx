@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchRawBlob } from "../../api";
+import { loadServerPreviews } from "../../lib/previews";
 import { loadSemanticFormats } from "../../lib/fhrFormats";
 import { loadRendererBundle } from "../../lib/rendererBundle";
 import type { RendererInstance } from "../../lib/rendererBundle";
@@ -70,7 +71,21 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
         return;
       }
 
-      const bundle = await loadRendererBundle(handlerId);
+      // A handler with a preview call (FHR SPEC §7) — OBJ — is drawn from its
+      // preview; the API answers "no preview" once per handler for the rest,
+      // which is remembered for the session.
+      const [bundle, previews] = await Promise.all([
+        loadRendererBundle(handlerId),
+        loadServerPreviews(
+          token ?? null,
+          repo.handle,
+          repo.repoName,
+          path,
+          { head: gitRef },
+          handlerId,
+          objectUrls,
+        ),
+      ]);
       if (cancelled || !hostRef.current) return revokeAll();
 
       const url = URL.createObjectURL(blob);
@@ -79,6 +94,7 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
       instRef.current = bundle.mount(hostRef.current, {
         mode: "view",
         blobs: { head: { url, size: blob.size } },
+        ...(previews ? { previews } : {}),
         theme: dark ? "dark" : "light",
       });
       setPhase({ kind: "ready" });

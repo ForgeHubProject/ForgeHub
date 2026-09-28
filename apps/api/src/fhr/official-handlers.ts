@@ -78,20 +78,26 @@ function loadWasmHandler(
   return p;
 }
 
-export type OfficialDiffResult = { diff: StructuredDiff; handlerId: string };
+export type OfficialDiffResult = {
+  diff: StructuredDiff;
+  handlerId: string;
+  /** The handler's preview media type, when it has one (FHR SPEC §7). */
+  preview?: string;
+};
 
 /**
  * Resolve and load the official wasm handler for a file, or null when none can
- * run: not official, not opted in, the manifest or the wasm build unreachable,
- * or the build refusing to start.
+ * run: not official, not opted in (when `activeExts` is given — viewing is not
+ * scoped to opted-in formats, diffing and merging are), the manifest or the
+ * wasm build unreachable, or the build refusing to start.
  */
 async function officialHandlerFor(
   filePath: string,
-  activeExts: Set<string>,
+  activeExts: Set<string> | null,
   deps: OfficialHandlerDeps,
 ): Promise<{ handlerId: string; handler: WasmHandler } | null> {
   const ext = extname(filePath).toLowerCase();
-  if (!activeExts.has(ext)) return null;
+  if (activeExts && !activeExts.has(ext)) return null;
 
   let handlerId: string | null;
   let wasmUrl: string | null;
@@ -132,7 +138,9 @@ export async function officialWasmDiff(
   if (!official) return null;
 
   try {
-    return { diff: await official.handler.diff(base, head), handlerId: official.handlerId };
+    const diff = await official.handler.diff(base, head);
+    const preview = official.handler.previewType ?? undefined;
+    return { diff, handlerId: official.handlerId, ...(preview ? { preview } : {}) };
   } catch {
     // Malformed input the wasm rejects — unavailable, no local fallback (#74).
     return null;
@@ -191,3 +199,54 @@ export async function officialWasmMerge(
     return { kind: "unavailable", reason: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// ── preview ───────────────────────────────────────────────────────────────────
+
+export type OfficialPreviewResult =
+  | { kind: "ok"; bytes: Uint8Array; mediaType: string; handlerId: string }
+  /** No official handler for the file, or it has no preview call. */
+  | { kind: "none" }
+  | { kind: "too-large"; limit: number }
+  /** The handler exists and has a preview, but could not produce one. */
+  | { kind: "failed"; message: string };
+
+/**
+ * The preview media type of the official handler for a file, or null when it
+ * has none (or there is no official handler). Loads the handler — once per
+ * process — so a caller can refuse before reading any blob.
+ */
+export async function officialPreviewType(
+  filePath: string,
+  deps: OfficialHandlerDeps = defaultDeps,
+): Promise<string | null> {
+  const official = await officialHandlerFor(filePath, null, deps);
+  return official?.handler.previewType ?? null;
+}
+
+/**
+ * The official handler's preview of one blob (FHR SPEC §7) — for a format the
+ * browser cannot draw from its own bytes, what a renderer draws instead.
+ *
+ * Unlike a diff this is not scoped to the repo's opted-in formats: viewing a
+ * file is not diffing it, and the blob view already mounts renderers for every
+ * manifest-mapped file. It is the same official, manifest-resolved handler
+ * either way — never a community one.
+ */
+export async function officialWasmPreview(
+  filePath: string,
+  blob: Buffer,
+  deps: OfficialHandlerDeps = defaultDeps,
+): Promise<OfficialPreviewResult> {
+  const official = await officialHandlerFor(filePath, null, deps);
+  if (!official?.handler.previewType || !official.handler.preview) return { kind: "none" };
+  if (blob.length > MAX_WASM_BYTES) return { kind: "too-large", limit: MAX_WASM_BYTES };
+  try {
+    const { bytes, mediaType } = await official.handler.preview(blob);
+    return { kind: "ok", bytes, mediaType, handlerId: official.handlerId };
+  } catch (e) {
+    return { kind: "failed", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The per-blob ceiling on wasm handler calls, for callers that pre-flight. */
+export const OFFICIAL_WASM_MAX_BYTES = MAX_WASM_BYTES;

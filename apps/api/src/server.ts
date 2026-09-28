@@ -13,6 +13,7 @@ import { commitRoutes } from "./routes/commits.js";
 import { compareRoutes } from "./routes/compare.js";
 import { fhrRoutes } from "./routes/fhr.js";
 import { fileDiffRoutes } from "./routes/filediff.js";
+import { previewRoutes } from "./routes/preview.js";
 import { fileDiffMetaRoutes } from "./routes/filediff-meta.js";
 import { rendererRoutes } from "./routes/renderers.js";
 import { handlerWasmRoutes } from "./routes/handler-wasm.js";
@@ -159,6 +160,7 @@ export async function buildServer() {
   await app.register(compareRoutes);
   await app.register(fhrRoutes);
   await app.register(fileDiffRoutes);
+  await app.register(previewRoutes);
   await app.register(fileDiffMetaRoutes);
   await app.register(rendererRoutes);
   await app.register(handlerWasmRoutes);
