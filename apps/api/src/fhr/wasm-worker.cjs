@@ -25,17 +25,35 @@ function handlerGlobals() {
     if (!key) throw new Error("wasm registered no diff() global");
     const api = globalThis[key];
 
+    // Whether the handler says it can merge (its `info` capabilities, FHR
+    // SPEC §7). A build that predates the declaration says nothing, which is
+    // not a yes: the merge path treats it as unable to merge.
+    let semanticMerge = false;
+    try {
+      semanticMerge = JSON.parse(api.info()).capabilities?.semanticMerge === true;
+    } catch {
+      semanticMerge = false;
+    }
+
     parentPort.on("message", (msg) => {
-      if (!msg || msg.type !== "diff") return;
+      if (!msg) return;
       try {
-        const raw = api.diff(msg.base, msg.head); // Uint8Array in, JSON string out
+        let raw;
+        if (msg.type === "diff") {
+          raw = api.diff(msg.base, msg.head); // Uint8Arrays in, JSON string out
+        } else if (msg.type === "merge") {
+          // Uint8Arrays in, {blob: base64, conflicts?} JSON string out.
+          raw = api.merge(msg.base, msg.ours, msg.theirs);
+        } else {
+          return;
+        }
         parentPort.postMessage({ type: "result", id: msg.id, raw });
       } catch (e) {
         parentPort.postMessage({ type: "result", id: msg.id, error: String((e && e.message) || e) });
       }
     });
 
-    parentPort.postMessage({ type: "ready" });
+    parentPort.postMessage({ type: "ready", semanticMerge });
   } catch (e) {
     parentPort.postMessage({ type: "init-error", error: String((e && e.message) || e) });
   }
