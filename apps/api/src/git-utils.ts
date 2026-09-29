@@ -1,5 +1,5 @@
 import { execFile as execFileCb, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -7,6 +7,7 @@ import { bareRepoPathFromKey } from "./git-storage.js";
 import { loadActiveFormats } from "./forge-formats.js";
 import { loadHandlerPins } from "./forge-handlers.js";
 import { firstHandlerForPathAndFormats } from "./handlers/index.js";
+import { officialMergingExtensions, officialWasmMerge } from "./fhr/official-handlers.js";
 
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
@@ -203,48 +204,106 @@ function readStageBuffer(dir: string, stage: 1 | 2 | 3, file: string): Promise<B
   });
 }
 
-// Attempt to resolve all conflicted files using their semantic handler.
-// Returns true only if every conflict was resolved; false if any are unresolvable.
-async function trySemanticResolve(tmpDir: string): Promise<boolean> {
-  const activeExts = await loadActiveFormats(tmpDir, "HEAD");
-  if (activeExts.size === 0) return false;
+// ─── semantic merge of handler formats ──────────────────────────────────────────
+//
+// A format's merge belongs to its FHR handler, the same way its diff does: the
+// server runs the official build's merge — the one forge runs locally as a git
+// merge driver — never git's line merge and never a ForgeHub reimplementation
+// (#74). Two steps make that hold on every merge path:
+//
+//  1. protectHandlerFormats, before git merges anything: every opted-in format
+//     whose official handler declares a merge is marked `merge=binary` in the
+//     clone's own .git/info/attributes (which outranks the repo's committed
+//     .gitattributes, and is never committed). git then never line-merges such
+//     a file — a file both sides changed becomes a conflict instead. This is
+//     the part that matters for text formats: a line merge of OBJ can be
+//     reported clean while leaving a face pointing at another object's vertex,
+//     because faces address vertices by position.
+//  2. trySemanticResolve, after: each conflicted file of such a format is
+//     merged by its handler from the index stages. Reported semantic conflicts
+//     leave the merge conflicted, as they must.
+//
+// A file only one side changed never reaches either step: git takes that side.
 
-  let conflicted: string[];
+/** The formats a merge between these two branch tips treats as opted in. */
+async function mergeFormats(tmpDir: string, fromRef: string): Promise<Set<string>> {
+  const [target, source] = await Promise.all([
+    loadActiveFormats(tmpDir, "HEAD"),
+    loadActiveFormats(tmpDir, fromRef).catch(() => new Set<string>()),
+  ]);
+  return new Set([...target, ...source]);
+}
+
+async function protectHandlerFormats(tmpDir: string, activeExts: Set<string>): Promise<void> {
+  if (activeExts.size === 0) return;
+  const exts = await officialMergingExtensions(activeExts);
+  if (exts.length === 0) return;
+  const lines = exts.map((ext) => `*${caseInsensitiveGlob(ext)} merge=binary`);
+  const info = path.join(tmpDir, ".git", "info");
+  await mkdir(info, { recursive: true });
+  await appendFile(path.join(info, "attributes"), lines.join("\n") + "\n");
+}
+
+/** ".obj" → ".[oO][bB][jJ]": handlers match extensions case-insensitively, git globs do not. */
+export function caseInsensitiveGlob(ext: string): string {
+  return ext.replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+}
+
+async function conflictedFiles(tmpDir: string): Promise<string[] | null> {
   try {
     const { stdout } = await execFile(
       "git", ["diff", "--name-only", "--diff-filter=U"],
       { cwd: tmpDir, maxBuffer: MAX },
     );
-    conflicted = stdout.trim().split("\n").filter(Boolean);
+    return stdout.trim().split("\n").filter(Boolean);
   } catch {
-    return false;
+    return null;
   }
+}
+
+// Attempt to resolve all conflicted files using their semantic handler: the
+// official FHR handler's merge where one declares it, else the built-in
+// registry. Returns true only if every conflict was resolved; false if any are
+// unresolvable.
+async function trySemanticResolve(tmpDir: string, activeExts: Set<string>): Promise<boolean> {
+  if (activeExts.size === 0) return false;
+
+  const conflicted = await conflictedFiles(tmpDir);
+  if (conflicted === null) return false;
   if (conflicted.length === 0) return true;
 
   for (const file of conflicted) {
-    const handler = firstHandlerForPathAndFormats(file, activeExts);
-    if (!handler?.merge || !handler.capabilities.semanticMerge) return false;
-
     const [base, ours, theirs] = await Promise.all([
       readStageBuffer(tmpDir, 1, file),
       readStageBuffer(tmpDir, 2, file),
       readStageBuffer(tmpDir, 3, file),
     ]);
+    // Added on one side and deleted on the other: nothing to merge.
     if (!ours || !theirs) return false;
 
-    let result;
-    try {
-      result = await handler.merge(base ?? Buffer.alloc(0), ours, theirs);
-    } catch {
-      return false;
+    let blob: Buffer;
+    const official = await officialWasmMerge(file, activeExts, base ?? Buffer.alloc(0), ours, theirs);
+    if (official.kind === "merged") {
+      // Semantic conflicts the handler could not reconcile stay conflicts.
+      if (official.conflicts.length > 0) return false;
+      blob = official.blob;
+    } else {
+      const handler = firstHandlerForPathAndFormats(file, activeExts);
+      if (!handler?.merge || !handler.capabilities.semanticMerge) return false;
+      let result;
+      try {
+        result = await handler.merge(base ?? Buffer.alloc(0), ours, theirs);
+      } catch {
+        return false;
+      }
+      // If the handler itself reports unresolved semantic conflicts, bubble up
+      if (result.conflicts && result.conflicts.conflicts.length > 0) return false;
+      blob = result.blob;
     }
-
-    // If the handler itself reports unresolved semantic conflicts, bubble up
-    if (result.conflicts && result.conflicts.conflicts.length > 0) return false;
 
     const fullPath = path.join(tmpDir, file);
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, result.blob);
+    await writeFile(fullPath, blob);
     await execFile("git", ["add", "--", file], { cwd: tmpDir, maxBuffer: MAX });
   }
 
@@ -272,6 +331,9 @@ export async function performMerge(
       return { ok: false, alreadyMerged: true };
     } catch { /* not ancestor — proceed */ }
 
+    const activeExts = await mergeFormats(tmpDir, `origin/${fromBranch}`);
+    await protectHandlerFormats(tmpDir, activeExts);
+
     const strategyArgs = strategy === "none" ? [] : ["-X", strategy];
     let mergeClean = true;
     try {
@@ -285,7 +347,7 @@ export async function performMerge(
 
     if (!mergeClean) {
       // Try resolving conflicts semantically for handler-supported formats
-      const resolved = await trySemanticResolve(tmpDir);
+      const resolved = await trySemanticResolve(tmpDir, activeExts);
       if (!resolved) return { ok: false, conflicts: true };
 
       try {
@@ -336,6 +398,9 @@ export async function performSquashMerge(
       return { ok: false, alreadyMerged: true };
     } catch { /* not merged — proceed */ }
 
+    const activeExts = await mergeFormats(tmpDir, `origin/${fromBranch}`);
+    await protectHandlerFormats(tmpDir, activeExts);
+
     let clean = true;
     try {
       await execFile("git", [...MERGE_IDENTITY, "merge", "--squash", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
@@ -344,7 +409,7 @@ export async function performSquashMerge(
     }
 
     if (!clean) {
-      const resolved = await trySemanticResolve(tmpDir);
+      const resolved = await trySemanticResolve(tmpDir, activeExts);
       if (!resolved) return { ok: false, conflicts: true };
     }
 
@@ -393,6 +458,9 @@ export async function performRebaseMerge(
     } catch { /* not merged — proceed */ }
 
     // Replay fromBranch's commits onto toBranch on a scratch branch.
+    // A replayed commit that touches a handler format both sides changed must
+    // stop as a conflict, not be line-merged: rebase has no semantic step.
+    await protectHandlerFormats(tmpDir, await mergeFormats(tmpDir, `origin/${fromBranch}`));
     await execFile("git", ["checkout", "-B", "_fh_replay", `origin/${fromBranch}`], { cwd: tmpDir, maxBuffer: MAX });
     try {
       await execFile("git", [...MERGE_IDENTITY, "rebase", toBranch], { cwd: tmpDir, maxBuffer: MAX });
@@ -1332,6 +1400,9 @@ export async function performMergeWithResolvedFiles(
       /* not merged yet */
     }
 
+    const activeExts = await mergeFormats(tmpDir, `origin/${fromBranch}`);
+    await protectHandlerFormats(tmpDir, activeExts);
+
     try {
       await execFile(
         "git",
@@ -1346,6 +1417,16 @@ export async function performMergeWithResolvedFiles(
       const full = path.join(tmpDir, relPath);
       await mkdir(path.dirname(full), { recursive: true });
       await writeFile(full, content, "utf8");
+      await execFile("git", ["add", "--", relPath], { cwd: tmpDir, maxBuffer: MAX });
+    }
+
+    // Whatever the reviewer did not resolve by hand, the handlers merge — and
+    // anything still conflicted is not committed as whichever side git left in
+    // the worktree (for a handler format, that is ours, silently).
+    const remaining = await conflictedFiles(tmpDir);
+    if (remaining === null) return { ok: false, conflicts: true };
+    if (remaining.length > 0 && !(await trySemanticResolve(tmpDir, activeExts))) {
+      return { ok: false, conflicts: true };
     }
 
     await execFile("git", ["add", "-A"], { cwd: tmpDir, maxBuffer: MAX });
