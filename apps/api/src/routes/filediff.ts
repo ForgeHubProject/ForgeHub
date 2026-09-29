@@ -157,7 +157,17 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         if (!official) {
           return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
         }
-        return { ...official.diff, handlerId: official.handlerId, path: filePath, engine: "wasm", ...shas };
+        return {
+          ...official.diff,
+          handlerId: official.handlerId,
+          path: filePath,
+          engine: "wasm",
+          ...shas,
+          // The handler's preview media type (FHR SPEC §7), when it has one:
+          // the client fetches /preview for each side to draw instead of the
+          // raw blobs.
+          ...(official.preview ? { preview: official.preview } : {}),
+        };
       } catch (e) {
         return reply.status(500).send({ error: `diff failed: ${String(e)}` });
       }

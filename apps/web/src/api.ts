@@ -75,6 +75,9 @@ export type SemanticFileDiff = {
   // is null for an added file / root commit.
   baseSha: string | null;
   headSha: string;
+  // The handler's preview media type (FHR SPEC §7 `preview`), when it has one:
+  // its renderer draws /preview of each side instead of the raw blobs.
+  preview?: string;
 };
 
 /**
@@ -170,6 +173,30 @@ export async function fetchRawBlob(
     throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
   }
   return res.blob();
+}
+
+/**
+ * A handler's preview of one file at a commit (FHR SPEC §7) — for a format the
+ * browser cannot draw from its own bytes, what its renderer draws instead.
+ * Resolves `{ kind: "none", handlerId }` when the file's handler has no preview
+ * (the API's `code: "no-preview"`), so a caller can stop asking for that
+ * handler; any other failure throws.
+ */
+export async function fetchPreview(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+): Promise<{ kind: "ok"; blob: Blob } | { kind: "none"; handlerId: string | null }> {
+  const res = await fetch(
+    `${BASE}/repos/${handle}/${repoName}/preview?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+  );
+  if (res.ok) return { kind: "ok", blob: await res.blob() };
+  const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string; handlerId?: string | null };
+  if (res.status === 404 && body.code === "no-preview") return { kind: "none", handlerId: body.handlerId ?? null };
+  throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
 }
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
