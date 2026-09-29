@@ -7,8 +7,18 @@ export type WasmConflict = { path: string; ours: unknown; theirs: unknown };
 
 export type WasmMergeResult = { blob: Buffer; conflicts: WasmConflict[] };
 
+export type WasmPreview = { bytes: Uint8Array; mediaType: string };
+
 export type WasmHandler = {
   diff(base: Buffer, head: Buffer): Promise<StructuredDiff>;
+  /**
+   * The media type of the handler's optional `preview` call (FHR SPEC §7);
+   * null or absent when it has none — a format the browser draws from its own
+   * bytes. Known once the worker is ready.
+   */
+  readonly previewType?: string | null;
+  /** Convert one blob for display. Rejects when there is no previewType. */
+  preview?(blob: Buffer): Promise<WasmPreview>;
   /**
    * Whether the handler declares a semantic merge (its `info` capabilities).
    * Absent or false: merge must not be asked for. Known once the worker is
@@ -39,7 +49,8 @@ function parseMergeOutput(raw: string, handlerId: string): WasmMergeResult {
 const DEFAULT_WORKER = fileURLToPath(new URL("./wasm-worker.cjs", import.meta.url));
 const DEFAULT_TIMEOUT_MS = Number(process.env["FHR_WASM_TIMEOUT_MS"] ?? 5000);
 
-type Pending = { resolve: (raw: string) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+type WorkerResult = { raw?: string; bytes?: Uint8Array; mediaType?: string };
+type Pending = { resolve: (r: WorkerResult) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 /** Parse a wasm handler's JSON diff output into a StructuredDiff. */
 function parseDiffOutput(raw: string, handlerId: string): StructuredDiff {
@@ -66,6 +77,7 @@ class WasmWorkerHandler implements WasmHandler {
   private pending = new Map<number, Pending>();
   private seq = 0;
   semanticMerge = false;
+  previewType: string | null = null;
 
   constructor(
     private readonly bytes: Buffer,
@@ -80,10 +92,20 @@ class WasmWorkerHandler implements WasmHandler {
       this.worker = worker;
       let ready = false;
 
-      worker.on("message", (msg: { type: string; id?: number; raw?: string; error?: string; semanticMerge?: boolean }) => {
+      worker.on("message", (msg: {
+        type: string;
+        id?: number;
+        raw?: string;
+        bytes?: Uint8Array;
+        mediaType?: string;
+        error?: string;
+        semanticMerge?: boolean;
+        previewType?: string | null;
+      }) => {
         if (msg.type === "ready") {
           ready = true;
           this.semanticMerge = msg.semanticMerge === true;
+          this.previewType = msg.previewType ?? null;
           resolveReady();
         } else if (msg.type === "init-error") {
           rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
@@ -93,7 +115,7 @@ class WasmWorkerHandler implements WasmHandler {
           clearTimeout(p.timer);
           this.pending.delete(msg.id);
           if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
-          else p.resolve(msg.raw ?? "");
+          else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
         }
       });
       worker.on("error", (err) => {
@@ -130,12 +152,12 @@ class WasmWorkerHandler implements WasmHandler {
   }
 
   /** One bounded call into the worker; a call that overruns kills the worker. */
-  private async call(what: "diff" | "merge", payload: Record<string, Buffer>): Promise<string> {
+  private async call(what: "diff" | "merge" | "preview", payload: Record<string, Buffer>): Promise<WorkerResult> {
     await this.ensure();
     const worker = this.worker;
     if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
 
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<WorkerResult>((resolve, reject) => {
       const id = ++this.seq;
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -150,12 +172,19 @@ class WasmWorkerHandler implements WasmHandler {
   }
 
   async diff(base: Buffer, head: Buffer): Promise<StructuredDiff> {
-    return parseDiffOutput(await this.call("diff", { base, head }), this.handlerId);
+    return parseDiffOutput((await this.call("diff", { base, head })).raw ?? "", this.handlerId);
   }
 
   async merge(base: Buffer, ours: Buffer, theirs: Buffer): Promise<WasmMergeResult> {
     if (!this.semanticMerge) throw new Error(`wasm ${this.handlerId}: handler declares no semantic merge`);
-    return parseMergeOutput(await this.call("merge", { base, ours, theirs }), this.handlerId);
+    return parseMergeOutput((await this.call("merge", { base, ours, theirs })).raw ?? "", this.handlerId);
+  }
+
+  async preview(blob: Buffer): Promise<WasmPreview> {
+    if (!this.previewType) throw new Error(`wasm ${this.handlerId}: handler has no preview`);
+    const { bytes, mediaType } = await this.call("preview", { blob });
+    if (!bytes) throw new Error(`wasm ${this.handlerId}: preview returned no bytes`);
+    return { bytes, mediaType: mediaType ?? this.previewType };
   }
 }
 

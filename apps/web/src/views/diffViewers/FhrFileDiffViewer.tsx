@@ -12,7 +12,8 @@ import {
 } from "../../api";
 import { loadRendererBundle, type RendererInstance } from "../../lib/rendererBundle";
 import { notEnabledScopeKey } from "../../lib/notEnabledFormats";
-import { browserWasmDiff } from "../../lib/browserWasm";
+import { browserWasmDiff, browserWasmPreview } from "../../lib/browserWasm";
+import { loadServerPreviews, previewRef } from "../../lib/previews";
 import {
   TIER_S_SLOW_MS,
   assessBrowserTier,
@@ -155,6 +156,9 @@ export function FhrFileDiffViewer({
       try {
         let diff: SemanticFileDiff;
         let blobs: RendererBlobs;
+        // What the renderer draws instead of the raw blobs, for a handler with a
+        // preview call (FHR SPEC §7) — OBJ's GLB. Absent otherwise.
+        let previews: RendererBlobs | undefined;
 
         const meta = metaRef.current;
         if (tier === "browser" && meta) {
@@ -180,6 +184,19 @@ export function FhrFileDiffViewer({
             objectUrls.push(url);
             blobs.head = { url, size: head.size };
           }
+          // Tier B previews come from the same wasm, on the bytes already here.
+          // Best-effort, like every preview: the change tree renders without.
+          const [basePreview, headPreview] = await Promise.all(
+            [base ? baseBytes : null, head ? headBytes : null].map((bytes) =>
+              bytes ? browserWasmPreview(meta.handlerId, bytes).catch(() => null) : Promise.resolve(null),
+            ),
+          );
+          if (cancelled) return revokeAll();
+          if (basePreview || headPreview) {
+            previews = {};
+            if (basePreview) previews.base = previewRef(basePreview.bytes, basePreview.mediaType, objectUrls);
+            if (headPreview) previews.head = previewRef(headPreview.bytes, headPreview.mediaType, objectUrls);
+          }
         } else {
           // Tier S: the canonical server-computed diff (the record for review).
           const result = await getFileSemanticDiff(token, handle, repoName, path, headRef);
@@ -196,8 +213,23 @@ export function FhrFileDiffViewer({
           }
           diff = result;
           // Best-effort: the change tree renders even if the blobs are missing;
-          // only the on-demand geometry scene needs them.
-          blobs = await loadRendererBlobs(token, handle, repoName, path, diff, objectUrls);
+          // only the on-demand geometry scene needs them. A handler that
+          // declared a preview gets both sides' previews too, fetched alongside.
+          const serverDiff = diff;
+          [blobs, previews] = await Promise.all([
+            loadRendererBlobs(token, handle, repoName, path, serverDiff, objectUrls),
+            serverDiff.preview
+              ? loadServerPreviews(
+                  token,
+                  handle,
+                  repoName,
+                  path,
+                  { base: serverDiff.baseSha, head: serverDiff.headSha },
+                  serverDiff.handlerId,
+                  objectUrls,
+                )
+              : Promise.resolve(undefined),
+          ]);
         }
         if (cancelled) return revokeAll();
 
@@ -215,6 +247,7 @@ export function FhrFileDiffViewer({
           mode: "diff",
           diff,
           blobs,
+          ...(previews ? { previews } : {}),
           theme: dark ? "dark" : "light",
         });
         setStatus("ready");
