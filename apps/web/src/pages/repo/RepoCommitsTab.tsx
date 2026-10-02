@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
 import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
+import { PRFileTree } from "./pulls/PRFileTree";
+import { changedFilePath, fileAnchorId } from "./pulls/fileTree";
 import { extensionForFilename, resolveFileDiffViewer } from "../../views/fileDiffViewerRegistry";
 import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../views/diffViewers/computeTierUi";
 import { needsFileDiffMeta } from "../../lib/computeTier";
@@ -63,13 +65,11 @@ export function FileDiffCard({
   sha,
   base,
   token,
-  index,
 }: {
   file: FileDiff;
   sha: string;
   base: string;
   token: string;
-  index: number;
 }) {
   const [expanded, setExpanded] = useState(true);
   const displayPath =
@@ -78,7 +78,7 @@ export function FileDiffCard({
       : file.status === "deleted"
         ? file.oldPath
         : file.newPath;
-  const blobPath = file.status === "deleted" ? file.oldPath : file.newPath;
+  const blobPath = changedFilePath(file);
   const filename = blobPath.split("/").pop() ?? "";
   const semanticExtensions = useSemanticExtensions();
   const Viewer = resolveFileDiffViewer(filename, semanticExtensions);
@@ -99,7 +99,7 @@ export function FileDiffCard({
   );
 
   return (
-    <div id={`diff-${index}`} className="scroll-mt-4 rounded-md border border-fh-border bg-fh-surface">
+    <div id={fileAnchorId(blobPath)} className="scroll-mt-16 rounded-md border border-fh-border bg-fh-surface">
       <div
         role="button"
         tabIndex={0}
@@ -113,7 +113,7 @@ export function FileDiffCard({
           }
         }}
         className={cx(
-          "sticky top-0 z-10 flex cursor-pointer select-none items-center gap-2 border-b border-fh-border bg-fh-surface-muted px-2.5 py-2",
+          "sticky top-14 z-10 flex cursor-pointer select-none items-center gap-2 border-b border-fh-border bg-fh-surface-muted px-2.5 py-2",
           expanded ? "rounded-t-md" : "rounded-md border-b-transparent",
         )}
       >
@@ -323,10 +323,23 @@ function CommitDetailView({
             <DiffCounts additions={totalAdditions} deletions={totalDeletions} />
             <DiffStatBar additions={totalAdditions} deletions={totalDeletions} />
           </div>
-          <div className="space-y-4">
-            {diffFiles.map((file, i) => (
-              <FileDiffCard key={i} file={file} sha={sha} base={base} token={token} index={i} />
-            ))}
+          {/* Changed-files tree beside the diffs, as in a PR's files tab (#197). A
+              one-file commit has nothing to navigate, so its diff keeps the width.
+              Sticky offsets clear the site header (h-14), which stays pinned. */}
+          <div className="flex flex-col md:flex-row gap-4 items-start">
+            {fileCount > 1 && (
+              <div className="w-full md:w-56 shrink-0 md:sticky md:top-16 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
+                <PRFileTree
+                  files={diffFiles.map((f) => ({ path: changedFilePath(f), status: f.status }))}
+                  showViewed={false}
+                />
+              </div>
+            )}
+            <div className="flex-1 min-w-0 w-full space-y-4">
+              {diffFiles.map((file, i) => (
+                <FileDiffCard key={i} file={file} sha={sha} base={base} token={token} />
+              ))}
+            </div>
           </div>
         </>
       ) : (
