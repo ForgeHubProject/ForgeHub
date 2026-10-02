@@ -535,15 +535,25 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
                 {latestCommit.authorName[0]?.toUpperCase()}
               </span>
               <span className="font-semibold text-fh-fg truncate max-w-[160px]">{latestCommit.authorName}</span>
-              <span className="text-fh-fg-muted truncate flex-1 min-w-0" title={latestCommit.subject}>{latestCommit.subject}</span>
+              <Link
+                to={`${base}/commits/${latestCommit.sha}`}
+                className="text-fh-fg-muted truncate flex-1 min-w-0 no-underline hover:text-fh-accent-fg hover:underline"
+                title={latestCommit.subject}
+              >
+                {latestCommit.subject}
+              </Link>
               {headStatus && (
                 <Link to={`${base}/actions`} className="inline-flex items-center shrink-0 no-underline" title="View workflow runs" aria-label="Commit checks">
                   <CheckStatusIcon state={checkState(headStatus)} size={15} />
                 </Link>
               )}
-              <code className="font-mono text-fh-xs text-fh-fg-muted bg-fh-surface border border-fh-border px-1.5 py-0.5 rounded shrink-0 hidden sm:block">
+              <Link
+                to={`${base}/commits/${latestCommit.sha}`}
+                className="font-mono text-fh-xs text-fh-fg-muted bg-fh-surface border border-fh-border px-1.5 py-0.5 rounded shrink-0 hidden sm:block no-underline transition-colors hover:text-fh-accent-fg hover:border-fh-border-strong"
+                title={`View commit ${latestCommit.sha}`}
+              >
                 {latestCommit.shortSha}
-              </code>
+              </Link>
               <RelativeTime date={latestCommit.date} className="text-fh-xs text-fh-fg-subtle shrink-0 hidden md:block" />
             </div>
           )}
