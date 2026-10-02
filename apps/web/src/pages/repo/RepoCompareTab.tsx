@@ -226,7 +226,7 @@ export function RepoCompareTab({ token, handle, repoName, branches, defaultBranc
           ) : diffs && diffs.length > 0 ? (
             <div className="space-y-4">
               {diffs.map((file, i) => (
-                <FileDiffCard key={i} file={file} sha={headRef} base={base} token={token} index={i} />
+                <FileDiffCard key={i} file={file} sha={headRef} base={base} token={token} />
               ))}
             </div>
           ) : null}

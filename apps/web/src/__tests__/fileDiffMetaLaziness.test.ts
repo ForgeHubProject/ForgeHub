@@ -101,7 +101,6 @@ function mountCommitRow(name: string) {
     sha: HEAD,
     base: "/alice/scene",
     token: "tok",
-    index: 0,
   });
 }
 

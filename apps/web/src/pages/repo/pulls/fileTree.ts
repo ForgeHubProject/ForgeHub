@@ -82,6 +82,15 @@ export function countFiles<T>(dir: FileTreeDir<T>): number {
   return dir.files.length + dir.dirs.reduce((sum, d) => sum + countFiles(d), 0);
 }
 
+/**
+ * The path a changed file is listed and anchored under: where it lives after
+ * the change, or where it was when the change deleted it. A rename lists under
+ * its new path.
+ */
+export function changedFilePath(file: { status: string; oldPath: string; newPath: string }): string {
+  return file.status === "deleted" ? file.oldPath : file.newPath;
+}
+
 /** DOM id a file card anchors on, so the tree can scroll the card into view. */
 export function fileAnchorId(path: string): string {
   // Encode into a stable, selector-safe id (btoa-free — paths may be non-ASCII).

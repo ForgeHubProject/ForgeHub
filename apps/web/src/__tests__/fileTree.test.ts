@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFileTree, countFiles, fileAnchorId } from "../pages/repo/pulls/fileTree";
+import { buildFileTree, changedFilePath, countFiles, fileAnchorId } from "../pages/repo/pulls/fileTree";
 
 const entry = (path: string) => ({ path });
 
@@ -67,3 +67,33 @@ describe("fileAnchorId", () => {
     expect(fileAnchorId("a/b.ts")).not.toBe(fileAnchorId("a_b.ts"));
   });
 });
+
+// The commit view (#197) lists a commit's FileDiffs in the same tree, and its
+// diff cards anchor on the same path — so a click in the tree lands on the card
+// for exactly that file, deleted and renamed ones included.
+describe("changedFilePath", () => {
+  const diff = (status: "added" | "modified" | "deleted" | "renamed", oldPath: string, newPath: string) => ({ status, oldPath, newPath });
+
+  it("lists a file under where it lives after the change", () => {
+    expect(changedFilePath(diff("added", "", "models/new.glb"))).toBe("models/new.glb");
+    expect(changedFilePath(diff("modified", "a.obj", "a.obj"))).toBe("a.obj");
+    expect(changedFilePath(diff("renamed", "old/name.csv", "new/name.csv"))).toBe("new/name.csv");
+  });
+
+  it("lists a deleted file under where it was", () => {
+    expect(changedFilePath(diff("deleted", "gone/old.png", ""))).toBe("gone/old.png");
+  });
+
+  it("gives every file of a commit its own anchor in the tree", () => {
+    const files = [
+      diff("added", "", "assets/mount/bevel.json"),
+      diff("added", "", "assets/mount/model.glb"),
+      diff("deleted", "assets/mount/preview.png", ""),
+    ];
+    const tree = buildFileTree(files.map((f) => ({ path: changedFilePath(f), status: f.status })));
+    const listed = tree.dirs[0].files.map((f) => f.path);
+    expect(listed).toEqual(["assets/mount/bevel.json", "assets/mount/model.glb", "assets/mount/preview.png"]);
+    expect(new Set(listed.map(fileAnchorId)).size).toBe(3);
+  });
+});
+
