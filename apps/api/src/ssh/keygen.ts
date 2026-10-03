@@ -6,9 +6,10 @@ import ssh2 from "ssh2";
  * ssh2.utils.generateKeyPairSync("ed25519") converts node's DER output to
  * OpenSSH form, and strips "leading zero bytes" from the public key's BIT STRING
  * — meaning the one unused-bits byte, but it strips every leading zero. When the
- * 32-byte public key itself begins with 0x00 (1 draw in 256) that byte goes too:
- * the key is written with a 31-byte public half, and ssh2's own parser rejects it
- * with "Malformed OpenSSH private key". Measured: 70 of 20,000 pairs.
+ * 32-byte public key itself begins with 0x00 (1 draw in 256) that byte goes too,
+ * and so does every zero byte after it (two in a row: 1 draw in 65,536): the key
+ * is written with a public half shorter than 32 bytes, and ssh2's own parser
+ * rejects it with "Malformed OpenSSH private key". Measured: 70 of 20,000 pairs.
  *
  * For the SSH host key that is not a flaky test but a broken install: the key is
  * persisted on first start and read back on every start after, so a bad draw
@@ -33,9 +34,9 @@ export function generateEd25519KeyPair(): SshKeyPair {
 
 /**
  * True when `pem` is an unencrypted OpenSSH ed25519 private key whose public
- * half is 31 bytes — the exact shape ssh2's bug writes. Anything else (another
- * key type, an encrypted key, junk) is false: such a key was put there by
- * someone, and is theirs to fix.
+ * half is shorter than 32 bytes — the shape ssh2's bug writes, one byte short
+ * per leading zero it dropped. Anything else (another key type, an encrypted
+ * key, junk) is false: such a key was put there by someone, and is theirs to fix.
  */
 export function isTruncatedEd25519Key(pem: string): boolean {
   const match = /-----BEGIN OPENSSH PRIVATE KEY-----([\s\S]*?)-----END OPENSSH PRIVATE KEY-----/.exec(pem);
@@ -66,5 +67,5 @@ export function isTruncatedEd25519Key(pem: string): boolean {
   pos = 0;
   const type = readString(blob);
   const pub = readString(blob);
-  return type?.toString() === "ssh-ed25519" && pub?.length === 31;
+  return type?.toString() === "ssh-ed25519" && pub !== null && pub.length > 0 && pub.length < 32;
 }
