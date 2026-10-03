@@ -21,8 +21,9 @@ import {
   TextInput,
   useToast,
 } from "../../ui";
-import type { BranchInfo, CommitInfo, Repo, TreeCommits, TreeEntry } from "../../types";
+import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry } from "../../types";
 import { CompositionBar } from "./CompositionBar";
+import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 
 type Props = {
   token: string;
@@ -35,6 +36,10 @@ type Props = {
   onRefChange: (ref: string) => void;
   onCreateBranch: (name: string, from: string) => Promise<void>;
   splat: string;
+  /** Star/watch counts for the sidebar's About (RepoPage owns them). */
+  social?: RepoSocial | null;
+  /** Shows About's edit link — the same people who see the Settings tab. */
+  canEditSettings?: boolean;
 };
 
 // ── local icons (Octicon-style, currentColor) ────────────────────────────────
@@ -357,7 +362,7 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
   );
 }
 
-export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat }: Props) {
+export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, social, canEditSettings }: Props) {
   const base = `/${handle}/${repoName}`;
 
   // Detect blob mode — use currentRef state to correctly split ref/path even for slashed branch names
@@ -397,11 +402,13 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
       onCreateBranch={onCreateBranch}
       splat={splat}
       base={base}
+      social={social}
+      canEditSettings={canEditSettings}
     />
   );
 }
 
-function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefChange, onCreateBranch, splat, base }: Props & { base: string }) {
+function TreeView({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, base, social, canEditSettings }: Props & { base: string }) {
   const navigate = useNavigate();
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
@@ -477,14 +484,29 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
       : `${base}/blob/${currentRef}/${entry.path}`;
   }
 
+  // At the repository root the page gets GitHub's sidebar (#208): About on the
+  // right from lg up — and first, above the file list, on narrower screens,
+  // since what a repository is matters before what is in it — then Formats,
+  // Releases and Contributors under it (after the README on narrow screens).
+  // A grid rather than two columns so the narrow order needs no duplicate About.
+  const atRoot = currentPath === "";
+
   return (
-    <div>
-      {/* Format/domain composition bar — the repo's identity at a glance. Shown at
-          the repository root (like the README), for the branch being viewed. */}
-      {currentPath === "" && currentRef && (
-        <CompositionBar token={token} handle={handle} repoName={repoName} refName={currentRef} />
+    <div className={atRoot ? "grid gap-x-6 gap-y-4 lg:grid-cols-[minmax(0,1fr)_296px] lg:grid-rows-[auto_1fr]" : undefined}>
+      {atRoot && (
+        <aside aria-label="About this repository" className="lg:col-start-2 lg:row-start-1">
+          <AboutSection
+            repo={repo}
+            social={social ?? null}
+            base={base}
+            defaultBranch={defaultBranch}
+            hasReadme={!!readme && !error}
+            canEditSettings={!!canEditSettings}
+          />
+        </aside>
       )}
 
+      <div className={atRoot ? "min-w-0 lg:col-start-1 lg:row-start-1 lg:row-span-2" : undefined}>
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap mb-4">
         <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} base={base} />
@@ -642,7 +664,7 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
 
       {/* README */}
       {readme && !error && (
-        <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface mt-4">
+        <div id="readme" className="scroll-mt-16 border border-fh-border rounded-md overflow-hidden bg-fh-surface mt-4">
           <div className="flex items-center gap-2 px-4 py-2.5 bg-fh-canvas border-b border-fh-border">
             <BookIcon />
             <span className="text-fh-base font-semibold text-fh-fg">{readme.path}</span>
@@ -651,6 +673,15 @@ function TreeView({ token, handle, repoName, repo, branches, currentRef, onRefCh
             <MarkdownRenderer content={readme.content} />
           </div>
         </div>
+      )}
+      </div>
+
+      {atRoot && currentRef && (
+        <aside aria-label="Repository details" className="self-start border-t border-fh-border pt-4 lg:col-start-2 lg:row-start-2">
+          <CompositionBar token={token} handle={handle} repoName={repoName} refName={currentRef} />
+          <ReleasesSection token={token} handle={handle} repoName={repoName} base={base} />
+          <ContributorsSection token={token} handle={handle} repoName={repoName} refName={currentRef} />
+        </aside>
       )}
     </div>
   );

@@ -842,6 +842,19 @@ export type CompositionSegment = {
   optedIn: boolean;
 };
 
+/**
+ * A commit author (issue #209). `user` is set only when the author's email
+ * belongs to an account that can push to the repository; anyone else is listed
+ * by the name they committed under.
+ */
+export type Contributor = {
+  name: string;
+  commits: number;
+  user: { handle: string; displayName: string | null; avatarKey: string | null } | null;
+};
+
+export type Contributors = { ref: string | null; sha: string | null; total: number; contributors: Contributor[] };
+
 export type Composition = {
   ref: string;
   sha: string | null;

@@ -40,6 +40,7 @@ import { socialRoutes } from "./routes/social.js";
 import { topicRoutes } from "./routes/topics.js";
 import { templateRoutes } from "./routes/templates.js";
 import { compositionRoutes } from "./routes/composition.js";
+import { contributorsRoutes } from "./routes/contributors.js";
 import { treeCommitsRoutes } from "./routes/tree-commits.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
@@ -187,6 +188,7 @@ export async function buildServer() {
   await app.register(topicRoutes);
   await app.register(templateRoutes);
   await app.register(compositionRoutes);
+  await app.register(contributorsRoutes);
   await app.register(treeCommitsRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
