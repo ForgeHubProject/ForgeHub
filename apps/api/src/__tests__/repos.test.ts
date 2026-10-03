@@ -79,6 +79,7 @@ vi.mock("bcryptjs", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
+import { removeBareRepo } from "../git-storage.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -447,9 +448,63 @@ describe("DELETE /repos/:handle/:name", () => {
     const { where } = vi.mocked(prisma.repo.findFirst).mock.calls.at(-1)![0]!;
     expect(where).toMatchObject({
       name: "my-repo",
-      ownerId: OWNER_ID,
-      orgId: null,
       OR: [{ owner: { handle: "bob" }, orgId: null }, { org: { handle: "bob" } }],
+    });
+  });
+
+  it("404 and no deletion when the caller is not the owner of a personal repo", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo({ ownerId: "someone-else", orgId: null }) as never);
+    const res = await app.inject({ method: "DELETE", url: "/repos/alice/my-repo", headers: { authorization: token } });
+    expect(res.statusCode).toBe(404);
+    expect(prisma.repo.delete).not.toHaveBeenCalled();
+    expect(removeBareRepo).not.toHaveBeenCalled();
+  });
+
+  it("removes the bare repo on success", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/repos/alice/my-repo", headers: { authorization: token } });
+    expect(res.statusCode).toBe(204);
+    expect(removeBareRepo).toHaveBeenCalledWith("alice/my-repo.git");
+  });
+
+  describe("org repos", () => {
+    const orgRepo = (memberships: Array<{ userId: string; role: string }>) =>
+      makeRepo({
+        ownerId: "org-creator",
+        orgId: "org-1",
+        storageKey: "acme/my-repo.git",
+        org: { memberships },
+      });
+
+    it("204 for an org OWNER who did not create the repo, and removes the bare repo", async () => {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(orgRepo([{ userId: OWNER_ID, role: "OWNER" }]) as never);
+      const res = await app.inject({ method: "DELETE", url: "/repos/acme/my-repo", headers: { authorization: token } });
+      expect(res.statusCode).toBe(204);
+      expect(prisma.repo.delete).toHaveBeenCalledWith({ where: { id: "repo-1" } });
+      expect(removeBareRepo).toHaveBeenCalledWith("acme/my-repo.git");
+    });
+
+    it("404 and repo kept for a bare org MEMBER", async () => {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(orgRepo([{ userId: OWNER_ID, role: "MEMBER" }]) as never);
+      const res = await app.inject({ method: "DELETE", url: "/repos/acme/my-repo", headers: { authorization: token } });
+      expect(res.statusCode).toBe(404);
+      expect(prisma.repo.delete).not.toHaveBeenCalled();
+      expect(removeBareRepo).not.toHaveBeenCalled();
+    });
+
+    it("404 and repo kept for a caller who is not in the org (e.g. a team writer is not an OWNER)", async () => {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(orgRepo([{ userId: "other", role: "OWNER" }]) as never);
+      const res = await app.inject({ method: "DELETE", url: "/repos/acme/my-repo", headers: { authorization: token } });
+      expect(res.statusCode).toBe(404);
+      expect(prisma.repo.delete).not.toHaveBeenCalled();
+    });
+
+    it("404 for the org repo's creator once they are no longer an org OWNER", async () => {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(
+        makeRepo({ ownerId: OWNER_ID, orgId: "org-1", org: { memberships: [{ userId: OWNER_ID, role: "MEMBER" }] } }) as never,
+      );
+      const res = await app.inject({ method: "DELETE", url: "/repos/acme/my-repo", headers: { authorization: token } });
+      expect(res.statusCode).toBe(404);
+      expect(prisma.repo.delete).not.toHaveBeenCalled();
     });
   });
 
