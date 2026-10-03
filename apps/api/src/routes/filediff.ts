@@ -23,10 +23,11 @@ export async function fileDiffRoutes(app: FastifyInstance) {
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
       const { handle, name } = request.params as { handle: string; name: string };
-      const { path: filePath, sha, base } = request.query as {
+      const { path: filePath, sha, base, basePath } = request.query as {
         path?: string;
         sha?: string;
         base?: string;
+        basePath?: string;
       };
       const userId = (request as { user?: { sub: string } }).user?.sub;
 
@@ -91,7 +92,8 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
       const absent: BlobReadResult = { kind: "missing" };
       const [baseRead, headRead] = await Promise.all([
-        baseSha ? readBlobAsBuffer(storageKey, baseSha, filePath) : Promise.resolve(absent),
+        // basePath is where the file lived before a rename; it defaults to `path`.
+        baseSha ? readBlobAsBuffer(storageKey, baseSha, basePath || filePath) : Promise.resolve(absent),
         readBlobAsBuffer(storageKey, sha, filePath),
       ]);
 
