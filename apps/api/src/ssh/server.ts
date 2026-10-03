@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { FastifyInstance } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import ssh2 from "ssh2";
 import type { AuthContext, ServerChannel, Session } from "ssh2";
 import { bareRepoPathFromKey, sshHostKeyPath } from "../git-storage.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 import { resolveRepo, canRead, canWrite, type RepoAccessInput } from "../repo-access.js";
 import { fingerprintFromRaw } from "./keys.js";
+import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
 
 const { Server, utils: sshUtils } = ssh2;
@@ -159,19 +160,39 @@ export function decideAccess(actor: SshActor, repo: RepoForAccess, service: GitS
 
 // ─── host key ─────────────────────────────────────────────────────────────────
 
-/** Load the persisted host key, generating an ed25519 one on first start. */
-async function loadOrCreateHostKey(app: FastifyInstance): Promise<string> {
-  const keyPath = sshHostKeyPath();
+/**
+ * Load the persisted host key, generating an ed25519 one on first start.
+ *
+ * A key that an earlier ForgeHub generated with ssh2's truncation bug
+ * (ssh/keygen.ts) can never be parsed, and used to stop the API from starting on
+ * every boot. It never served a connection, so no client has its fingerprint:
+ * it is moved aside to `host_key.unparsable` and replaced. Any other key is
+ * returned as found — one an admin put there is theirs to fix.
+ */
+export async function loadOrCreateHostKey(
+  log: Pick<FastifyBaseLogger, "info" | "warn">,
+  keyPath: string = sshHostKeyPath(),
+): Promise<string> {
+  let existing: string | null = null;
   try {
-    return await readFile(keyPath, "utf8");
+    existing = await readFile(keyPath, "utf8");
   } catch {
-    const pair = sshUtils.generateKeyPairSync("ed25519");
-    await mkdir(path.dirname(keyPath), { recursive: true });
-    await writeFile(keyPath, pair.private, { mode: 0o600 });
-    await writeFile(`${keyPath}.pub`, pair.public, { mode: 0o644 });
-    app.log.info(`Generated SSH host key at ${keyPath}`);
-    return pair.private;
+    /* first start */
   }
+  if (existing !== null) {
+    if (!(isTruncatedEd25519Key(existing) && sshUtils.parseKey(existing) instanceof Error)) return existing;
+    await rename(keyPath, `${keyPath}.unparsable`);
+    log.warn(
+      `SSH host key at ${keyPath} was generated truncated (an ssh2 bug) and can never be parsed; ` +
+        `moved it to ${keyPath}.unparsable and generating a new one`,
+    );
+  }
+  const pair = generateEd25519KeyPair();
+  await mkdir(path.dirname(keyPath), { recursive: true });
+  await writeFile(keyPath, pair.private, { mode: 0o600 });
+  await writeFile(`${keyPath}.pub`, pair.public, { mode: 0o644 });
+  log.info(`Generated SSH host key at ${keyPath}`);
+  return pair.private;
 }
 
 // ─── exec handling ────────────────────────────────────────────────────────────
@@ -360,7 +381,7 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
     return null;
   }
 
-  const hostKey = await loadOrCreateHostKey(app);
+  const hostKey = await loadOrCreateHostKey(app.log);
 
   const sweep = setInterval(sweepExpiredFailures, WINDOW_MS);
   sweep.unref();
