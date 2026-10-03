@@ -1,6 +1,6 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
-  CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
+  CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
@@ -324,6 +324,17 @@ export async function deleteRepo(token: string, handle: string, repoName: string
 // ─── composition ─────────────────────────────────────────────────────────────
 
 /** Byte-share per format/domain at a ref (default branch when omitted). */
+/** Commit authors at a ref, most commits first (issue #209). */
+export async function getContributors(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+): Promise<Contributors> {
+  const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  return req(`/repos/${handle}/${repoName}/contributors${qs}`, { token: token ?? undefined });
+}
+
 export async function getComposition(
   token: string | null,
   handle: string,
