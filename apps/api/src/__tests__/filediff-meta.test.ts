@@ -19,6 +19,10 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+import { execFile as execFileCb } from "node:child_process";
+import { rm } from "node:fs/promises";
+import { promisify } from "node:util";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { __setManifestForTests, __resetManifest } from "../fhr/manifest.js";
@@ -50,6 +54,8 @@ const MANIFEST_NO_WASM = `
 const gltf = (x: number) =>
   JSON.stringify({ asset: { version: "2.0" }, nodes: [{ name: "Cube", translation: [x, 0, 0] }] });
 
+const execFile = promisify(execFileCb);
+
 let repo: TestRepo;
 let app: FastifyInstance;
 let baseSha: string;
@@ -57,6 +63,7 @@ let headSha: string;
 let pinnedSha: string;
 let addedSha: string;
 let featureSha: string;
+let renameSha: string;
 
 const MOCK_REPO = {
   id: "repo-1",
@@ -85,6 +92,13 @@ beforeAll(async () => {
   // A file that exists only from this commit on: its base blob is genuinely
   // absent, which is a zero-byte side, not an unknown one.
   addedSha = await makeCommit(repo.workDir, { "added.gltf": gltf(3) }, "add second scene");
+  // A file that is then renamed: the new path is absent from the parent commit.
+  // Done on a side branch so the feature branch below still forks from addedSha.
+  await checkoutBranch(repo.workDir, "renames");
+  await makeCommit(repo.workDir, { "orig.gltf": gltf(7) }, "add file to rename");
+  await rm(join(repo.workDir, "orig.gltf"));
+  renameSha = await makeCommit(repo.workDir, { "moved/orig.gltf": gltf(7) }, "rename it");
+  await execFile("git", ["-C", repo.workDir, "checkout", "--detach", addedSha]);
   // A branch, so we can prove the endpoint answers with SHAs and not the ref
   // the caller happened to pass (the PR file view passes the head branch).
   await checkoutBranch(repo.workDir, "feature");
@@ -108,6 +122,22 @@ beforeEach(() => {
 function get(query: string) {
   return app.inject({ method: "GET", url: `/repos/alice/scene/filediff-meta?${query}` });
 }
+
+describe("GET /repos/:handle/:name/filediff-meta — renamed files (#201)", () => {
+  it("sizes the base blob at basePath, so a rename has both sides", async () => {
+    const res = await get(`path=moved/orig.gltf&sha=${renameSha}&basePath=orig.gltf`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.baseSize).toBe(Buffer.byteLength(gltf(7)));
+    expect(body.headSize).toBe(Buffer.byteLength(gltf(7)));
+  });
+
+  it("without basePath a rename reports no base blob (unchanged behaviour)", async () => {
+    const res = await get(`path=moved/orig.gltf&sha=${renameSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().baseSize).toBeNull();
+  });
+});
 
 describe("GET /repos/:handle/:name/filediff-meta", () => {
   it("returns SHAs, honest blob sizes, wasm availability and the manifest build", async () => {
