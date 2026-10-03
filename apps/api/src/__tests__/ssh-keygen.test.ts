@@ -37,6 +37,27 @@ describe("isTruncatedEd25519Key", () => {
     expect(isTruncatedEd25519Key(truncated.private)).toBe(true);
   });
 
+  it("recognises one that lost more than one leading zero byte", () => {
+    // Two zero bytes in a row is 1 draw in 65,536 — too rare to draw, so built:
+    // the header and public blob are all the detector reads.
+    const u32 = (n: number) => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32BE(n, 0);
+      return b;
+    };
+    const str = (b: Buffer) => Buffer.concat([u32(b.length), b]);
+    const key = (pubLen: number) => {
+      const blob = Buffer.concat([str(Buffer.from("ssh-ed25519")), str(Buffer.alloc(pubLen, 7))]);
+      const body = Buffer.concat([
+        Buffer.from("openssh-key-v1\0"), str(Buffer.from("none")), str(Buffer.from("none")), str(Buffer.alloc(0)), u32(1), str(blob),
+      ]);
+      return `-----BEGIN OPENSSH PRIVATE KEY-----\n${body.toString("base64")}\n-----END OPENSSH PRIVATE KEY-----\n`;
+    };
+    expect(isTruncatedEd25519Key(key(30))).toBe(true);
+    expect(isTruncatedEd25519Key(key(31))).toBe(true);
+    expect(isTruncatedEd25519Key(key(32))).toBe(false);
+  });
+
   it("is false for anything else", () => {
     expect(isTruncatedEd25519Key(generateEd25519KeyPair().private)).toBe(false);
     expect(isTruncatedEd25519Key(sshUtils.generateKeyPairSync("rsa", { bits: 2048 }).private)).toBe(false);
