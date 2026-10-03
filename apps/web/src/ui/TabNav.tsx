@@ -7,12 +7,23 @@ type TabNavProps = {
   "aria-label"?: string;
 };
 
-/** Horizontal tab bar with a hairline underline. Fill with `TabItem`s. */
+/**
+ * Horizontal tab bar with a hairline underline. Fill with `TabItem`s.
+ *
+ * The hairline is an inset shadow rather than a border so the tabs can sit
+ * entirely inside the bar: the bar scrolls sideways on narrow screens, and with
+ * one overflow axis set the other computes to `auto` as well, so a tab reaching
+ * below the box (the old `-mb-px` over a border) gave the bar a 1px vertical
+ * scrollbar (#196). The active tab's underline paints over the shadow.
+ */
 export function TabNav({ children, className, ...rest }: TabNavProps) {
   return (
     <nav
       role="tablist"
-      className={cx("flex items-stretch gap-1 border-b border-fh-border overflow-x-auto", className)}
+      className={cx(
+        "flex items-stretch gap-1 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_rgb(var(--fh-border))]",
+        className,
+      )}
       {...rest}
     >
       {children}
@@ -56,7 +67,7 @@ export function TabItem({ active, icon, count, children, to, onClick, className 
 
   const cls = cx(
     "flex items-center gap-1.5 px-3 py-2 text-fh-base whitespace-nowrap",
-    "border-b-2 -mb-px transition-colors duration-100 cursor-pointer",
+    "border-b-2 transition-colors duration-100 cursor-pointer",
     active
       ? "text-fh-fg font-semibold border-fh-accent-emphasis"
       : "text-fh-fg-muted border-transparent hover:text-fh-fg hover:border-fh-border-strong",
