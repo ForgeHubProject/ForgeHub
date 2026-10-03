@@ -116,7 +116,7 @@ export function PRFileRow({
   }
 
   return (
-    <div id={fileAnchorId(file.path)} className="border border-fh-border rounded-md bg-fh-surface overflow-hidden scroll-mt-4">
+    <div id={fileAnchorId(file.path)} className="border border-fh-border rounded-md bg-fh-surface overflow-hidden scroll-mt-16">
       <div
         className={cx(
           "flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-fh-canvas hover:bg-fh-surface-muted transition-colors",
