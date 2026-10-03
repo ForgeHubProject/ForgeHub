@@ -17,7 +17,7 @@ function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
   }
   return null;
 }
-import { LockIcon, RepoIcon, TopicChips } from "./listShared";
+import { LockIcon, RepoIcon } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
 import { RepoCommitsTab } from "./repo/RepoCommitsTab";
@@ -110,14 +110,6 @@ function SettingsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path fillRule="evenodd" d="M7.429 1.525a6.593 6.593 0 011.142 0c.036.003.108.036.137.146l.289 1.105c.147.56.55.967.997 1.189.174.086.341.183.501.29.417.278.97.423 1.53.27l1.102-.303c.11-.03.175.016.195.046.219.31.41.641.573.989.014.03.023.109-.063.17l-.948.709c-.447.334-.629.847-.57 1.343.018.148.028.298.028.45s-.01.302-.028.45c-.059.496.123 1.01.57 1.344l.948.708c.086.061.077.14.063.17a6.38 6.38 0 01-.573.99c-.02.029-.086.075-.195.045l-1.103-.303c-.559-.153-1.112-.008-1.529.27-.16.107-.327.204-.5.29-.449.222-.851.628-.998 1.189l-.289 1.105c-.029.11-.101.143-.137.146a6.593 6.593 0 01-1.142 0c-.036-.003-.108-.036-.137-.146l-.289-1.105c-.147-.56-.55-.967-.997-1.189a4.502 4.502 0 01-.501-.29c-.417-.278-.97-.423-1.53-.27l-1.102.303c-.11.03-.175-.016-.195-.046a6.381 6.381 0 01-.573-.989c-.014-.03-.023-.109.063-.17l.948-.709c.447-.334.629-.847.57-1.343A4.502 4.502 0 012 8c0-.152.01-.302.028-.45.059-.496-.123-1.01-.57-1.344l-.948-.708c-.086-.061-.077-.14-.063-.17a6.38 6.38 0 01.573-.99c.02-.029.086-.075.195-.045l1.103.303c.559.153 1.112.008 1.529-.27.16-.107.327-.204.5-.29.449-.222.851-.628.998-1.189l.289-1.105c.029-.11.101-.143.137-.146zM8 0c-.236 0-.47.01-.701.03-.743.065-1.29.615-1.458 1.261l-.29 1.106c-.017.066-.078.158-.211.224a5.001 5.001 0 00-.498.29c-.12.079-.247.112-.37.08L3.37 2.687c-.648-.178-1.32.03-1.711.567a7.9 7.9 0 00-.71 1.227c-.285.632-.109 1.355.353 1.824l.95.71c.056.043.128.147.128.285a4.5 4.5 0 000 .9c0 .138-.072.242-.129.285l-.95.71c-.461.469-.637 1.192-.352 1.824.2.446.437.87.71 1.227.39.537 1.063.745 1.711.567l1.103-.303c.123-.032.25 0 .37.08.16.107.327.204.497.29.134.066.195.158.212.224l.29 1.106c.167.646.715 1.196 1.457 1.26a8.094 8.094 0 001.402 0c.743-.064 1.29-.614 1.458-1.26l.29-1.106c.017-.066.078-.158.211-.224a5 5 0 00.498-.29c.12-.079.247-.112.37-.08l1.103.303c.648.178 1.32-.03 1.711-.567.273-.357.51-.781.71-1.227.285-.632.109-1.355-.353-1.824l-.95-.71c-.056-.043-.128-.147-.128-.285a4.5 4.5 0 000-.9c0-.138.072-.242.129-.285l.95-.71c.461-.469.637-1.192.352-1.824a7.9 7.9 0 00-.71-1.227c-.39-.537-1.063-.745-1.711-.567l-1.103.303c-.123.032-.25 0-.37-.08a5 5 0 00-.497-.29c-.134-.066-.195-.158-.212-.224L9.16 1.29C8.992.644 8.444.094 7.701.03A8.094 8.094 0 008 0zM6.5 8a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zM8 5a3 3 0 100 6 3 3 0 000-6z" />
-    </svg>
-  );
-}
-
-function LawIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path fillRule="evenodd" d="M7.467.133a1.748 1.748 0 011.066 0l5.25 1.68A1.75 1.75 0 0115 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 01-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 011.217-1.667L7.467.133zm.61 1.429a.25.25 0 00-.153 0l-5.25 1.68a.25.25 0 00-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.2.2 0 00.154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.25.25 0 00-.174-.237l-5.25-1.68zM11.28 6.28l-3.5 3.5a.75.75 0 01-1.06 0l-1.5-1.5a.751.751 0 01.018-1.042.751.751 0 011.042-.018l.97.97 2.97-2.97a.751.751 0 011.042.018.751.751 0 01.018 1.042z" />
     </svg>
   );
 }
@@ -378,15 +370,6 @@ export function RepoPage({ token, user, onLogout }: Props) {
                 <Badge variant="outline" tone={isPrivate ? "warning" : "neutral"} className="ml-0.5">
                   {isPrivate ? <><LockIcon size={14} /> Private</> : "Public"}
                 </Badge>
-                {repo.license && (
-                  <Link
-                    to={`/${h}/${r}/blob/${defaultBranch}/${repo.license.path}`}
-                    title={`Licensed under ${repo.license.spdxId} — view ${repo.license.path}`}
-                    className="inline-flex items-center gap-1 rounded-full border border-fh-border px-2 py-0.5 text-fh-xs font-medium text-fh-fg-muted hover:text-fh-accent-fg hover:border-fh-accent-emphasis"
-                  >
-                    <LawIcon /> {repo.license.spdxId}
-                  </Link>
-                )}
               </div>
               {repo.parent && (
                 <p className="text-fh-xs text-fh-fg-muted mt-1.5 flex items-center gap-1 flex-wrap">
@@ -411,12 +394,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
                   )}
                 </p>
               )}
-              {repo.description && (
-                <p className="text-fh-base text-fh-fg-muted mt-2 max-w-3xl">{repo.description}</p>
-              )}
-              {repo.topics && repo.topics.length > 0 && (
-                <TopicChips topics={repo.topics} className="mt-3" />
-              )}
+              {/* Description, topics and license live in the Code tab's About
+                  (#208), as on GitHub — so this header is the same height on
+                  every tab and the tabs never jump when switching. */}
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -588,6 +568,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
             onRefChange={handleRefChange}
             onCreateBranch={handleCreateBranch}
             splat={splat}
+            social={social}
+            canEditSettings={user.handle === h}
           />
         )}
         {activeTab === "actions" && (
