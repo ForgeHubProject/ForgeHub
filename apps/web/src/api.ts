@@ -8,7 +8,7 @@ import type {
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
   Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SyncForkResult, Team, TimelineEvent,
-  TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  TreeCommits, TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -870,6 +870,19 @@ export async function getCommitDiff(
 }
 
 // ─── tree / blob ────────────────────────────────────────────────────────────────────────────
+
+/** The last commit to touch each entry under `path` (issue #210). */
+export async function getTreeCommits(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+  path?: string,
+): Promise<TreeCommits> {
+  const qs = new URLSearchParams({ ref });
+  if (path) qs.set("path", path);
+  return req(`/repos/${handle}/${repoName}/tree-commits?${qs}`, { token: token ?? undefined });
+}
 
 export async function listTree(
   token: string | null,
