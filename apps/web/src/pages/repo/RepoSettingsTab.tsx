@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
-  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
+  getBranchProtection, getOrg, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
   putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
   type MergeMethod,
 } from "../../api";
@@ -1550,14 +1550,27 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [isOrgOwner, setIsOrgOwner] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
   const matches = typed.trim() === repoName;
+  // The URL handle is an org handle for org repos; only an org OWNER may delete
+  // those (the API enforces the same rule).
+  const canDelete = isOwner || isOrgOwner;
+
+  useEffect(() => {
+    if (isOwner) return;
+    let cancelled = false;
+    getOrg(token, handle)
+      .then((profile) => { if (!cancelled) setIsOrgOwner(profile.org.viewerRole === "OWNER"); })
+      .catch(() => { if (!cancelled) setIsOrgOwner(false); });
+    return () => { cancelled = true; };
+  }, [token, handle, isOwner]);
 
   function close() { setConfirming(false); setTyped(""); }
 
   async function requestDelete() {
-    if (!matches || deleting || !isOwner) return;
+    if (!matches || deleting || !canDelete) return;
     setDeleting(true);
     try {
       // Addressed by owner + name, so the repo deleted is the one named below;
@@ -1574,9 +1587,9 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
   return (
     <div>
       <SectionHeader title="Danger zone" description="Irreversible and destructive actions." />
-      {!isOwner ? (
+      {!canDelete ? (
         <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
-          Only the repository owner can delete this repository.
+          Only the repository owner (or an organization owner) can delete this repository.
         </p>
       ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
