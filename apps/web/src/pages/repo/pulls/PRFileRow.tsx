@@ -72,6 +72,7 @@ export function PRFileRow({
     file.path,
     headRef,
     needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
+    file.status === "renamed" ? file.oldPath : undefined,
   );
 
   async function loadDiff() {
