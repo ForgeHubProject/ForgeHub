@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, getCheckSummary, listCommits, listTree, sshCloneUrl } from "../../api";
+import { API_BASE, downloadArchive, getCheckSummary, getTreeCommits, listCommits, listTree, sshCloneUrl } from "../../api";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
@@ -21,7 +21,7 @@ import {
   TextInput,
   useToast,
 } from "../../ui";
-import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeEntry } from "../../types";
+import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry } from "../../types";
 import { CompositionBar } from "./CompositionBar";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 
@@ -87,6 +87,14 @@ function CompareGlyph() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path fillRule="evenodd" d="M5 3.254V3.25v.005a.75.75 0 110-.005v.004zm.45 1.9a2.25 2.25 0 10-1.95.218v5.256a2.25 2.25 0 101.5 0V7.123A5.735 5.735 0 009.25 9h1.378a2.251 2.251 0 100-1.5H9.25a4.25 4.25 0 01-3.8-2.346zM12.75 9a.75.75 0 100-1.5.75.75 0 000 1.5zm-8.5 4.5a.75.75 0 100-1.5.75.75 0 000 1.5z" />
+    </svg>
+  );
+}
+
+function HistoryGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
+      <path fillRule="evenodd" d="M1.643 3.143L.427 1.927A.25.25 0 000 2.104V5.75c0 .138.112.25.25.25h3.646a.25.25 0 00.177-.427L2.715 4.215a6.5 6.5 0 11-1.18 4.458.75.75 0 10-1.493.154 8.001 8.001 0 101.6-5.684zM7.75 4a.75.75 0 01.75.75v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.75.75 0 017 8.25v-3.5A.75.75 0 017.75 4z" />
     </svg>
   );
 }
@@ -408,6 +416,9 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
   const [headStatus, setHeadStatus] = useState<CheckSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Last commit per entry (#210): fetched on its own so the listing never waits
+  // on it. null while loading; "failed" leaves the columns empty.
+  const [entryCommits, setEntryCommits] = useState<TreeCommits | "failed" | null>(null);
 
   // Extract current path — use currentRef state as prefix so slashed branch names work correctly.
   const currentPath = (() => {
@@ -424,8 +435,8 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
     setError(null);
 
     // The header bar shows the most recent commit touching the directory being
-    // viewed (the commits endpoint filters by path server-side, issue #109) —
-    // one honest "last commit" line rather than a fabricated per-file column.
+    // viewed (the commits endpoint filters by path server-side, issue #109); the
+    // per-entry columns come from tree-commits, below.
     Promise.all([
       listTree(token, handle, repoName, currentRef, currentPath || undefined),
       listCommits(token, handle, repoName, currentRef, { path: currentPath || undefined, perPage: 1 }),
@@ -454,7 +465,18 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
     return () => { cancelled = true; };
   }, [token, handle, repoName, currentRef, currentPath]);
 
+  useEffect(() => {
+    if (!currentRef) return;
+    let cancelled = false;
+    setEntryCommits(null);
+    getTreeCommits(token, handle, repoName, currentRef, currentPath || undefined)
+      .then((d) => { if (!cancelled) setEntryCommits(d); })
+      .catch(() => { if (!cancelled) setEntryCommits("failed"); });
+    return () => { cancelled = true; };
+  }, [token, handle, repoName, currentRef, currentPath]);
+
   const pathParts = currentPath ? currentPath.split("/") : [];
+  const lastCommits = entryCommits && entryCommits !== "failed" ? entryCommits : null;
 
   function entryLink(entry: TreeEntry) {
     return entry.type === "tree"
@@ -577,6 +599,16 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
                 {latestCommit.shortSha}
               </Link>
               <RelativeTime date={latestCommit.date} className="text-fh-xs text-fh-fg-subtle shrink-0 hidden md:block" />
+              {currentPath === "" && lastCommits && lastCommits.totalCommits > 0 && (
+                <Link
+                  to={`${base}/commits`}
+                  className="inline-flex shrink-0 items-center gap-1 text-fh-xs font-semibold text-fh-fg no-underline hover:text-fh-accent-fg"
+                  title="View commit history"
+                >
+                  <HistoryGlyph />
+                  {lastCommits.totalCommits.toLocaleString()} {lastCommits.totalCommits === 1 ? "commit" : "commits"}
+                </Link>
+              )}
             </div>
           )}
 
@@ -593,17 +625,40 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
             </div>
           )}
 
-          {entries.map((entry) => (
-            <div
-              key={entry.path}
-              className="flex items-center gap-3 px-4 py-2 border-b border-fh-border-muted last:border-b-0 hover:bg-fh-surface-muted"
-            >
-              {entry.type === "tree" ? <FolderIcon /> : <FileIcon />}
-              <Link to={entryLink(entry)} className="text-fh-base text-fh-fg hover:text-fh-accent-fg hover:underline truncate">
-                {entry.name}
-              </Link>
-            </div>
-          ))}
+          {entries.map((entry) => {
+            const last = lastCommits?.commits[entry.name];
+            return (
+              <div
+                key={entry.path}
+                className="flex items-center gap-3 px-4 py-2 border-b border-fh-border-muted last:border-b-0 hover:bg-fh-surface-muted"
+              >
+                {entry.type === "tree" ? <FolderIcon /> : <FileIcon />}
+                {/* Name, then — from sm up — the last commit's message and, from md
+                    up, its date (#210): the same breakpoints as the commit bar. */}
+                <div className="min-w-0 flex-1 sm:flex-none sm:w-1/3">
+                  <Link to={entryLink(entry)} className="block text-fh-base text-fh-fg hover:text-fh-accent-fg hover:underline truncate">
+                    {entry.name}
+                  </Link>
+                </div>
+                <div className="hidden sm:block min-w-0 flex-1 text-fh-sm">
+                  {last ? (
+                    <Link
+                      to={`${base}/commits/${last.sha}`}
+                      title={last.subject}
+                      className="block truncate text-fh-fg-muted no-underline hover:text-fh-accent-fg hover:underline"
+                    >
+                      {last.subject}
+                    </Link>
+                  ) : (
+                    entryCommits === null && <Skeleton className="h-3" width={140} />
+                  )}
+                </div>
+                <div className="hidden md:block w-28 shrink-0 text-right text-fh-xs text-fh-fg-subtle">
+                  {last ? <RelativeTime date={last.date} /> : entryCommits === null && <Skeleton className="ml-auto h-3" width={56} />}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
