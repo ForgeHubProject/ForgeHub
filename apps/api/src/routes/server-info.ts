@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { sshHostKeyPath } from "../git-storage.js";
+import { registrationMode } from "../registration.js";
 import { fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
 
 /**
@@ -47,6 +48,6 @@ export async function serverInfoRoutes(app: FastifyInstance) {
   app.get("/server/info", async () => {
     const config = sshConfig();
     const sshFingerprint = config.sshEnabled ? await readHostKeyFingerprint() : null;
-    return { ...config, sshFingerprint };
+    return { ...config, sshFingerprint, registration: registrationMode() };
   });
 }

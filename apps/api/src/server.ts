@@ -49,6 +49,7 @@ import { ciRoutes } from "./routes/ci.js";
 import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
+import { registrationMode } from "./registration.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
@@ -62,6 +63,8 @@ export async function buildServer() {
   if (!secret || secret.length < 16) {
     throw new Error("JWT_SECRET must be set to a string at least 16 characters long");
   }
+
+  registrationMode(); // fail fast on an invalid FORGEHUB_REGISTRATION
 
   const app = Fastify({ logger: true });
 
