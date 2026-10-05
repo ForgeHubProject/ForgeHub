@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 // ─── Module mocks (hoisted) ───────────────────────────────────────────────────
 
@@ -102,6 +102,48 @@ describe("POST /auth/register", () => {
     expect(body.user.handle).toBe("alice");
     expect(body.token).toBeTruthy();
     expect(body.user.passwordHash).toBeUndefined();
+  });
+
+  describe("when FORGEHUB_REGISTRATION=closed", () => {
+    beforeEach(() => { process.env["FORGEHUB_REGISTRATION"] = "closed"; });
+    afterEach(() => { delete process.env["FORGEHUB_REGISTRATION"]; });
+
+    it("403 and creates nothing", async () => {
+      vi.mocked(prisma.user.create).mockClear();
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: { email: "alice@example.com", password: "hunter12", handle: "alice" },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toMatch(/closed/i);
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it("login still works", async () => {
+      vi.mocked(prisma.user.findUnique).mockResolvedValue(mockUser as never);
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "alice@example.com", password: "hunter12" },
+      });
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
+  it("201 when FORGEHUB_REGISTRATION=open", async () => {
+    process.env["FORGEHUB_REGISTRATION"] = "open";
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: { email: "alice@example.com", password: "hunter12", handle: "alice" },
+      });
+      expect(res.statusCode).toBe(201);
+    } finally {
+      delete process.env["FORGEHUB_REGISTRATION"];
+    }
   });
 
   it("400 for missing email", async () => {
