@@ -562,6 +562,20 @@ export type CommitDetail = CommitInfo & {
   changedFiles: string[];
 };
 
+/** The last commit to touch one entry of a listing (issue #210). */
+export type EntryCommit = { sha: string; subject: string; date: string };
+
+/** `GET /repos/:h/:n/tree-commits`: last commit per entry, and the ref's commit count. */
+export type TreeCommits = {
+  ref: string | null;
+  sha: string | null;
+  path: string;
+  commits: Record<string, EntryCommit>;
+  /** False when the server stopped walking before every entry was found. */
+  complete: boolean;
+  totalCommits: number;
+};
+
 export type TreeEntry = {
   mode: string;
   type: "blob" | "tree";
