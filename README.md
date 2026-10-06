@@ -525,4 +525,8 @@ ForgeHub/
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+### Releasing container images
+
+`npm run release:containers` (or `scripts/release-containers.sh`) builds the sqlite, `-postgres` and `-mysql` images for amd64+arm64 and pushes them to `docker.io/touficmajdalani/forgehub`, `ghcr.io/forgehubproject/forgehub` and `quay.io/forgehubproject/forgehub`. Tags are `<BASE>-<N>` (default `1.0-1`, `1.0-2`, …; N is auto-incremented from the registries) plus `latest`. Log in to all three registries first; use `--dry-run` to preview and `BASE=1.1` to start a new series.

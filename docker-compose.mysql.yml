@@ -59,6 +59,8 @@ services:
       FORGEHUB_CI: "${FORGEHUB_CI:-}"
       FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
+      # Sign-up policy: open (default) | closed.
+      FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"

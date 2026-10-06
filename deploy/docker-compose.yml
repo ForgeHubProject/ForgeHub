@@ -1,24 +1,24 @@
-# ForgeHub — PostgreSQL deployment.
+# ForgeHub — forgehubcode.com prod deploy (PostgreSQL, Rocky Linux 10 + podman-compose).
 #
-# Standalone: does NOT need docker-compose.yml.
+# Standalone: does NOT need repo-root docker-compose.yml or docker-compose.postgres.yml.
+# Sits behind Nginx Proxy Manager on the host — NPM terminates TLS and proxies
+# to 127.0.0.1:${WEB_PORT}, so no caddy/nginx/certbot service is defined here.
 #
-# Quick start:
-#   cp .env.postgres.example .env.postgres
-#   # Edit .env.postgres — set JWT_SECRET and POSTGRES_PASSWORD
-#   docker compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
-#   podman compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
+# Deploy:
+#   scp -r deploy/ user@vps:/opt/forgehub/
+#   ssh user@vps
+#   cd /opt/forgehub/deploy
+#   podman-compose up -d
+#   # or: podman compose up -d
+#
+# In NPM: add a proxy host for forgehubcode.com -> 127.0.0.1:${WEB_PORT} (default 8080),
+# with "Websockets Support" on, and request a Let's Encrypt cert for the domain.
 #
 # On first boot Prisma runs `db push` to create the schema with PostgreSQL DDL.
 # Subsequent boots are idempotent (additive schema changes only).
 #
-# Git repos + CI data live on forgehub-data / forgehub-ci (same names as the
-# SQLite compose file so repos survive a provider switch).
-# PostgreSQL data lives on the separate forgehub-pgdata volume.
-#
-# Compose file format 2.4 — works with docker-compose v1, docker compose v2,
-# podman-compose, and podman compose; the only schema with both top-level
-# named volumes AND depends_on: condition: service_healthy.
-
+# Compose file format 2.4 — the only schema podman-compose parses that supports
+# both top-level named volumes AND depends_on: condition: service_healthy.
 version: "2.4"
 
 services:
@@ -27,7 +27,7 @@ services:
     environment:
       POSTGRES_DB: forgehub
       POSTGRES_USER: forgehub
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.postgres — see .env.postgres.example}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
     volumes:
       - forgehub-pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -40,24 +40,16 @@ services:
 
   forgehub:
     image: docker.io/touficmajdalani/forgehub:latest-postgres
-    # Also published to ghcr.io/forgehubproject/forgehub:latest-postgres and quay.io/encryptdev88/forgehub:latest-postgres.
-    # Building from source (with PostgreSQL Prisma client baked in):
-    # build:
-    #   context: .
-    #   args:
-    #     DATABASE_PROVIDER: postgresql
-    #     DATABASE_URL_BUILD: "postgresql://user:pass@localhost:5432/forgehub"
+    # Also published to ghcr.io/forgehubproject/forgehub:latest-postgres and quay.io/forgehubproject/forgehub:latest-postgres.
     environment:
       DATABASE_URL: "postgresql://forgehub:${POSTGRES_PASSWORD}@postgres:5432/forgehub"
-      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env.postgres — see .env.postgres.example}"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env}"
       PORT: "3001"
       GIT_STORAGE_ROOT: "/data/git-storage"
       FORGEHUB_CI_ROOT: "/ci"
       FORGEHUB_CI: "${FORGEHUB_CI:-}"
       FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
-      # Sign-up policy: open (default) | closed.
-      FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"
@@ -67,9 +59,15 @@ services:
       AVATAR_MAX_BYTES: "${AVATAR_MAX_BYTES:-}"
       FORGEHUB_RAWBLOB_MAX_BYTES: "${FORGEHUB_RAWBLOB_MAX_BYTES:-}"
     ports:
-      - "${WEB_PORT:-8080}:80"
-      # SSH git transport: active now that FORGEHUB_SSH_PORT is set in .env.postgres.
-      - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+      # Bound to loopback only — NPM (on the same host) proxies in from the internet.
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+      # SSH git transport — NOT published by default. To enable, BOTH set
+      # FORGEHUB_SSH_PORT in .env (turns the server on inside the container) AND
+      # uncomment the line below (compose can't publish a port conditionally).
+      # Setting only one leaves SSH either unreachable or mapped to nothing.
+      # NPM cannot proxy raw TCP; punch this through the VPS firewall directly
+      # (NOT via NPM) if you enable it.
+      # - "${FORGEHUB_SSH_PORT:?set FORGEHUB_SSH_PORT in .env}:${FORGEHUB_SSH_PORT}"
     volumes:
       - forgehub-data:/data
       - forgehub-ci:/ci
