@@ -10,6 +10,8 @@
 #   BASE=1.1 scripts/release-containers.sh        # start/continue a new base
 #   scripts/release-containers.sh --dry-run       # print plan, build nothing
 #   scripts/release-containers.sh --local         # build locally only (host arch), no push
+#   Push preflight (skipped for --dry-run/--local): clean tree (ALLOW_DIRTY=1), HEAD on a
+#   remote branch (ALLOW_UNPUSHED=1), version tags not already published.
 #   PLATFORMS=linux/amd64 scripts/release-containers.sh   # single arch (faster)
 #   REGISTRIES="docker.io/x/forgehub ghcr.io/y/forgehub" scripts/release-containers.sh
 set -euo pipefail
@@ -72,7 +74,31 @@ echo "Release: $VERSION (+ latest) from $VCS_REF"
 echo "Registries: $REGISTRIES"
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-  echo "warning: working tree has uncommitted changes; image will include them" >&2
+  if (( DRY_RUN || LOCAL )); then
+    echo "warning: working tree has uncommitted changes; image will include them" >&2
+  elif [[ "${ALLOW_DIRTY:-0}" != 1 ]]; then
+    echo "error: uncommitted changes would be baked into a pushed image (commit them, or ALLOW_DIRTY=1)" >&2
+    exit 1
+  fi
+fi
+
+# Pushed images are labelled with VCS_REF; it must exist on a remote or the label is unverifiable.
+if (( ! DRY_RUN && ! LOCAL )) && [[ "${ALLOW_UNPUSHED:-0}" != 1 ]] \
+   && [[ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]]; then
+  echo "error: HEAD ($VCS_REF) is not on any remote branch (git push first, or ALLOW_UNPUSHED=1)" >&2
+  exit 1
+fi
+
+# Never overwrite an already-published version tag (guards races and failed tag listings).
+if (( ! DRY_RUN && ! LOCAL )); then
+  for reg in $REGISTRIES; do
+    for suffix in "" -postgres -mysql; do
+      if docker buildx imagetools inspect "$reg:${VERSION}${suffix}" >/dev/null 2>&1; then
+        echo "error: $reg:${VERSION}${suffix} already exists; refusing to overwrite" >&2
+        exit 1
+      fi
+    done
+  done
 fi
 
 # provider:suffix:build-url (mirrors .github/workflows/publish.yml matrix)
