@@ -61,10 +61,13 @@ services:
     ports:
       # Bound to loopback only — NPM (on the same host) proxies in from the internet.
       - "127.0.0.1:${WEB_PORT:-8080}:80"
-      # SSH git transport — only published when FORGEHUB_SSH_PORT is set in .env.
+      # SSH git transport — NOT published by default. To enable, BOTH set
+      # FORGEHUB_SSH_PORT in .env (turns the server on inside the container) AND
+      # uncomment the line below (compose can't publish a port conditionally).
+      # Setting only one leaves SSH either unreachable or mapped to nothing.
       # NPM cannot proxy raw TCP; punch this through the VPS firewall directly
       # (NOT via NPM) if you enable it.
-      # - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+      # - "${FORGEHUB_SSH_PORT:?set FORGEHUB_SSH_PORT in .env}:${FORGEHUB_SSH_PORT}"
     volumes:
       - forgehub-data:/data
       - forgehub-ci:/ci
