@@ -9,6 +9,7 @@
 #   scripts/release-containers.sh                 # next patch of BASE (default 1.0)
 #   BASE=1.1 scripts/release-containers.sh        # start/continue a new base
 #   scripts/release-containers.sh --dry-run       # print plan, build nothing
+#   scripts/release-containers.sh --local         # build locally only (host arch), no push
 #   PLATFORMS=linux/amd64 scripts/release-containers.sh   # single arch (faster)
 #   REGISTRIES="docker.io/x/forgehub ghcr.io/y/forgehub" scripts/release-containers.sh
 set -euo pipefail
@@ -16,8 +17,14 @@ set -euo pipefail
 BASE="${BASE:-1.0}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 REGISTRIES="${REGISTRIES:-docker.io/touficmajdalani/forgehub ghcr.io/forgehubproject/forgehub quay.io/forgehubproject/forgehub}"
-DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+DRY_RUN=0 LOCAL=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY_RUN=1 ;;
+    --local)   LOCAL=1 ;;   # build for this host only, load into local docker, no push
+    *) echo "unknown arg: $a" >&2; exit 1 ;;
+  esac
+done
 
 cd "$(dirname "$0")/.."
 
@@ -34,7 +41,7 @@ need docker  || { echo "docker required" >&2; exit 1; }
 need curl || install_pkg curl
 need jq   || install_pkg jq
 docker buildx version >/dev/null 2>&1 || install_pkg docker-buildx
-(( DRY_RUN )) || need qemu-aarch64-static || [[ "$PLATFORMS" != *arm64* ]] || docker run --privileged --rm tonistiigi/binfmt --install arm64 >/dev/null
+(( DRY_RUN || LOCAL )) || need qemu-aarch64-static || [[ "$PLATFORMS" != *arm64* ]] || docker run --privileged --rm tonistiigi/binfmt --install arm64 >/dev/null
 
 # List tags of a public repo via the registry HTTP API (empty if repo missing/private).
 list_tags() {
@@ -75,7 +82,7 @@ VARIANTS=(
   "mysql:-mysql:mysql://user:pass@localhost:3306/forgehub"
 )
 
-if (( ! DRY_RUN )); then
+if (( ! DRY_RUN && ! LOCAL )); then
   docker buildx inspect forgehub-release >/dev/null 2>&1 || docker buildx create --name forgehub-release --use >/dev/null
   docker buildx use forgehub-release
 fi
@@ -87,10 +94,11 @@ for v in "${VARIANTS[@]}"; do
     tag_args+=(-t "$reg:${VERSION}${suffix}" -t "$reg:latest${suffix}")
   done
   echo "==> $provider  (${VERSION}${suffix}, latest${suffix})"
-  cmd=(docker buildx build --platform "$PLATFORMS" --file Dockerfile
+  if (( LOCAL )); then out=(--load); plat=(); else out=(--push); plat=(--platform "$PLATFORMS"); fi
+  cmd=(docker buildx build "${plat[@]}" --file Dockerfile
        --build-arg "DATABASE_PROVIDER=$provider" --build-arg "DATABASE_URL_BUILD=$url"
        --build-arg "BUILD_DATE=$BUILD_DATE" --build-arg "VCS_REF=$VCS_REF" --build-arg "VERSION=$VERSION"
-       "${tag_args[@]}" --push .)
+       "${tag_args[@]}" "${out[@]}" .)
   if (( DRY_RUN )); then printf '    %q ' "${cmd[@]}"; echo; else "${cmd[@]}"; fi
 done
 
