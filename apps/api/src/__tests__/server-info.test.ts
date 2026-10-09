@@ -37,6 +37,15 @@ describe("GET /server/info", () => {
   afterEach(() => {
     delete process.env["FORGEHUB_SSH_PORT"];
     delete process.env["FORGEHUB_SSH_HOST"];
+    delete process.env["FORGEHUB_REGISTRATION"];
+  });
+
+  it("exposes registration mode, defaulting to open", async () => {
+    const open = await app.inject({ method: "GET", url: "/server/info" });
+    expect(open.json().registration).toBe("open");
+    process.env["FORGEHUB_REGISTRATION"] = "closed";
+    const closed = await app.inject({ method: "GET", url: "/server/info" });
+    expect(closed.json().registration).toBe("closed");
   });
 
   it("returns sshEnabled=false and null fields when FORGEHUB_SSH_PORT is unset", async () => {

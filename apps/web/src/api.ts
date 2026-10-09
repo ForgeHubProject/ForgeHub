@@ -2443,6 +2443,8 @@ export type ServerInfo = {
   sshHost: string | null;
   /** SHA256 fingerprint of the server's SSH host key, for known_hosts verification. Null when SSH is off or key not yet generated. */
   sshFingerprint: string | null;
+  /** Sign-up policy (FORGEHUB_REGISTRATION). "closed" means POST /auth/register is rejected. */
+  registration: "open" | "closed";
 };
 
 /** GET /server/info — fetch SSH config and host-key fingerprint. No auth required. */

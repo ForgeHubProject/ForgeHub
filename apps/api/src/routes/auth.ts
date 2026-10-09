@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma.js";
 import { loginBodySchema, registerBodySchema } from "../validation.js";
+import { registrationMode } from "../registration.js";
+import { createUserAccount } from "../user-service.js";
 
 /**
  * Record an interactive-login Session (issue #117) and mint a JWT that carries
@@ -55,35 +57,20 @@ function publicProfile(u: DbUser) {
 
 export async function authRoutes(app: FastifyInstance) {
   app.post("/auth/register", async (request, reply) => {
+    if (registrationMode() === "closed") {
+      return reply.status(403).send({ error: "Registration is closed on this server" });
+    }
     const parsed = registerBodySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
 
-    const email = parsed.data.email.trim().toLowerCase();
-    const handle = parsed.data.handle.toLowerCase();
-    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-
-    // Users and orgs share one handle space (issue #114): reject a handle already
-    // claimed by an org. The reverse (org-create vs existing user) is enforced in
-    // the orgs route; user↔user collisions are caught by the unique index below.
-    const orgClash = await prisma.organization.findUnique({ where: { handle } });
-    if (orgClash) {
+    const user = await createUserAccount(parsed.data);
+    if (!user) {
       return reply.status(409).send({ error: "Email or handle already taken" });
     }
-
-    try {
-      const user = await prisma.user.create({
-        data: { email, handle, passwordHash, displayName: parsed.data.displayName?.trim() || null },
-      });
-      const token = await issueSessionToken(request, reply, user.id);
-      return reply.status(201).send({ user: publicUser(user), token });
-    } catch (e: unknown) {
-      if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
-        return reply.status(409).send({ error: "Email or handle already taken" });
-      }
-      throw e;
-    }
+    const token = await issueSessionToken(request, reply, user.id);
+    return reply.status(201).send({ user: publicUser(user), token });
   });
 
   app.post("/auth/login", async (request, reply) => {
