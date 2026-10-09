@@ -9,7 +9,7 @@ import { extensionForFilename, resolveFileDiffViewer } from "../../views/fileDif
 import { ComputeTierPill, useComputeTier, useFileDiffMeta } from "../../views/diffViewers/computeTierUi";
 import { needsFileDiffMeta } from "../../lib/computeTier";
 import { useSemanticExtensions } from "../../lib/fhrFormats";
-import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, cx } from "../../ui";
+import { Avatar, Button, EmptyState, Icons, RelativeTime, Skeleton, TextInput, Tooltip, cx } from "../../ui";
 import {
   ChangeTypeBadge,
   ChevronRightIcon,
@@ -161,6 +161,51 @@ export function FileDiffCard({
 
 // ─── Commit detail ──────────────────────────────────────────────────────────────
 
+// ─── commit page bits (#215) ────────────────────────────────────────────────────
+
+/** Whether the commit page's file tree is shown — a per-browser preference. */
+const FILE_TREE_KEY = "fh.commit.fileTree";
+
+/**
+ * A boolean kept in localStorage. Storage can be missing or refuse (privacy
+ * modes); the flag then simply doesn't stick, and the page never breaks.
+ */
+function useStoredFlag(key: string, initial: boolean): [boolean, (on: boolean) => void] {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const stored = globalThis.localStorage?.getItem(key);
+      return stored === null || stored === undefined ? initial : stored === "1";
+    } catch {
+      return initial;
+    }
+  });
+  const set = (on: boolean): void => {
+    setValue(on);
+    try {
+      globalThis.localStorage?.setItem(key, on ? "1" : "0");
+    } catch {
+      /* not remembered */
+    }
+  };
+  return [value, set];
+}
+
+function BrowseGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="m4.72 3.22-4.25 4.25a.75.75 0 0 0 0 1.06l4.25 4.25a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L2.06 8l3.72-3.72a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215Zm6.56 0a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L13.94 8l-3.72 3.72a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215l4.25-4.25a.75.75 0 0 0 0-1.06Z" />
+    </svg>
+  );
+}
+
+function SidebarGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M6.823 7.823a.25.25 0 0 1 0 .354l-2.396 2.396A.25.25 0 0 1 4 10.396V5.604a.25.25 0 0 1 .427-.177ZM1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0ZM1.5 1.75v12.5c0 .138.112.25.25.25H9.5v-13H1.75a.25.25 0 0 0-.25.25ZM11 14.5h3.25a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H11Z" />
+    </svg>
+  );
+}
+
 function CommitDetailView({
   token,
   handle,
@@ -179,6 +224,8 @@ function CommitDetailView({
   const [loading, setLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [treeShown, setTreeShown] = useStoredFlag(FILE_TREE_KEY, true);
+  const [fileFilter, setFileFilter] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -255,6 +302,10 @@ function CommitDetailView({
   }
 
   const { subject, body } = splitMessage(commit);
+  const filterText = fileFilter.trim().toLowerCase();
+  const treeFiles = (diffFiles ?? [])
+    .map((f) => ({ path: changedFilePath(f), status: f.status }))
+    .filter((f) => !filterText || f.path.toLowerCase().includes(filterText));
   const totalAdditions = diffFiles?.reduce((s, f) => s + f.additions, 0) ?? 0;
   const totalDeletions = diffFiles?.reduce((s, f) => s + f.deletions, 0) ?? 0;
   const fileCount = diffFiles?.length ?? 0;
@@ -263,41 +314,73 @@ function CommitDetailView({
     <div>
       {backLink}
 
-      {/* Commit header card */}
+      {/* Header, GitHub's anatomy (#215): "Commit <hash>" and Browse files, the
+          author line, then the message in a box whose foot carries the parents
+          and the hash. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="flex flex-wrap items-center gap-2 text-fh-2xl font-normal text-fh-fg">
+          Commit
+          <code className="rounded-md bg-fh-surface-muted px-2 py-0.5 font-mono text-fh-xl">{commit.sha.slice(0, 7)}</code>
+        </h1>
+        <Link to={`${base}/tree/${commit.sha}`} className="no-underline">
+          <Button variant="default" leadingIcon={<BrowseGlyph />}>
+            Browse files
+          </Button>
+        </Link>
+      </div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-fh-sm">
+        <Avatar name={commit.authorName} size={20} title={commit.authorEmail} />
+        <span className="font-semibold text-fh-fg">{commit.authorName}</span>
+        <span className="text-fh-fg-muted">
+          committed <RelativeTime date={commit.date} />
+        </span>
+        <SignatureBadge signature={commit.signature} />
+      </div>
       <div className="mb-4 rounded-md border border-fh-border bg-fh-surface">
         <div className="p-4 sm:p-5">
-          <h2 className="text-fh-lg font-semibold leading-snug text-fh-fg break-words">{subject}</h2>
+          <h2 className="font-mono text-fh-base font-semibold leading-snug text-fh-fg break-words">{subject}</h2>
           {body && (
-            <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-fh-sm leading-relaxed text-fh-fg-muted">
+            <pre className="mt-3 whitespace-pre-wrap break-words font-mono text-fh-sm leading-relaxed text-fh-fg-muted">
               {body}
             </pre>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-fh-border bg-fh-canvas px-4 py-3 text-fh-sm sm:px-5">
-          <Avatar name={commit.authorName} size={20} title={commit.authorEmail} />
-          <span className="font-semibold text-fh-fg">{commit.authorName}</span>
-          <span className="text-fh-fg-muted">
-            committed <RelativeTime date={commit.date} />
-          </span>
-          <SignatureBadge signature={commit.signature} />
-          <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
-            {commit.parents.length > 0 && (
-              <span className="flex items-center gap-1.5 text-fh-sm text-fh-fg-muted">
-                <span>{commit.parents.length > 1 ? "parents" : "parent"}</span>
-                {commit.parents.map((p) => (
-                  <Link
-                    key={p}
-                    to={`${base}/commits/${p}`}
-                    className="font-mono text-fh-xs text-fh-accent-fg no-underline hover:underline"
-                  >
-                    {p.slice(0, 7)}
-                  </Link>
-                ))}
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t border-fh-border bg-fh-canvas px-4 py-2.5 text-fh-sm sm:px-5">
+          {commit.parents.length > 0 && (
+            <span className="flex items-center gap-1.5 text-fh-sm text-fh-fg-muted">
+              <span>
+                {commit.parents.length} {commit.parents.length > 1 ? "parents" : "parent"}
               </span>
-            )}
-            <ShaChip sha={commit.sha} />
-          </div>
+              {commit.parents.map((p) => (
+                <Link
+                  key={p}
+                  to={`${base}/commits/${p}`}
+                  className="font-mono text-fh-xs text-fh-accent-fg no-underline hover:underline"
+                >
+                  {p.slice(0, 7)}
+                </Link>
+              ))}
+            </span>
+          )}
+          <span className="flex items-center gap-1.5 text-fh-fg-muted">
+            commit
+            {/* The full hash where there is room for it, the short one where not;
+                either copies the full hash. */}
+            <ShaChip sha={commit.sha} length={40} className="hidden md:inline-flex" />
+            <ShaChip sha={commit.sha} className="md:hidden" />
+          </span>
         </div>
+        {diffFiles && fileCount > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-fh-border px-4 py-2.5 text-fh-sm sm:px-5">
+            <span className="font-semibold text-fh-fg">
+              {fileCount} {fileCount === 1 ? "file" : "files"} changed
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <DiffCounts additions={totalAdditions} deletions={totalDeletions} />
+              <DiffStatBar additions={totalAdditions} deletions={totalDeletions} />
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Diff */}
@@ -315,33 +398,57 @@ function CommitDetailView({
           ))}
         </div>
       ) : diffFiles && diffFiles.length > 0 ? (
-        <>
-          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-fh-sm text-fh-fg-muted">
-            <span className="font-semibold text-fh-fg">
-              {fileCount} changed file{fileCount !== 1 ? "s" : ""}
-            </span>
-            <DiffCounts additions={totalAdditions} deletions={totalDeletions} />
-            <DiffStatBar additions={totalAdditions} deletions={totalDeletions} />
-          </div>
-          {/* Changed-files tree beside the diffs, as in a PR's files tab (#197). A
-              one-file commit has nothing to navigate, so its diff keeps the width.
-              Sticky offsets clear the site header (h-14), which stays pinned. */}
-          <div className="flex flex-col md:flex-row gap-4 items-start">
-            {fileCount > 1 && (
-              <div className="w-full md:w-56 shrink-0 md:sticky md:top-16 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
-                <PRFileTree
-                  files={diffFiles.map((f) => ({ path: changedFilePath(f), status: f.status }))}
-                  showViewed={false}
+        // GitHub's anatomy (#215): a full-width rule under the header, then the
+        // changed-files tree as a left pane with its own divider — for every
+        // commit, with a filter, hideable and remembered — and the diffs filling
+        // the rest. Sticky offsets clear the site header (h-14), which stays pinned.
+        <div className="-mx-4 flex flex-col border-t border-fh-border md:flex-row lg:-mx-8">
+          {treeShown && (
+            // The pane stretches to the row's height so its divider runs the whole
+            // way down beside the diffs; only what's inside it is sticky.
+            <aside
+              aria-label="Changed files"
+              className="w-full shrink-0 border-b border-fh-border md:w-72 md:border-b-0 md:border-r"
+            >
+              <div className="px-4 py-4 md:sticky md:top-14 md:max-h-[calc(100vh-3.5rem)] md:overflow-y-auto lg:pl-8">
+                <TextInput
+                  sizing="md"
+                  type="search"
+                  value={fileFilter}
+                  onChange={(e) => setFileFilter(e.target.value)}
+                  placeholder="Filter files…"
+                  aria-label="Filter changed files"
+                  className="mb-3 w-full"
                 />
+                {treeFiles.length > 0 ? (
+                  <PRFileTree files={treeFiles} showViewed={false} />
+                ) : (
+                  <p className="px-1 py-2 text-fh-sm text-fh-fg-subtle">No changed files match.</p>
+                )}
               </div>
-            )}
-            <div className="flex-1 min-w-0 w-full space-y-4">
+            </aside>
+          )}
+          <div className="min-w-0 flex-1 px-4 py-4 lg:pr-8">
+            <div className="mb-3 hidden md:flex">
+              <Tooltip label={treeShown ? "Hide file tree" : "Show file tree"}>
+                <button
+                  type="button"
+                  onClick={() => setTreeShown(!treeShown)}
+                  aria-pressed={treeShown}
+                  aria-label={treeShown ? "Hide file tree" : "Show file tree"}
+                  className="inline-flex items-center justify-center rounded-md border border-fh-border bg-fh-surface p-1.5 text-fh-fg-muted hover:text-fh-fg hover:border-fh-border-strong cursor-pointer"
+                >
+                  <SidebarGlyph />
+                </button>
+              </Tooltip>
+            </div>
+            <div className="space-y-4">
               {diffFiles.map((file, i) => (
                 <FileDiffCard key={i} file={file} sha={sha} base={base} token={token} />
               ))}
             </div>
           </div>
-        </>
+        </div>
       ) : (
         <div className="rounded-md border border-fh-border bg-fh-surface">
           <EmptyState
@@ -529,11 +636,20 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
 
 // ─── Main export ────────────────────────────────────────────────────────────────
 
+/**
+ * The commit a `commits/<sha>` splat names, or null for the commit list. One
+ * definition, because the repo page lays a commit's page out at full width
+ * (#215) and the two must agree on which pages those are.
+ */
+export function commitShaFromSplat(splat: string): string | null {
+  return splat.match(/^commits\/([0-9a-f]{4,40})$/i)?.[1] ?? null;
+}
+
 export function RepoCommitsTab({ token, handle, repoName, defaultBranch, splat }: Props) {
   const base = `/${handle}/${repoName}`;
-  const match = splat.match(/^commits\/([0-9a-f]{4,40})$/i);
-  if (match) {
-    return <CommitDetailView token={token} handle={handle} repoName={repoName} sha={match[1]} base={base} />;
+  const sha = commitShaFromSplat(splat);
+  if (sha) {
+    return <CommitDetailView token={token} handle={handle} repoName={repoName} sha={sha} base={base} />;
   }
   return <CommitsList token={token} handle={handle} repoName={repoName} defaultBranch={defaultBranch} splat={splat} base={base} />;
 }

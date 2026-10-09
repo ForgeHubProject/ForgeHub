@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { refFromSplat } from "./repo/refs";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { ApiError, createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
 import { Header } from "../components/Header";
@@ -8,19 +9,10 @@ import { Badge, Button, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, 
 import { BellIcon, CheckIcon, ChevronDownIcon } from "../ui/icons";
 import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } from "../types";
 
-function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
-  if (!splat.startsWith("tree/")) return null;
-  const rest = splat.slice(5);
-  const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
-  for (const b of sorted) {
-    if (rest === b.name || rest.startsWith(b.name + "/")) return b.name;
-  }
-  return null;
-}
 import { LockIcon, RepoIcon } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
-import { RepoCommitsTab } from "./repo/RepoCommitsTab";
+import { RepoCommitsTab, commitShaFromSplat } from "./repo/RepoCommitsTab";
 import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoForksTab } from "./repo/RepoForksTab";
@@ -159,6 +151,12 @@ export function RepoPage({ token, user, onLogout }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
   const activeTab = tabFromPath(splat);
+  // A commit's page is read at the window's full width, like GitHub's (#215):
+  // the diffs and their 3D viewports want every pixel, and the repo header and
+  // tab bar widen with it so all three stay aligned. Every other page keeps the
+  // centred column.
+  const fullWidth = activeTab === "commits" && commitShaFromSplat(splat) !== null;
+  const column = fullWidth ? "max-w-none px-4 lg:px-8" : "max-w-[1280px] px-4";
 
   const [repo, setRepo] = useState<Repo | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
@@ -231,6 +229,17 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .then((d) => setOpenProjectCount(d.projects.length))
       .catch(() => {});
   }
+
+  // Follow the URL. The ref was read from it only on first load, so arriving at
+  // tree/<hash> from a commit page, or going back/forward between refs, left
+  // the listing on whatever ref the page started with.
+  useEffect(() => {
+    if (branches.length === 0) return;
+    const fromUrl = refFromSplat(splat, branches);
+    if (fromUrl && fromUrl !== currentRef) setCurrentRef(fromUrl);
+    // currentRef is deliberately not a dependency: this follows the URL only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splat, branches]);
 
   function handleRefChange(newRef: string) {
     setCurrentRef(newRef);
@@ -352,7 +361,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
       {/* Repo header */}
       <div className="bg-fh-canvas">
-        <div className="max-w-[1280px] mx-auto px-4 pt-5">
+        <div className={`${column} mx-auto pt-5`}>
           {/* Breadcrumb + star area */}
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
@@ -505,7 +514,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       {/* Diverged-fork notice: a fast-forward would drop local commits, so the
           sync was not applied — explain and point to opening a pull request. */}
       {syncResult?.status === "diverged" && repo.parent && (
-        <div className="w-full max-w-[1280px] mx-auto px-4 mt-3">
+        <div className={`w-full ${column} mx-auto mt-3`}>
           <div className="rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-4 py-3">
             <div className="flex items-start gap-2">
               <WarnIcon className="text-fh-warning-fg mt-0.5 shrink-0" />
@@ -537,7 +546,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       )}
 
       {/* Tab content */}
-      <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 py-6">
+      <div className={`flex-1 w-full ${column} mx-auto py-6`}>
         {activeTab === "code" && splat.startsWith("forks") && (
           <RepoForksTab token={token} handle={h} repoName={r} />
         )}
