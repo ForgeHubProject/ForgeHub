@@ -12,7 +12,7 @@ import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } f
 import { LockIcon, RepoIcon } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
-import { RepoCommitsTab } from "./repo/RepoCommitsTab";
+import { RepoCommitsTab, commitShaFromSplat } from "./repo/RepoCommitsTab";
 import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoForksTab } from "./repo/RepoForksTab";
@@ -151,6 +151,12 @@ export function RepoPage({ token, user, onLogout }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
   const activeTab = tabFromPath(splat);
+  // A commit's page is read at the window's full width, like GitHub's (#215):
+  // the diffs and their 3D viewports want every pixel, and the repo header and
+  // tab bar widen with it so all three stay aligned. Every other page keeps the
+  // centred column.
+  const fullWidth = activeTab === "commits" && commitShaFromSplat(splat) !== null;
+  const column = fullWidth ? "max-w-none px-4 lg:px-8" : "max-w-[1280px] px-4";
 
   const [repo, setRepo] = useState<Repo | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
@@ -355,7 +361,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
       {/* Repo header */}
       <div className="bg-fh-canvas">
-        <div className="max-w-[1280px] mx-auto px-4 pt-5">
+        <div className={`${column} mx-auto pt-5`}>
           {/* Breadcrumb + star area */}
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
@@ -508,7 +514,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       {/* Diverged-fork notice: a fast-forward would drop local commits, so the
           sync was not applied — explain and point to opening a pull request. */}
       {syncResult?.status === "diverged" && repo.parent && (
-        <div className="w-full max-w-[1280px] mx-auto px-4 mt-3">
+        <div className={`w-full ${column} mx-auto mt-3`}>
           <div className="rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-4 py-3">
             <div className="flex items-start gap-2">
               <WarnIcon className="text-fh-warning-fg mt-0.5 shrink-0" />
@@ -540,7 +546,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       )}
 
       {/* Tab content */}
-      <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 py-6">
+      <div className={`flex-1 w-full ${column} mx-auto py-6`}>
         {activeTab === "code" && splat.startsWith("forks") && (
           <RepoForksTab token={token} handle={h} repoName={r} />
         )}
