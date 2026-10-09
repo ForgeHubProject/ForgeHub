@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, countAheadBehind, createBranch, defaultBranch, deleteBranch, listBranches } from "../git-utils.js";
 import { syncProtectionConfig } from "../branch-protection.js";
 
@@ -127,7 +127,7 @@ export async function branchRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
-    if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can protect branches" });
+    if (!canAdmin(repo, userId)) return reply.status(403).send({ error: "Only the repository's admins can protect branches" });
 
     const body = (request.body ?? {}) as Partial<Record<keyof ProtectionRules, unknown>>;
     const approvalsRaw = body.requiredApprovals;
@@ -162,7 +162,7 @@ export async function branchRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
-    if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can unprotect branches" });
+    if (!canAdmin(repo, userId)) return reply.status(403).send({ error: "Only the repository's admins can unprotect branches" });
 
     await prisma.protectedBranch.deleteMany({ where: { repoId: repo.id, branch } });
     if (repo.storageKey) {

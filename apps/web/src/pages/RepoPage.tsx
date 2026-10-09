@@ -354,6 +354,10 @@ export function RepoPage({ token, user, onLogout }: Props) {
   }
 
   const isPrivate = repo.visibility === "private";
+  // Settings and the other admin controls follow the server's answer (#217) — a
+  // personal repo's owner, or an org repo's org owners — never "the URL handle
+  // is mine", which an org repo's handle never is.
+  const canAdmin = repo.viewerPermission === "admin";
 
   return (
     <div className="min-h-screen flex flex-col bg-fh-canvas">
@@ -504,7 +508,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             <TabItem to={`${base}/actions`} active={activeTab === "actions"} icon={<ActionsIcon />}>Actions</TabItem>
             <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
             <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
-            {user.handle === h && (
+            {canAdmin && (
               <TabItem to={`${base}/settings`} active={activeTab === "settings"} icon={<SettingsIcon />}>Settings</TabItem>
             )}
           </TabNav>
@@ -578,7 +582,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             onCreateBranch={handleCreateBranch}
             splat={splat}
             social={social}
-            canEditSettings={user.handle === h}
+            canEditSettings={canAdmin}
           />
         )}
         {activeTab === "actions" && (
@@ -632,8 +636,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
             user={user}
           />
         )}
-        {activeTab === "settings" && user.handle === h && (
-          <RepoSettingsTab token={token} handle={h} repoName={r} user={user} />
+        {activeTab === "settings" && canAdmin && (
+          <RepoSettingsTab token={token} handle={h} repoName={r} canAdmin={canAdmin} />
         )}
       </div>
 

@@ -1,9 +1,10 @@
-import type { CollaboratorRole, RepoVisibility } from "@prisma/client";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { z } from "zod";
 import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
-import { canRead, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
+import { canAdmin, canRead, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
 import { repoMergePolicy } from "../merge-policy.js";
 import { ensureImplicitWatch, pruneWatchOnAccessLoss } from "../watch-service.js";
 import {
@@ -189,6 +190,170 @@ async function resolveForkLineage(
 }
 
 export async function repoRoutes(app: FastifyInstance) {
+  const adminScope = app.requireScope("admin");
+
+  /**
+   * The repo at `:handle/:name` if the caller may administer it (#217): 404 when
+   * they can't even read it, 403 when they can read but not administer. Null —
+   * with the response already sent — otherwise.
+   */
+  async function adminRepo(request: FastifyRequest, reply: FastifyReply) {
+    const { handle, name } = request.params as { handle: string; name: string };
+    const userId = request.user.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) {
+      reply.status(404).send({ error: "Repository not found" });
+      return null;
+    }
+    if (!canAdmin(repo, userId)) {
+      reply.status(403).send({ error: "Only the repository's admins can change its settings" });
+      return null;
+    }
+    return repo;
+  }
+
+  /** Description, visibility and merge policy — shared by the legacy and owner-scoped routes. */
+  async function applySettings(
+    existing: Repo,
+    body: z.infer<typeof updateRepoBodySchema>,
+    reply: FastifyReply,
+  ) {
+    const { description, visibility, allowedMergeMethods, defaultMergeMethod } = body;
+    const descriptionValue =
+      description === undefined ? undefined : description === null ? null : description.trim() || null;
+
+    const data: {
+      description?: string | null;
+      visibility?: RepoVisibility;
+      allowedMergeMethods?: string;
+      defaultMergeMethod?: string;
+    } = {};
+    if (descriptionValue !== undefined) {
+      data.description = descriptionValue;
+    }
+    if (visibility !== undefined) {
+      data.visibility = fromApiVisibility(visibility);
+    }
+
+    // Merge policy (issue #119): cross-field rule — the effective default must
+    // stay inside the effective allowed set, whichever of the two arrived.
+    if (allowedMergeMethods !== undefined || defaultMergeMethod !== undefined) {
+      const current = repoMergePolicy(existing);
+      const nextAllowed = allowedMergeMethods ?? current.allowedMethods;
+      const nextDefault = defaultMergeMethod ?? current.defaultMethod;
+      if (!nextAllowed.includes(nextDefault)) {
+        return reply.status(400).send({
+          error: `defaultMergeMethod '${nextDefault}' must be one of the allowed methods (${nextAllowed.join(", ")})`,
+        });
+      }
+      if (allowedMergeMethods !== undefined) data.allowedMergeMethods = [...new Set(nextAllowed)].join(",");
+      if (defaultMergeMethod !== undefined) data.defaultMergeMethod = nextDefault;
+    }
+
+    if (Object.keys(data).length === 0) {
+      const repo = await prisma.repo.findFirstOrThrow({
+        where: { id: existing.id },
+        include: repoCardInclude,
+      });
+      return repoResponse(repo);
+    }
+
+    const repo = await prisma.repo.update({
+      where: { id: existing.id },
+      data,
+      include: repoCardInclude,
+    });
+    return repoResponse(repo);
+  }
+
+  /** A repo's direct collaborators, oldest first — shared by the legacy and owner-scoped routes. */
+  async function listCollaborators(repoId: string) {
+    const collaborators = await prisma.repoCollaborator.findMany({
+      where: { repoId },
+      include: { user: { select: { id: true, handle: true, email: true, displayName: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    return {
+      collaborators: collaborators.map((c) => ({
+        id: c.id,
+        role: fromDbCollaboratorRole(c.role),
+        createdAt: c.createdAt.toISOString(),
+        user: c.user,
+      })),
+    };
+  }
+
+  /** Grant (or change) a collaborator's role. */
+  async function addCollaborator(
+    repo: Repo,
+    body: z.infer<typeof addCollaboratorBodySchema>,
+    reply: FastifyReply,
+  ) {
+    const collaboratorUser = await prisma.user.findUnique({
+      where: { handle: body.handle.toLowerCase() },
+    });
+    if (!collaboratorUser) {
+      return reply.status(404).send({ error: "User not found" });
+    }
+    if (collaboratorUser.id === repo.ownerId) {
+      return reply.status(400).send({ error: "Owner is already implicitly a collaborator" });
+    }
+
+    const role = toDbCollaboratorRole(body.role);
+    const collaborator = await prisma.repoCollaborator.upsert({
+      where: {
+        repoId_userId: {
+          repoId: repo.id,
+          userId: collaboratorUser.id,
+        },
+      },
+      create: {
+        repoId: repo.id,
+        userId: collaboratorUser.id,
+        role,
+      },
+      update: { role },
+      include: {
+        user: { select: { id: true, handle: true, email: true, displayName: true } },
+      },
+    });
+
+    // New collaborators implicitly watch the repo at ALL (issue #88); an
+    // explicit level they already chose is preserved.
+    await ensureImplicitWatch(repo.id, collaboratorUser.id);
+
+    return reply.status(201).send({
+      id: collaborator.id,
+      role: fromDbCollaboratorRole(collaborator.role),
+      createdAt: collaborator.createdAt.toISOString(),
+      user: collaborator.user,
+    });
+  }
+
+  /** Revoke a collaborator by handle. */
+  async function removeCollaborator(repo: Repo, handle: string, reply: FastifyReply) {
+    const user = await prisma.user.findUnique({ where: { handle } });
+    if (!user) {
+      return reply.status(404).send({ error: "User not found" });
+    }
+
+    const existing = await prisma.repoCollaborator.findUnique({
+      where: { repoId_userId: { repoId: repo.id, userId: user.id } },
+    });
+    if (!existing) {
+      return reply.status(404).send({ error: "Collaborator not found" });
+    }
+
+    await prisma.repoCollaborator.delete({
+      where: { repoId_userId: { repoId: repo.id, userId: user.id } },
+    });
+
+    // The implicit ALL watch must not outlive the grant that created it: drop
+    // it when the removal actually costs them read access (issue #88).
+    await pruneWatchOnAccessLoss(repo.id, user.id);
+
+    return reply.status(204).send();
+  }
   app.post(
     "/repos",
     { preHandler: [app.authenticate] },
@@ -325,7 +490,9 @@ export async function repoRoutes(app: FastifyInstance) {
         detectRepoLicense(repo.storageKey),
         resolveForkLineage(repo, viewer),
       ]);
-      return { ...repoResponse(repo, lineage), license };
+      // What the viewer may do here (#217): the web app gates Settings and the
+      // other owner controls on this, never on comparing handles.
+      return { ...repoResponse(repo, lineage), license, viewerPermission: viewerPermission(repo, viewer) };
     },
   );
 
@@ -379,53 +546,26 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      return applySettings(existing, parsed.data, reply);
+    },
+  );
 
-      const { description, visibility, allowedMergeMethods, defaultMergeMethod } = parsed.data;
-      const descriptionValue =
-        description === undefined ? undefined : description === null ? null : description.trim() || null;
-
-      const data: {
-        description?: string | null;
-        visibility?: RepoVisibility;
-        allowedMergeMethods?: string;
-        defaultMergeMethod?: string;
-      } = {};
-      if (descriptionValue !== undefined) {
-        data.description = descriptionValue;
+  // PATCH /repos/:handle/:name/settings — the owner-scoped settings update
+  // (#217). The legacy route above can only find the caller's own personal repo;
+  // this one addresses the repo by its owning handle, so an org repo's admins can
+  // reach it and it can never fall through to a same-named repo of the caller's.
+  // Not PATCH /repos/:handle/:name: that shape is the legacy /repos/:name/rename.
+  app.patch(
+    "/repos/:handle/:name/settings",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const parsed = updateRepoBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
       }
-      if (visibility !== undefined) {
-        data.visibility = fromApiVisibility(visibility);
-      }
-
-      // Merge policy (issue #119): cross-field rule — the effective default must
-      // stay inside the effective allowed set, whichever of the two arrived.
-      if (allowedMergeMethods !== undefined || defaultMergeMethod !== undefined) {
-        const current = repoMergePolicy(existing);
-        const nextAllowed = allowedMergeMethods ?? current.allowedMethods;
-        const nextDefault = defaultMergeMethod ?? current.defaultMethod;
-        if (!nextAllowed.includes(nextDefault)) {
-          return reply.status(400).send({
-            error: `defaultMergeMethod '${nextDefault}' must be one of the allowed methods (${nextAllowed.join(", ")})`,
-          });
-        }
-        if (allowedMergeMethods !== undefined) data.allowedMergeMethods = [...new Set(nextAllowed)].join(",");
-        if (defaultMergeMethod !== undefined) data.defaultMergeMethod = nextDefault;
-      }
-
-      if (Object.keys(data).length === 0) {
-        const repo = await prisma.repo.findFirstOrThrow({
-          where: { id: existing.id },
-          include: repoCardInclude,
-        });
-        return repoResponse(repo);
-      }
-
-      const repo = await prisma.repo.update({
-        where: { id: existing.id },
-        data,
-        include: repoCardInclude,
-      });
-      return repoResponse(repo);
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      return applySettings(repo, parsed.data, reply);
     },
   );
 
@@ -499,27 +639,11 @@ export async function repoRoutes(app: FastifyInstance) {
 
       const repo = await prisma.repo.findFirst({
         where: { ownerId: request.user.sub, name, orgId: null },
-        include: {
-          collaborators: {
-            include: {
-              user: { select: { id: true, handle: true, email: true, displayName: true } },
-            },
-            orderBy: { createdAt: "asc" },
-          },
-        },
       });
       if (!repo) {
         return reply.status(404).send({ error: "Repository not found" });
       }
-
-      return {
-        collaborators: repo.collaborators.map((c: (typeof repo.collaborators)[number]) => ({
-          id: c.id,
-          role: fromDbCollaboratorRole(c.role),
-          createdAt: c.createdAt.toISOString(),
-          user: c.user,
-        })),
-      };
+      return listCollaborators(repo.id);
     },
   );
 
@@ -541,46 +665,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!repo) {
         return reply.status(404).send({ error: "Repository not found" });
       }
-
-      const collaboratorUser = await prisma.user.findUnique({
-        where: { handle: parsed.data.handle.toLowerCase() },
-      });
-      if (!collaboratorUser) {
-        return reply.status(404).send({ error: "User not found" });
-      }
-      if (collaboratorUser.id === repo.ownerId) {
-        return reply.status(400).send({ error: "Owner is already implicitly a collaborator" });
-      }
-
-      const role = toDbCollaboratorRole(parsed.data.role);
-      const collaborator = await prisma.repoCollaborator.upsert({
-        where: {
-          repoId_userId: {
-            repoId: repo.id,
-            userId: collaboratorUser.id,
-          },
-        },
-        create: {
-          repoId: repo.id,
-          userId: collaboratorUser.id,
-          role,
-        },
-        update: { role },
-        include: {
-          user: { select: { id: true, handle: true, email: true, displayName: true } },
-        },
-      });
-
-      // New collaborators implicitly watch the repo at ALL (issue #88); an
-      // explicit level they already chose is preserved.
-      await ensureImplicitWatch(repo.id, collaboratorUser.id);
-
-      return reply.status(201).send({
-        id: collaborator.id,
-        role: fromDbCollaboratorRole(collaborator.role),
-        createdAt: collaborator.createdAt.toISOString(),
-        user: collaborator.user,
-      });
+      return addCollaborator(repo, parsed.data, reply);
     },
   );
 
@@ -598,28 +683,45 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!repo) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      return removeCollaborator(repo, handle, reply);
+    },
+  );
 
-      const user = await prisma.user.findUnique({ where: { handle } });
-      if (!user) {
-        return reply.status(404).send({ error: "User not found" });
+  // Owner-scoped collaborator management (#217): what the Settings page uses, so
+  // an org repo's admins can manage its collaborators. The legacy routes above
+  // only ever find the caller's own personal repo.
+  app.get(
+    "/repos/:handle/:name/collaborators",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      return listCollaborators(repo.id);
+    },
+  );
+
+  app.post(
+    "/repos/:handle/:name/collaborators",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const parsed = addCollaboratorBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
       }
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      return addCollaborator(repo, parsed.data, reply);
+    },
+  );
 
-      const existing = await prisma.repoCollaborator.findUnique({
-        where: { repoId_userId: { repoId: repo.id, userId: user.id } },
-      });
-      if (!existing) {
-        return reply.status(404).send({ error: "Collaborator not found" });
-      }
-
-      await prisma.repoCollaborator.delete({
-        where: { repoId_userId: { repoId: repo.id, userId: user.id } },
-      });
-
-      // The implicit ALL watch must not outlive the grant that created it: drop
-      // it when the removal actually costs them read access (issue #88).
-      await pruneWatchOnAccessLoss(repo.id, user.id);
-
-      return reply.status(204).send();
+  app.delete(
+    "/repos/:handle/:name/collaborators/:collaborator",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      const { collaborator } = request.params as { collaborator: string };
+      return removeCollaborator(repo, collaborator.toLowerCase(), reply);
     },
   );
 
@@ -666,13 +768,7 @@ export async function repoRoutes(app: FastifyInstance) {
         where: repoByOwningHandleWhere(handleParam, nameParam),
         include: { org: { select: { memberships: { select: { userId: true, role: true } } } } },
       });
-      const userId = request.user.sub;
-      const mayDelete = found
-        ? !found.orgId
-          ? found.ownerId === userId
-          : (found.org?.memberships ?? []).some((m) => m.userId === userId && m.role === "OWNER")
-        : false;
-      const existing = mayDelete ? found : null;
+      const existing = found && canAdmin(found, request.user.sub) ? found : null;
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
