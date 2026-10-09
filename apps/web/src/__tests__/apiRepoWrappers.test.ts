@@ -5,7 +5,7 @@
  * assert the request shape, not server behavior (covered in apps/api).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteRepo, listCommits, updateRepo } from "../api";
+import { addCollaborator, deleteRepo, listCollaborators, listCommits, removeCollaborator, updateRepo, updateRepoMergePolicy } from "../api";
 
 function stubFetch(status = 200, body: unknown = {}) {
   const mock = vi.fn().mockResolvedValue({
@@ -42,12 +42,14 @@ describe("listCommits", () => {
   });
 });
 
+// Settings are addressed by owner + name (#217): the legacy name-only routes can
+// only find the caller's own personal repo, so they never reach an org repo.
 describe("updateRepo", () => {
-  it("PATCHes the owner-scoped repo route with the JSON patch", async () => {
+  it("PATCHes the owner-scoped settings route with the JSON patch", async () => {
     const mock = stubFetch(200, { name: "demo", visibility: "public" });
-    await updateRepo("tok", "demo", { description: null, visibility: "public" });
+    await updateRepo("tok", "acme", "demo", { description: null, visibility: "public" });
     const [url, init] = mock.mock.calls[0]!;
-    expect(String(url)).toMatch(/\/repos\/demo$/);
+    expect(String(url)).toMatch(/\/repos\/acme\/demo\/settings$/);
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body)).toEqual({ description: null, visibility: "public" });
     expect(init.headers.Authorization).toBe("Bearer tok");
@@ -71,5 +73,28 @@ describe("deleteRepo", () => {
     // The success toast is gated on this promise, so a refusal must not resolve.
     stubFetch(404, { error: "Repository not found" });
     await expect(deleteRepo("tok", "bob", "demo")).rejects.toThrow("Repository not found");
+  });
+});
+
+describe("owner-scoped settings calls (#217)", () => {
+  it("sends the merge policy to the settings route", async () => {
+    const mock = stubFetch(200, { name: "demo" });
+    await updateRepoMergePolicy("tok", "acme", "demo", ["squash"], "squash");
+    const [url, init] = mock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/repos\/acme\/demo\/settings$/);
+    expect(init.method).toBe("PATCH");
+  });
+
+  it("lists, adds and removes collaborators under the owner", async () => {
+    const mock = stubFetch(200, { collaborators: [] });
+    await listCollaborators("tok", "acme", "demo");
+    await addCollaborator("tok", "acme", "demo", "bob", "writer");
+    await removeCollaborator("tok", "acme", "demo", "bob");
+    const calls = mock.mock.calls.map(([url, init]) => `${init?.method ?? "GET"} ${String(url).replace(/^.*?\/repos/, "/repos")}`);
+    expect(calls).toEqual([
+      "GET /repos/acme/demo/collaborators",
+      "POST /repos/acme/demo/collaborators",
+      "DELETE /repos/acme/demo/collaborators/bob",
+    ]);
   });
 });

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../prisma.js";
-import { resolveRepo } from "../repo-access.js";
+import { canAdmin, resolveRepo } from "../repo-access.js";
 import { createWebhookBodySchema, updateWebhookBodySchema } from "../validation.js";
 import { pingWebhook, redeliverWebhookDelivery } from "../webhook-service.js";
 
@@ -61,9 +61,9 @@ export async function webhookRoutes(app: FastifyInstance) {
       reply.status(404).send({ error: "Not found" });
       return null;
     }
-    if (repo.ownerId !== userId) {
-      // Don't reveal private repos to non-owners; owners of public repos get 403.
-      reply.status(repo.visibility === "PRIVATE" ? 404 : 403).send({ error: "Only the repository owner can manage webhooks" });
+    if (!canAdmin(repo, userId)) {
+      // Don't reveal private repos to non-admins; everyone else on a public repo gets 403.
+      reply.status(repo.visibility === "PRIVATE" ? 404 : 403).send({ error: "Only the repository's admins can manage webhooks" });
       return null;
     }
     return repo;

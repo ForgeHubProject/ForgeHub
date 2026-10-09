@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
-  getBranchProtection, getOrg, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
+  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
   putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
   type MergeMethod,
 } from "../../api";
@@ -20,7 +20,8 @@ type Props = {
   token: string;
   handle: string;
   repoName: string;
-  user: User;
+  /** May the viewer administer this repo — the server's `viewerPermission === "admin"` (#217). */
+  canAdmin: boolean;
 };
 
 // ── local Octicon-style marks ─────────────────────────────────────────────────
@@ -108,7 +109,7 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
     setSaving(true);
     setError(null);
     try {
-      const updated = await updateRepo(token, repoName, {
+      const updated = await updateRepo(token, handle, repoName, {
         description: description.trim() || null,
         visibility,
       });
@@ -212,7 +213,7 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
 
 // ── Collaborators ─────────────────────────────────────────────────────────────
 
-function CollaboratorsSection({ token, repoName }: { token: string; repoName: string }) {
+function CollaboratorsSection({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
   const [collabs, setCollabs] = useState<Collaborator[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<SearchUserResult | null>(null);
@@ -225,7 +226,7 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
   const { toast } = useToast();
 
   useEffect(() => {
-    listCollaborators(token, repoName)
+    listCollaborators(token, handle, repoName)
       .then((d) => setCollabs(d.collaborators))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -245,7 +246,7 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
     setAdding(true);
     setError(null);
     try {
-      const c = await addCollaborator(token, repoName, selected.handle, role);
+      const c = await addCollaborator(token, handle, repoName, selected.handle, role);
       upsert(c);
       setSelected(null);
       toast(`Added @${c.user.handle}`, { tone: "success" });
@@ -260,7 +261,7 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
     if (next === c.role) return;
     setSavingId(c.id);
     try {
-      const updated = await addCollaborator(token, repoName, c.user.handle, next);
+      const updated = await addCollaborator(token, handle, repoName, c.user.handle, next);
       upsert(updated);
       toast(`@${c.user.handle} is now a ${ROLE_LABEL[next].toLowerCase()}`, { tone: "success" });
     } catch (err) {
@@ -274,7 +275,7 @@ function CollaboratorsSection({ token, repoName }: { token: string; repoName: st
     if (!pendingRemove) return;
     setRemoving(true);
     try {
-      await removeCollaborator(token, repoName, pendingRemove.user.handle);
+      await removeCollaborator(token, handle, repoName, pendingRemove.user.handle);
       setCollabs((prev) => prev.filter((c) => c.id !== pendingRemove.id));
       toast(`Removed @${pendingRemove.user.handle}`, { tone: "success" });
       setPendingRemove(null);
@@ -1550,22 +1551,12 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const [isOrgOwner, setIsOrgOwner] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
   const matches = typed.trim() === repoName;
-  // The URL handle is an org handle for org repos; only an org OWNER may delete
-  // those (the API enforces the same rule).
-  const canDelete = isOwner || isOrgOwner;
-
-  useEffect(() => {
-    if (isOwner) return;
-    let cancelled = false;
-    getOrg(token, handle)
-      .then((profile) => { if (!cancelled) setIsOrgOwner(profile.org.viewerRole === "OWNER"); })
-      .catch(() => { if (!cancelled) setIsOrgOwner(false); });
-    return () => { cancelled = true; };
-  }, [token, handle, isOwner]);
+  // isOwner is "may administer" (#217), which already includes an org repo's org
+  // owners — the same rule the API applies to deletion.
+  const canDelete = isOwner;
 
   function close() { setConfirming(false); setTyped(""); }
 
@@ -1589,7 +1580,7 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
       <SectionHeader title="Danger zone" description="Irreversible and destructive actions." />
       {!canDelete ? (
         <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
-          Only the repository owner (or an organization owner) can delete this repository.
+          Only the repository's admins can delete it: its owner, or for an organization's repository, the organization's owners.
         </p>
       ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
@@ -1693,7 +1684,7 @@ function MergePolicySection({
     setSaving(true);
     setError(null);
     try {
-      await updateRepoMergePolicy(token, repoName, allowed, defaultMethod);
+      await updateRepoMergePolicy(token, handle, repoName, allowed, defaultMethod);
       toast("Merge settings saved", { tone: "success" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save merge settings");
@@ -1771,12 +1762,12 @@ function MergePolicySection({
 
 type SectionKey = "general" | "topics" | "collaborators" | "pulls" | "branches" | "tags" | "labels" | "webhooks" | "deploy-keys" | "danger";
 
-export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
+export function RepoSettingsTab({ token, handle, repoName, canAdmin }: Props) {
   const [section, setSection] = useState<SectionKey>("general");
   const fullName = `${handle}/${repoName}`;
-  // Repos are namespaced under their owner's handle, so the URL handle IS the
-  // owner — the owner-gated protection controls key off this.
-  const isOwner = user.handle.toLowerCase() === handle.toLowerCase();
+  // The server's answer (#217): a personal repo's owner, or an org repo's org
+  // owners. Not "the URL handle is mine" — for an org repo it never is.
+  const isOwner = canAdmin;
 
   const nav: { key: SectionKey; label: string; icon: string; danger?: boolean }[] = [
     { key: "general", label: "General", icon: GEAR },
@@ -1829,7 +1820,7 @@ export function RepoSettingsTab({ token, handle, repoName, user }: Props) {
       <div className="flex-1 min-w-0">
         {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
-        {section === "collaborators" && <CollaboratorsSection token={token} repoName={repoName} />}
+        {section === "collaborators" && <CollaboratorsSection token={token} handle={handle} repoName={repoName} />}
         {section === "pulls" && <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "tags" && <TagsSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}

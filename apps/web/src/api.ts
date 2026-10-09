@@ -302,12 +302,18 @@ export async function createRepo(
  * server route addresses the caller's own personal repo by name — Settings is
  * only reachable by the owning user, so no handle is sent.
  */
+/**
+ * Settings, addressed by owner + name (#217): the owner-scoped route reaches an
+ * org repo, which the legacy name-only `PATCH /repos/:name` never can — it only
+ * finds the caller's own personal repo of that name.
+ */
 export async function updateRepo(
   token: string,
+  owner: string,
   repoName: string,
   patch: { description?: string | null; visibility?: "public" | "private" },
 ): Promise<Repo> {
-  return req(`/repos/${repoName}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+  return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });
 }
 
 /**
@@ -729,11 +735,12 @@ export async function setPRFileViewed(
 /** Owner setting (issue #119): the repo's allowed merge methods + default. */
 export async function updateRepoMergePolicy(
   token: string,
+  owner: string,
   repoName: string,
   allowedMergeMethods: MergeMethod[],
   defaultMergeMethod: MergeMethod,
 ): Promise<Repo> {
-  return req(`/repos/${repoName}`, {
+  return req(`/repos/${owner}/${repoName}/settings`, {
     method: "PATCH",
     token,
     body: JSON.stringify({ allowedMergeMethods, defaultMergeMethod }),
@@ -2022,25 +2029,27 @@ export type Collaborator = {
   user: { id: string; handle: string; email: string; displayName: string | null };
 };
 
-export async function listCollaborators(token: string, repoName: string): Promise<{ collaborators: Collaborator[] }> {
-  return req(`/repos/${repoName}/collaborators`, { token });
+/** Collaborators, addressed by owner + name (#217) — see updateRepo. */
+export async function listCollaborators(token: string, owner: string, repoName: string): Promise<{ collaborators: Collaborator[] }> {
+  return req(`/repos/${owner}/${repoName}/collaborators`, { token });
 }
 
 export async function addCollaborator(
   token: string,
+  owner: string,
   repoName: string,
   handle: string,
   role: "reader" | "writer" | "admin" = "writer",
 ): Promise<Collaborator> {
-  return req(`/repos/${repoName}/collaborators`, {
+  return req(`/repos/${owner}/${repoName}/collaborators`, {
     method: "POST",
     token,
     body: JSON.stringify({ handle, role }),
   });
 }
 
-export async function removeCollaborator(token: string, repoName: string, handle: string): Promise<void> {
-  return req(`/repos/${repoName}/collaborators/${handle}`, { method: "DELETE", token });
+export async function removeCollaborator(token: string, owner: string, repoName: string, handle: string): Promise<void> {
+  return req(`/repos/${owner}/${repoName}/collaborators/${handle}`, { method: "DELETE", token });
 }
 
 // ─── personal access tokens ─────────────────────────────────────────────────────
