@@ -23,6 +23,7 @@ import {
 } from "../../ui";
 import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry } from "../../types";
 import { CompositionBar } from "./CompositionBar";
+import { refLabel } from "./refs";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 
 type Props = {
@@ -286,7 +287,7 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
             trailingIcon={<Icons.ChevronDownIcon size={12} />}
             className="max-w-[220px]"
           >
-            <span className="truncate">{currentRef}</span>
+            <span className="truncate">{refLabel(currentRef)}</span>
           </Button>
         }
       >
