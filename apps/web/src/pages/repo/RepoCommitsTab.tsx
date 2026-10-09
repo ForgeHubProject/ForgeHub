@@ -370,6 +370,17 @@ function CommitDetailView({
             <ShaChip sha={commit.sha} className="md:hidden" />
           </span>
         </div>
+        {diffFiles && fileCount > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-fh-border px-4 py-2.5 text-fh-sm sm:px-5">
+            <span className="font-semibold text-fh-fg">
+              {fileCount} {fileCount === 1 ? "file" : "files"} changed
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <DiffCounts additions={totalAdditions} deletions={totalDeletions} />
+              <DiffStatBar additions={totalAdditions} deletions={totalDeletions} />
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Diff */}
@@ -387,40 +398,27 @@ function CommitDetailView({
           ))}
         </div>
       ) : diffFiles && diffFiles.length > 0 ? (
-        <>
-          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-fh-sm text-fh-fg-muted">
-            <Tooltip label={treeShown ? "Hide file tree" : "Show file tree"}>
-              <button
-                type="button"
-                onClick={() => setTreeShown(!treeShown)}
-                aria-pressed={treeShown}
-                aria-label={treeShown ? "Hide file tree" : "Show file tree"}
-                className="hidden md:inline-flex items-center justify-center rounded-md border border-fh-border bg-fh-surface p-1.5 text-fh-fg-muted hover:text-fh-fg hover:border-fh-border-strong cursor-pointer"
-              >
-                <SidebarGlyph />
-              </button>
-            </Tooltip>
-            <span className="font-semibold text-fh-fg">
-              {fileCount} changed file{fileCount !== 1 ? "s" : ""}
-            </span>
-            <DiffCounts additions={totalAdditions} deletions={totalDeletions} />
-            <DiffStatBar additions={totalAdditions} deletions={totalDeletions} />
-          </div>
-          {/* Changed-files tree beside the diffs, as in a PR's files tab (#197) —
-              for every commit, as on GitHub (#215), with a toggle to hide it that
-              the browser remembers and a filter over it. Sticky offsets clear the
-              site header (h-14), which stays pinned. */}
-          <div className="flex flex-col md:flex-row gap-4 items-start">
-            {treeShown && (
-              <div className="w-full md:w-60 shrink-0 md:sticky md:top-16 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
+        // GitHub's anatomy (#215): a full-width rule under the header, then the
+        // changed-files tree as a left pane with its own divider — for every
+        // commit, with a filter, hideable and remembered — and the diffs filling
+        // the rest. Sticky offsets clear the site header (h-14), which stays pinned.
+        <div className="-mx-4 flex flex-col border-t border-fh-border md:flex-row lg:-mx-8">
+          {treeShown && (
+            // The pane stretches to the row's height so its divider runs the whole
+            // way down beside the diffs; only what's inside it is sticky.
+            <aside
+              aria-label="Changed files"
+              className="w-full shrink-0 border-b border-fh-border md:w-72 md:border-b-0 md:border-r"
+            >
+              <div className="px-4 py-4 md:sticky md:top-14 md:max-h-[calc(100vh-3.5rem)] md:overflow-y-auto lg:pl-8">
                 <TextInput
-                  sizing="sm"
+                  sizing="md"
                   type="search"
                   value={fileFilter}
                   onChange={(e) => setFileFilter(e.target.value)}
                   placeholder="Filter files…"
                   aria-label="Filter changed files"
-                  className="mb-2 w-full"
+                  className="mb-3 w-full"
                 />
                 {treeFiles.length > 0 ? (
                   <PRFileTree files={treeFiles} showViewed={false} />
@@ -428,14 +426,29 @@ function CommitDetailView({
                   <p className="px-1 py-2 text-fh-sm text-fh-fg-subtle">No changed files match.</p>
                 )}
               </div>
-            )}
-            <div className="flex-1 min-w-0 w-full space-y-4">
+            </aside>
+          )}
+          <div className="min-w-0 flex-1 px-4 py-4 lg:pr-8">
+            <div className="mb-3 hidden md:flex">
+              <Tooltip label={treeShown ? "Hide file tree" : "Show file tree"}>
+                <button
+                  type="button"
+                  onClick={() => setTreeShown(!treeShown)}
+                  aria-pressed={treeShown}
+                  aria-label={treeShown ? "Hide file tree" : "Show file tree"}
+                  className="inline-flex items-center justify-center rounded-md border border-fh-border bg-fh-surface p-1.5 text-fh-fg-muted hover:text-fh-fg hover:border-fh-border-strong cursor-pointer"
+                >
+                  <SidebarGlyph />
+                </button>
+              </Tooltip>
+            </div>
+            <div className="space-y-4">
               {diffFiles.map((file, i) => (
                 <FileDiffCard key={i} file={file} sha={sha} base={base} token={token} />
               ))}
             </div>
           </div>
-        </>
+        </div>
       ) : (
         <div className="rounded-md border border-fh-border bg-fh-surface">
           <EmptyState
@@ -623,11 +636,20 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
 
 // ─── Main export ────────────────────────────────────────────────────────────────
 
+/**
+ * The commit a `commits/<sha>` splat names, or null for the commit list. One
+ * definition, because the repo page lays a commit's page out at full width
+ * (#215) and the two must agree on which pages those are.
+ */
+export function commitShaFromSplat(splat: string): string | null {
+  return splat.match(/^commits\/([0-9a-f]{4,40})$/i)?.[1] ?? null;
+}
+
 export function RepoCommitsTab({ token, handle, repoName, defaultBranch, splat }: Props) {
   const base = `/${handle}/${repoName}`;
-  const match = splat.match(/^commits\/([0-9a-f]{4,40})$/i);
-  if (match) {
-    return <CommitDetailView token={token} handle={handle} repoName={repoName} sha={match[1]} base={base} />;
+  const sha = commitShaFromSplat(splat);
+  if (sha) {
+    return <CommitDetailView token={token} handle={handle} repoName={repoName} sha={sha} base={base} />;
   }
   return <CommitsList token={token} handle={handle} repoName={repoName} defaultBranch={defaultBranch} splat={splat} base={base} />;
 }
