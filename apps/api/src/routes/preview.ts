@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { readBlobAsBuffer, statBlob } from "../git-utils.js";
 import { handlerBuild } from "../fhr/manifest.js";
+import { ByteCache, ifNoneMatchHits } from "../fhr/byte-cache.js";
 import {
   OFFICIAL_WASM_MAX_BYTES,
   officialHandlerId,
@@ -21,6 +22,8 @@ import {
 // build): the ETag says exactly that, so revalidation is a 304 that runs no
 // wasm, and a handler release — which can change the bytes at the same URL —
 // is a new ETag rather than a stale `immutable` copy.
+type CachedPreview = { bytes: Buffer; mediaType: string };
+
 export async function previewRoutes(app: FastifyInstance) {
   app.get(
     "/repos/:handle/:name/preview",
@@ -112,67 +115,11 @@ export async function previewRoutes(app: FastifyInstance) {
   );
 }
 
-type CachedPreview = { bytes: Buffer; mediaType: string };
-
-/**
- * A byte-bounded LRU of computed previews, keyed by ETag (blob oid + handler +
- * build — content-addressed, so an entry is never stale). The base and head of
- * one diff, viewed by several reviewers, are converted once.
- */
-class PreviewCache {
-  private entries = new Map<string, CachedPreview>();
-  private bytes = 0;
-
-  constructor(private readonly budget: number) {}
-
-  get(key: string): CachedPreview | undefined {
-    const hit = this.entries.get(key);
-    if (hit) {
-      // Re-insert to mark it most recently used.
-      this.entries.delete(key);
-      this.entries.set(key, hit);
-    }
-    return hit;
-  }
-
-  set(key: string, value: CachedPreview): void {
-    if (value.bytes.length > this.budget) return;
-    const old = this.entries.get(key);
-    if (old) {
-      this.entries.delete(key);
-      this.bytes -= old.bytes.length;
-    }
-    this.entries.set(key, value);
-    this.bytes += value.bytes.length;
-    for (const [k, v] of this.entries) {
-      if (this.bytes <= this.budget) break;
-      this.entries.delete(k);
-      this.bytes -= v.bytes.length;
-    }
-  }
-
-  clear(): void {
-    this.entries.clear();
-    this.bytes = 0;
-  }
-}
-
-const previewCache = new PreviewCache(
+const previewCache = new ByteCache<CachedPreview>(
   Number(process.env["FORGEHUB_PREVIEW_CACHE_BYTES"] ?? 64 * 1024 * 1024),
 );
 
 /** Test hook: forget computed previews. */
 export function __clearPreviewCache(): void {
   previewCache.clear();
-}
-
-/** RFC 9110 If-None-Match, weak comparison (as /rawblob does). */
-function ifNoneMatchHits(header: string | string[] | undefined, etag: string): boolean {
-  if (!header) return false;
-  const raw = Array.isArray(header) ? header.join(",") : header;
-  const strip = (v: string) => v.trim().replace(/^W\//, "");
-  return raw.split(",").some((candidate) => {
-    const value = strip(candidate);
-    return value === "*" || value === etag;
-  });
 }
