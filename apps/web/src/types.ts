@@ -131,6 +131,13 @@ export type Repo = {
   forkCount?: number;
   /** Grouped star count (issue #88); absent on payloads that predate it. */
   starCount?: number;
+  /**
+   * What the viewer may do here (#217), from the repo detail payload: "admin"
+   * (Settings), "write", "read", or null. Gate controls on this, never on
+   * comparing the URL's handle with the viewer's — for an org repo those never
+   * match.
+   */
+  viewerPermission?: "admin" | "write" | "read" | null;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
