@@ -109,4 +109,26 @@ describe("getComposition (real tree + manifest)", () => {
   it("returns an empty composition for an unknown ref", async () => {
     expect(await getComposition(repo.storageKey, "does-not-exist")).toBeNull();
   });
+
+  // The Code tab browses at a commit hash ("Browse files", #215) and at tags,
+  // not only at branches.
+  it("answers at a commit hash and at a tag, not only a branch", async () => {
+    const { execFile } = await import("node:child_process");
+    const run = (args: string[]) =>
+      new Promise<string>((resolve, reject) =>
+        execFile("git", args, { cwd: repo.workDir }, (err, out) => (err ? reject(err) : resolve(String(out).trim()))),
+      );
+    const sha = await run(["rev-parse", "HEAD"]);
+    await run(["tag", "v-comp", sha]);
+    await run(["push", "origin", "v-comp"]);
+    for (const ref of [sha, sha.slice(0, 7), "v-comp"]) {
+      const comp = await getComposition(repo.storageKey, ref);
+      expect(comp?.sha, ref).toBe(sha);
+      expect(comp?.totalFiles, ref).toBe(4);
+    }
+  });
+
+  it("refuses a ref shaped like an option", async () => {
+    expect(await getComposition(repo.storageKey, "--output=/tmp/x")).toBeNull();
+  });
 });

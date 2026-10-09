@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { refFromSplat } from "./repo/refs";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { ApiError, createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
 import { Header } from "../components/Header";
@@ -8,15 +9,6 @@ import { Badge, Button, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, 
 import { BellIcon, CheckIcon, ChevronDownIcon } from "../ui/icons";
 import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } from "../types";
 
-function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
-  if (!splat.startsWith("tree/")) return null;
-  const rest = splat.slice(5);
-  const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
-  for (const b of sorted) {
-    if (rest === b.name || rest.startsWith(b.name + "/")) return b.name;
-  }
-  return null;
-}
 import { LockIcon, RepoIcon } from "./listShared";
 import { RepoBranchesTab } from "./repo/RepoBranchesTab";
 import { RepoCodeTab } from "./repo/RepoCodeTab";
@@ -231,6 +223,17 @@ export function RepoPage({ token, user, onLogout }: Props) {
       .then((d) => setOpenProjectCount(d.projects.length))
       .catch(() => {});
   }
+
+  // Follow the URL. The ref was read from it only on first load, so arriving at
+  // tree/<hash> from a commit page, or going back/forward between refs, left
+  // the listing on whatever ref the page started with.
+  useEffect(() => {
+    if (branches.length === 0) return;
+    const fromUrl = refFromSplat(splat, branches);
+    if (fromUrl && fromUrl !== currentRef) setCurrentRef(fromUrl);
+    // currentRef is deliberately not a dependency: this follows the URL only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splat, branches]);
 
   function handleRefChange(newRef: string) {
     setCurrentRef(newRef);

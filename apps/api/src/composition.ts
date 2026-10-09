@@ -1,5 +1,5 @@
 import { extname } from "node:path";
-import { activeFormatsAtCommit, defaultBranch, listBlobSizes, resolveBranchSha, type BlobSize } from "./git-utils.js";
+import { activeFormatsAtCommit, defaultBranch, listBlobSizes, resolveRefSha, type BlobSize } from "./git-utils.js";
 import { officialFormats } from "./fhr/manifest.js";
 import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "./handlers/types.js";
 
@@ -176,7 +176,10 @@ export function __resetCompositionCache(): void {
  */
 export async function getComposition(storageKey: string, ref?: string): Promise<Composition | null> {
   const branch = ref ?? (await defaultBranch(storageKey));
-  const sha = await resolveBranchSha(storageKey, branch);
+  // Any ref: a branch, a tag, or a commit hash — the Code tab browses at all
+  // three (#215). One shaped like an option is not a ref anyone has.
+  if (branch.startsWith("-")) return null;
+  const sha = await resolveRefSha(storageKey, branch);
   if (!sha) return null;
 
   const key = `${storageKey}@${sha}`;
