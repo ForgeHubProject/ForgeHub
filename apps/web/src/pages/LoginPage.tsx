@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ApiError, login, register } from "../api";
+import { useEffect, useState } from "react";
+import { ApiError, getServerInfo, login, register } from "../api";
 import { ForgeLogo } from "../components/ForgeLogo";
 import { Button, Field, TextInput } from "../ui";
 import type { User } from "../types";
@@ -19,6 +19,20 @@ export function LoginPage({ onAuth }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Optimistic: assume sign-up is open until /server/info says otherwise, so a
+  // failed fetch never hides the form on an open instance (the API still enforces).
+  const [registrationClosed, setRegistrationClosed] = useState(false);
+
+  useEffect(() => {
+    getServerInfo()
+      .then((info) => {
+        if (info.registration === "closed") {
+          setRegistrationClosed(true);
+          setMode("login");
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const isLogin = mode === "login";
   useDocumentTitle(isLogin ? "Sign in · ForgeHub" : "Sign up · ForgeHub");
@@ -163,7 +177,9 @@ export function LoginPage({ onAuth }: Props) {
         </div>
 
         <div className="mt-4 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-center text-fh-sm text-fh-fg-muted">
-          {isLogin ? (
+          {registrationClosed ? (
+            <>Sign-up is closed on this server. Ask an administrator for an account.</>
+          ) : isLogin ? (
             <>
               New to ForgeHub?{" "}
               <button
