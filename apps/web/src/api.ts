@@ -206,6 +206,39 @@ export async function fetchPreview(
   throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
 }
 
+/** A manifest format a 3D handler can read and/or write (FHR SPEC §7 `import` / `export`). */
+export type ConvertFormat = { ext: string; handlerId: string; canImport: boolean; canExport: boolean };
+
+/** What the server can convert between (`GET /convert/formats`). */
+export async function fetchConvertFormats(): Promise<ConvertFormat[]> {
+  const res = await fetch(`${BASE}/convert/formats`);
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const body = (await res.json()) as { formats?: ConvertFormat[] };
+  return body.formats ?? [];
+}
+
+/**
+ * One file at a commit converted to another 3D format (`GET .../convert`), as
+ * bytes to save. Failures carry the server's reason: which side refused, and
+ * why, so the toast can say "the target format cannot hold this".
+ */
+export async function fetchConverted(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+  to: string,
+): Promise<Blob> {
+  const res = await fetch(
+    `${BASE}/repos/${handle}/${repoName}/convert?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}&to=${encodeURIComponent(to)}`,
+    { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+  );
+  if (res.ok) return res.blob();
+  const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  throw new ApiError(res.status, [body.error ?? `HTTP ${res.status}`, body.message].filter(Boolean).join(": "));
+}
+
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const BASE = API_BASE;
 
