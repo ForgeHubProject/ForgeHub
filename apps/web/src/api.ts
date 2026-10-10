@@ -80,6 +80,11 @@ export type SemanticFileDiff = {
   preview?: string;
 };
 
+/** `&basePath=` for a renamed file's pre-rename path; empty when it is the same path. */
+function basePathParam(filePath: string, basePath?: string): string {
+  return basePath && basePath !== filePath ? `&basePath=${encodeURIComponent(basePath)}` : "";
+}
+
 /**
  * Compute a semantic diff for one file at a commit (base defaults to its
  * parent). May resolve to a FormatNotEnabled payload instead of a diff — see
@@ -91,9 +96,10 @@ export async function getFileSemanticDiff(
   repoName: string,
   filePath: string,
   sha: string,
+  basePath?: string,
 ): Promise<SemanticFileDiff | FormatNotEnabled> {
   return req(
-    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
     { token: token ?? undefined },
   );
 }
@@ -127,9 +133,10 @@ export async function getFileDiffMeta(
   repoName: string,
   filePath: string,
   sha: string,
+  basePath?: string,
 ): Promise<FileDiffMeta> {
   return req(
-    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
     { token: token ?? undefined },
   );
 }

@@ -32,10 +32,11 @@ export async function fileDiffMetaRoutes(app: FastifyInstance) {
     { preHandler: [app.optionalAuthenticate] },
     async (request, reply) => {
       const { handle, name } = request.params as { handle: string; name: string };
-      const { path: filePath, sha: ref, base } = request.query as {
+      const { path: filePath, sha: ref, base, basePath } = request.query as {
         path?: string;
         sha?: string;
         base?: string;
+        basePath?: string;
       };
       const userId = (request as { user?: { sub: string } }).user?.sub;
 
@@ -85,7 +86,8 @@ export async function fileDiffMetaRoutes(app: FastifyInstance) {
       let headSize: number | null;
       try {
         [baseSize, headSize] = await Promise.all([
-          baseSha ? blobSizeAtCommit(storageKey, baseSha, filePath) : Promise.resolve(null),
+          // basePath is where the file lived before a rename; it defaults to `path`.
+          baseSha ? blobSizeAtCommit(storageKey, baseSha, basePath || filePath) : Promise.resolve(null),
           blobSizeAtCommit(storageKey, sha, filePath),
         ]);
       } catch {
