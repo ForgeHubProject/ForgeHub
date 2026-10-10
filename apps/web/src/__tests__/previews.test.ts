@@ -32,6 +32,13 @@ describe("loadServerPreviews", () => {
     expect(fetcher.mock.calls.map((c) => c[4])).toEqual(["b1", "h1"]);
   });
 
+  it("fetches the base side at basePath for a renamed file (#201)", async () => {
+    const fetcher = vi.fn<Fetcher>(async (_t, _h, _r, _p, sha) => ({ kind: "ok", blob: glb(`glb of ${sha}`) }));
+    await loadServerPreviews(null, "alice", "models", "parts/desk.obj", { base: "b1", head: "h1", basePath: "desk.obj" }, "obj", [], fetcher);
+    const pathBySha = Object.fromEntries(fetcher.mock.calls.map((c) => [c[4], c[3]]));
+    expect(pathBySha).toEqual({ b1: "desk.obj", h1: "parts/desk.obj" });
+  });
+
   it("leaves out a side that is absent or failed, and answers undefined when none worked", async () => {
     const fetcher = vi.fn<Fetcher>(async (_t, _h, _r, _p, sha) => {
       if (sha === "bad") throw new ApiError(422, "The handler could not preview this file");
