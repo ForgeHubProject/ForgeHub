@@ -108,7 +108,7 @@ beforeEach(async () => {
   // itself: every git child from the previous case must be gone. A leaked child
   // fails the next test rather than being papered over.
   expect(await waitFor(async () => (await catFileProcesses(bigOid)) === 0)).toBe(true);
-});
+}, 45_000); // longer than waitFor's deadline, so a leak fails with the assertion, not a hook timeout
 
 function url(path: string, sha: string) {
   return `${origin}/repos/alice/assets/rawblob?path=${encodeURIComponent(path)}&sha=${encodeURIComponent(sha)}`;
@@ -151,7 +151,11 @@ function readOutcome(res: IncomingMessage): Promise<{ bytes: number; error: Erro
   });
 }
 
-async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 10_000) {
+// 30 s, not 10: the longest case (the 65 never-reading clients) leaves 65 git
+// children to reap, which on a slow or loaded machine takes longer than 10 s —
+// and with the default `hookTimeout` also being 10 s, the hook below used to
+// time out before this deadline could report anything.
+async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await predicate()) return true;
@@ -293,7 +297,7 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     const outcome = await readOutcome(res);
     expect(outcome.bytes).toBeLessThan(LARGE_BYTES);
     expect(outcome.error).not.toBeNull();
-  }, 30_000);
+  }, 60_000);
 
   it("openBlobStream reports a non-zero git exit out-of-band, where a silent EOF cannot hide it", async () => {
     // The discriminating test for the trap: an oid git cannot read makes it exit
