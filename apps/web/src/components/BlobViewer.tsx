@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRawBlob, getBlame, getBlob, resolveRef } from "../api";
 import { convertTargets, downloadConverted, loadConvertFormats } from "../lib/convert";
 import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
 import { useSemanticFormatsReady } from "../lib/fhrFormats";
-import { isSemanticFilename, resolveFileViewer } from "../views/fileViewerRegistry";
+import {
+  extensionKey,
+  isSemanticFilename,
+  resolveFileViewer,
+  semanticViewExtensions,
+} from "../views/fileViewerRegistry";
 import { CodeViewer } from "../views/viewers/CodeViewer";
 import type { LineRange } from "../views/fileViewerTypes";
 
@@ -152,9 +157,24 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
   // past the text route's size cap). Settling is one cached round-trip per
   // app session, and a failed manifest settles empty so text files degrade to
   // exactly the old behavior rather than waiting forever.
-  const { extensions: semanticExts, settled: manifestSettled } = useSemanticFormatsReady();
+  //
+  // A renderer that draws diffs only (its bundle's `modes` omits "view") hands
+  // the file back through onViewDeclined; from then on its extension is shown
+  // like any other file, by the static registry with the text fetch below.
+  const { extensions: manifestExts, settled: manifestSettled } = useSemanticFormatsReady();
+  const [viewDeclined, setViewDeclined] = useState<ReadonlySet<string>>(() => new Set());
+  const semanticExts = useMemo(
+    () => semanticViewExtensions(manifestExts, viewDeclined),
+    [manifestExts, viewDeclined],
+  );
   const semantic = isSemanticFilename(filename, semanticExts);
   const Viewer = blameOn ? CodeViewer : resolveFileViewer(filename, semanticExts);
+  const declineView = useCallback(() => {
+    // Loading now, in the same render that drops `semantic`, so the "File not
+    // found" branch (no content, not semantic) never shows before the fetch.
+    setLoading(true);
+    setViewDeclined((prev) => new Set(prev).add(extensionKey(filename)));
+  }, [filename]);
 
   useEffect(() => {
     if (!manifestSettled) return; // still loading; the skeleton stays up
@@ -372,6 +392,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
             token={token}
             selectedRange={selectedRange}
             onLineSelect={handleLineSelect}
+            onViewDeclined={declineView}
             blame={blameOn ? blame : undefined}
           />
         )}
