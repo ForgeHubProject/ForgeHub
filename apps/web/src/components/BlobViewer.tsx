@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchRawBlob, getBlame, getBlob, resolveRef } from "../api";
-import { Breadcrumbs, Skeleton, cx, useToast } from "../ui";
+import { convertTargets, downloadConverted, loadConvertFormats } from "../lib/convert";
+import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
 import { useSemanticFormatsReady } from "../lib/fhrFormats";
@@ -45,6 +46,14 @@ function DownloadIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM3.75 13a.75.75 0 000 1.5h8.5a.75.75 0 000-1.5h-8.5z" />
+    </svg>
+  );
+}
+
+function ConvertIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 5h11M10 2l3 3-3 3M14 11H3M6 8l-3 3 3 3" />
     </svg>
   );
 }
@@ -118,6 +127,17 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
 
   const filename = path.split("/").pop() ?? path;
   const pathParts = path.split("/");
+
+  // "Convert to…": the 3D formats this file can be written as (FHR SPEC §7). The
+  // list comes from the server once per session; a server without the endpoint,
+  // or a file that is not a 3D format, simply offers nothing.
+  const [targets, setTargets] = useState<string[]>([]);
+  const [converting, setConverting] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void loadConvertFormats().then((all) => { if (!cancelled) setTargets(convertTargets(all, filename)); });
+    return () => { cancelled = true; };
+  }, [filename]);
   const lineCount = content?.split("\n").length ?? 0;
   const sizeKb = content ? content.length / 1024 : 0;
 
@@ -224,6 +244,20 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  async function convertTo(to: string) {
+    if (converting) return;
+    setConverting(to);
+    try {
+      // The endpoint addresses a commit, so a branch or tag is resolved first.
+      const sha = SHA_RE.test(ref) ? ref : (await resolveRef(token, handle, repoName, ref)).sha;
+      await downloadConverted(token, handle, repoName, path, sha, to);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Conversion failed", { tone: "danger" });
+    } finally {
+      setConverting(null);
+    }
+  }
+
   function openRaw() {
     if (content === null) return;
     const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
@@ -300,6 +334,27 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
               </>
             )}
             <HeaderAction icon={<DownloadIcon />} onClick={() => void download()}>Download</HeaderAction>
+            {targets.length > 0 && (
+              <DropdownMenu
+                align="end"
+                trigger={
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 h-6 px-2 text-fh-sm bg-fh-surface border rounded-md transition-colors cursor-pointer whitespace-nowrap text-fh-fg-muted border-fh-border hover:bg-fh-surface-muted hover:text-fh-fg hover:border-fh-border-strong"
+                  >
+                    <ConvertIcon />
+                    {converting ? `Converting to ${converting}…` : "Convert to…"}
+                  </button>
+                }
+              >
+                <DropdownLabel>Download as</DropdownLabel>
+                {targets.map((to) => (
+                  <DropdownItem key={to} onSelect={() => void convertTo(to)}>
+                    {to}
+                  </DropdownItem>
+                ))}
+              </DropdownMenu>
+            )}
           </div>
         </div>
 
