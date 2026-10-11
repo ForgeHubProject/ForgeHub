@@ -21,7 +21,13 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, getFhrFormats };
 });
 
-import { isSemanticFilename, resolveFileViewer } from "../views/fileViewerRegistry";
+import {
+  extensionKey,
+  isSemanticFilename,
+  resolveFileViewer,
+  semanticViewExtensions,
+} from "../views/fileViewerRegistry";
+import { drawsMode } from "../lib/rendererBundle";
 import { FhrFileViewer } from "../views/viewers/FhrFileViewer";
 import { CodeViewer } from "../views/viewers/CodeViewer";
 import { FallbackFileViewer } from "../views/viewers/FallbackFileViewer";
@@ -107,5 +113,33 @@ describe("loadSemanticFormats", () => {
     getFhrFormats.mockRejectedValue(new Error("manifest 503"));
     const extensions = await loadSemanticExtensionsSettled();
     expect(extensions.size).toBe(0);
+  });
+});
+
+// 3. A renderer that draws diffs only (SPEC-RENDERING §2b: `modes` omits "view")
+//    hands a single file back, and the file is then routed as if the manifest
+//    did not list its extension — to the code view for a text format, not to an
+//    empty "No diff provided." panel.
+describe("renderers that draw diffs only", () => {
+  it("drawsMode reads the bundle's modes, absent meaning all three", () => {
+    expect(drawsMode({}, "view")).toBe(true);
+    expect(drawsMode({ modes: ["view", "diff"] }, "view")).toBe(true);
+    expect(drawsMode({ modes: ["diff"] }, "view")).toBe(false);
+    expect(drawsMode({ modes: ["diff"] }, "diff")).toBe(true);
+  });
+
+  it("a declined extension leaves the FHR viewer's set, and only that one", () => {
+    const manifest = new Set(["glb", "csv", "ipynb"]);
+    const open = semanticViewExtensions(manifest, new Set(["csv"]));
+    expect([...open].sort()).toEqual(["glb", "ipynb"]);
+    expect(manifest.has("csv")).toBe(true); // the manifest's own set is untouched
+    expect(semanticViewExtensions(manifest, new Set())).toBe(manifest);
+  });
+
+  it("a declined text format routes to the code view; a model keeps the FHR viewer", () => {
+    const open = semanticViewExtensions(new Set(["glb", "csv"]), new Set([extensionKey("parts.CSV")]));
+    expect(isSemanticFilename("parts.csv", open)).toBe(false);
+    expect(resolveFileViewer("parts.csv", open)).toBe(CodeViewer);
+    expect(resolveFileViewer("mouse.glb", open)).toBe(FhrFileViewer);
   });
 });

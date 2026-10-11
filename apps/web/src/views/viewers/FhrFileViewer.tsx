@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchRawBlob } from "../../api";
 import { loadServerPreviews } from "../../lib/previews";
 import { loadSemanticFormats } from "../../lib/fhrFormats";
-import { loadRendererBundle } from "../../lib/rendererBundle";
+import { drawsMode, loadRendererBundle } from "../../lib/rendererBundle";
 import type { RendererInstance } from "../../lib/rendererBundle";
 import type { FileViewerProps } from "../fileViewerTypes";
 
@@ -35,10 +35,13 @@ type Phase =
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
-export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileViewerProps) {
+export function FhrFileViewer({ path, filename, gitRef, repoBase, token, onViewDeclined }: FileViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const instRef = useRef<RendererInstance | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  // Read through a ref so a new callback identity doesn't reload the file.
+  const declineRef = useRef(onViewDeclined);
+  declineRef.current = onViewDeclined;
 
   const repo = parseRepoBase(repoBase ?? "");
 
@@ -56,10 +59,7 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
     setPhase({ kind: "loading" });
 
     (async () => {
-      const [blob, formats] = await Promise.all([
-        fetchRawBlob(token ?? null, repo.handle, repo.repoName, path, gitRef),
-        loadSemanticFormats(),
-      ]);
+      const formats = await loadSemanticFormats();
       if (cancelled) return;
 
       const ext = filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
@@ -71,11 +71,21 @@ export function FhrFileViewer({ path, filename, gitRef, repoBase, token }: FileV
         return;
       }
 
+      // A renderer that draws diffs only (SPEC-RENDERING §2b) hands the file
+      // back before anything is downloaded: the host's own viewer shows it.
+      const bundle = await loadRendererBundle(handlerId);
+      if (cancelled) return;
+      const decline = declineRef.current;
+      if (decline && !drawsMode(bundle, "view")) {
+        decline();
+        return;
+      }
+
       // A handler with a preview call (FHR SPEC §7) — OBJ — is drawn from its
       // preview; the API answers "no preview" once per handler for the rest,
       // which is remembered for the session.
-      const [bundle, previews] = await Promise.all([
-        loadRendererBundle(handlerId),
+      const [blob, previews] = await Promise.all([
+        fetchRawBlob(token ?? null, repo.handle, repo.repoName, path, gitRef),
         loadServerPreviews(
           token ?? null,
           repo.handle,

@@ -22,8 +22,18 @@ export type RendererBundle = {
   fhrVersion: number;
   handlerId: string;
   extensions: string[];
+  /** The modes the bundle draws (SPEC-RENDERING §2b); absent means all three. */
+  modes?: readonly RendererMountProps["mode"][];
   mount(el: HTMLElement, props: RendererMountProps): RendererInstance;
 };
+
+/**
+ * Does the bundle draw `mode` itself? A renderer built for diffs only lists
+ * `["diff"]`, and a single file of its format is then the host's to show.
+ */
+export function drawsMode(bundle: Pick<RendererBundle, "modes">, mode: RendererMountProps["mode"]): boolean {
+  return bundle.modes === undefined || bundle.modes.includes(mode);
+}
 
 // One in-flight/resolved import per handler — the bundle is a singleton module.
 const cache = new Map<string, Promise<RendererBundle>>();

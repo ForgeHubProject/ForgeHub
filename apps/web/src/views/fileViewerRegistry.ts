@@ -13,7 +13,7 @@ export function registerFileViewer(extensions: string[], component: FileViewerCo
 }
 
 /** The registry key for a filename: its extension, or the whole name when extensionless. */
-function extensionKey(filename: string): string {
+export function extensionKey(filename: string): string {
   const parts = filename.split(".");
   // No extension (e.g. Dockerfile, Makefile) — use the lowercased full name as key
   return parts.length > 1 ? parts.pop()!.toLowerCase() : filename.toLowerCase();
@@ -27,6 +27,19 @@ function extensionKey(filename: string): string {
  */
 export function isSemanticFilename(filename: string, semanticExtensions: ReadonlySet<string>): boolean {
   return semanticExtensions.has(extensionKey(filename));
+}
+
+/**
+ * The extensions the FHR viewer should open: the manifest's, minus those whose
+ * renderer declined single files (FhrFileViewer's `onViewDeclined`). Returns the
+ * manifest set itself when nothing was declined.
+ */
+export function semanticViewExtensions(
+  semanticExtensions: ReadonlySet<string>,
+  declined: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (declined.size === 0) return semanticExtensions;
+  return new Set([...semanticExtensions].filter((ext) => !declined.has(ext)));
 }
 
 export function resolveFileViewer(
