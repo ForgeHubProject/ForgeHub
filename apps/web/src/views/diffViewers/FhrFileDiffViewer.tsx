@@ -94,6 +94,9 @@ export function FhrFileDiffViewer({
 
   const path = file.status === "deleted" ? file.oldPath : file.newPath;
   const filename = path.split("/").pop() ?? path;
+  // Where a renamed file lived before: the base side has to be read there, the
+  // new path doesn't exist in the parent.
+  const basePath = file.status === "renamed" ? file.oldPath : path;
   // repoBase is "/handle/repo"
   const [, handle, repoName] = repoBase.split("/");
 
@@ -121,6 +124,7 @@ export function FhrFileDiffViewer({
       serverSlow: slow,
       oversized: status === "too-large",
     }),
+    basePath,
   );
 
   const browserReady =
@@ -164,7 +168,7 @@ export function FhrFileDiffViewer({
         if (tier === "browser" && meta) {
           // Tier B: both blobs down, wasm computes here. The blobs double as
           // the renderer's geometry sources — no second download.
-          const { base, head } = await loadTierBBlobs(token, handle, repoName, path, meta);
+          const { base, head } = await loadTierBBlobs(token, handle, repoName, path, meta, undefined, basePath);
           if (cancelled) return revokeAll();
           const [baseBytes, headBytes] = await Promise.all([
             base ? base.arrayBuffer().then((b) => new Uint8Array(b)) : new Uint8Array(0),
@@ -199,7 +203,7 @@ export function FhrFileDiffViewer({
           }
         } else {
           // Tier S: the canonical server-computed diff (the record for review).
-          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef);
+          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef, basePath);
           if (cancelled) return revokeAll();
           // Official handler exists but the repo hasn't opted the format in —
           // show the actionable card instead of a silent fallback (#73). Only
@@ -217,14 +221,14 @@ export function FhrFileDiffViewer({
           // declared a preview gets both sides' previews too, fetched alongside.
           const serverDiff = diff;
           [blobs, previews] = await Promise.all([
-            loadRendererBlobs(token, handle, repoName, path, serverDiff, objectUrls),
+            loadRendererBlobs(token, handle, repoName, path, serverDiff, objectUrls, basePath),
             serverDiff.preview
               ? loadServerPreviews(
                   token,
                   handle,
                   repoName,
                   path,
-                  { base: serverDiff.baseSha, head: serverDiff.headSha },
+                  { base: serverDiff.baseSha, head: serverDiff.headSha, basePath },
                   serverDiff.handlerId,
                   objectUrls,
                 )
@@ -286,7 +290,7 @@ export function FhrFileDiffViewer({
       instRef.current = null;
       revokeAll();
     };
-  }, [token, handle, repoName, path, headRef, tier, browserReady]);
+  }, [token, handle, repoName, path, basePath, headRef, tier, browserReady]);
 
   // 404 fallback: render the base (text/binary) viewer this file would have used
   // without semantic support — no extra chrome, so it looks identical.
@@ -392,19 +396,20 @@ export async function loadTierBBlobs(
   path: string,
   meta: Pick<FileDiffMeta, "baseSha" | "headSha" | "baseSize" | "headSize">,
   fetchBlob: RawBlobFetcher = fetchRawBlob,
+  basePath: string = path,
 ): Promise<{ base: Blob | null; head: Blob | null }> {
-  const side = async (sha: string | null, size: number | null): Promise<Blob | null> => {
+  const side = async (sha: string | null, size: number | null, sidePath: string): Promise<Blob | null> => {
     if (!sha || size === null) return null;
     try {
-      return await fetchBlob(token, handle, repoName, path, sha);
+      return await fetchBlob(token, handle, repoName, sidePath, sha);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
   };
   const [base, head] = await Promise.all([
-    side(meta.baseSha, meta.baseSize),
-    side(meta.headSha, meta.headSize),
+    side(meta.baseSha, meta.baseSize, basePath),
+    side(meta.headSha, meta.headSize, path),
   ]);
   if (!base && !head) throw new Error("File not found at either revision");
   return { base, head };
@@ -424,11 +429,12 @@ async function loadRendererBlobs(
   path: string,
   diff: SemanticFileDiff,
   objectUrls: string[],
+  basePath: string = path,
 ): Promise<RendererBlobs> {
-  const toRef = async (sha: string | null): Promise<BlobRef | undefined> => {
+  const toRef = async (sha: string | null, sidePath: string): Promise<BlobRef | undefined> => {
     if (!sha) return undefined;
     try {
-      const blob = await fetchRawBlob(token, handle, repoName, path, sha);
+      const blob = await fetchRawBlob(token, handle, repoName, sidePath, sha);
       const url = URL.createObjectURL(blob);
       objectUrls.push(url);
       return { url, size: blob.size };
@@ -436,7 +442,7 @@ async function loadRendererBlobs(
       return undefined;
     }
   };
-  const [head, base] = await Promise.all([toRef(diff.headSha), toRef(diff.baseSha)]);
+  const [head, base] = await Promise.all([toRef(diff.headSha, path), toRef(diff.baseSha, basePath)]);
   const blobs: RendererBlobs = {};
   if (head) blobs.head = head;
   if (base) blobs.base = base;

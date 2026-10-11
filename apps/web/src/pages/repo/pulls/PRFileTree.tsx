@@ -1,7 +1,8 @@
 /**
- * The PR files navigator (issue #119): a collapsible tree of the changed files
- * with per-file status dots and viewed ticks, plus a viewed progress meter.
- * Clicking a file scrolls its diff card into view (anchored by fileAnchorId).
+ * The changed-files navigator (issue #119): a collapsible tree of the changed
+ * files with per-file status dots, and — in a PR — viewed ticks plus a viewed
+ * progress meter. Clicking a file scrolls its diff card into view (anchored by
+ * fileAnchorId). The commit view uses it too (#197), without the viewed parts.
  * Token-only chrome, mirroring the repo code tree's visual language.
  */
 import { useMemo, useState } from "react";
@@ -20,6 +21,9 @@ function FolderIcon({ size = 14, className }: { size?: number; className?: strin
   );
 }
 
+/** What the tree needs of a changed file. A PRFileEntry is one. */
+export type ChangedFileEntry = Pick<PRFileEntry, "path" | "status"> & { viewed?: boolean };
+
 const STATUS_DOT: Record<PRFileEntry["status"], string> = {
   added: "bg-fh-success-emphasis",
   deleted: "bg-fh-danger-emphasis",
@@ -31,7 +35,7 @@ function scrollToFile(path: string): void {
   document.getElementById(fileAnchorId(path))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function FileRow({ file }: { file: FileTreeFile<PRFileEntry> }) {
+function FileRow({ file }: { file: FileTreeFile<ChangedFileEntry> }) {
   return (
     <li>
       <button
@@ -52,7 +56,7 @@ function FileRow({ file }: { file: FileTreeFile<PRFileEntry> }) {
   );
 }
 
-function DirRow({ dir }: { dir: FileTreeDir<PRFileEntry> }) {
+function DirRow({ dir }: { dir: FileTreeDir<ChangedFileEntry> }) {
   const [open, setOpen] = useState(true);
   return (
     <li>
@@ -80,22 +84,30 @@ function DirRow({ dir }: { dir: FileTreeDir<PRFileEntry> }) {
   );
 }
 
-export function PRFileTree({ files }: { files: PRFileEntry[] }) {
+export function PRFileTree({
+  files,
+  showViewed = true,
+}: {
+  files: ChangedFileEntry[];
+  /** The viewed progress meter: a PR's. A commit has no "viewed" to track. */
+  showViewed?: boolean;
+}) {
   const tree = useMemo(() => buildFileTree(files), [files]);
   const viewedCount = files.filter((f) => f.viewed).length;
   const pct = files.length === 0 ? 0 : Math.round((viewedCount / files.length) * 100);
 
   return (
     <nav aria-label="Changed files" className="text-fh-sm">
-      {/* Viewed progress meter */}
-      <div className="px-1 pb-2 mb-2 border-b border-fh-border">
-        <p className="text-fh-xs text-fh-fg-muted mb-1">
-          <span className="font-semibold text-fh-fg">{viewedCount}</span> / {files.length} files viewed
-        </p>
-        <div className="h-1.5 rounded-full bg-fh-surface-muted overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <div className="h-full rounded-full bg-fh-success-emphasis transition-all" style={{ width: `${pct}%` }} />
+      {showViewed && (
+        <div className="px-1 pb-2 mb-2 border-b border-fh-border">
+          <p className="text-fh-xs text-fh-fg-muted mb-1">
+            <span className="font-semibold text-fh-fg">{viewedCount}</span> / {files.length} files viewed
+          </p>
+          <div className="h-1.5 rounded-full bg-fh-surface-muted overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="h-full rounded-full bg-fh-success-emphasis transition-all" style={{ width: `${pct}%` }} />
+          </div>
         </div>
-      </div>
+      )}
       <ul className="list-none m-0 p-0">
         {tree.dirs.map((d) => <DirRow key={d.path} dir={d} />)}
         {tree.files.map((f) => <FileRow key={f.path} file={f} />)}

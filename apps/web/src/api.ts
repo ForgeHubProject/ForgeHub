@@ -1,6 +1,6 @@
 import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
-  CommitInfo, Composition, Constraint, Contributions, DeployKey, Design, DesignCompareResult,
+  CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
   Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
@@ -8,7 +8,7 @@ import type {
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
   Review, ReviewComment, ReviewCommentPosition, SSHKey, SavedFilter,
   SessionInfo, Snapshot, SyncForkResult, Team, TimelineEvent,
-  TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
+  TreeCommits, TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
 
 /**
@@ -80,6 +80,11 @@ export type SemanticFileDiff = {
   preview?: string;
 };
 
+/** `&basePath=` for a renamed file's pre-rename path; empty when it is the same path. */
+function basePathParam(filePath: string, basePath?: string): string {
+  return basePath && basePath !== filePath ? `&basePath=${encodeURIComponent(basePath)}` : "";
+}
+
 /**
  * Compute a semantic diff for one file at a commit (base defaults to its
  * parent). May resolve to a FormatNotEnabled payload instead of a diff — see
@@ -91,9 +96,10 @@ export async function getFileSemanticDiff(
   repoName: string,
   filePath: string,
   sha: string,
+  basePath?: string,
 ): Promise<SemanticFileDiff | FormatNotEnabled> {
   return req(
-    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
     { token: token ?? undefined },
   );
 }
@@ -127,9 +133,10 @@ export async function getFileDiffMeta(
   repoName: string,
   filePath: string,
   sha: string,
+  basePath?: string,
 ): Promise<FileDiffMeta> {
   return req(
-    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}`,
+    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
     { token: token ?? undefined },
   );
 }
@@ -197,6 +204,39 @@ export async function fetchPreview(
   const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string; handlerId?: string | null };
   if (res.status === 404 && body.code === "no-preview") return { kind: "none", handlerId: body.handlerId ?? null };
   throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+}
+
+/** A manifest format a 3D handler can read and/or write (FHR SPEC §7 `import` / `export`). */
+export type ConvertFormat = { ext: string; handlerId: string; canImport: boolean; canExport: boolean };
+
+/** What the server can convert between (`GET /convert/formats`). */
+export async function fetchConvertFormats(): Promise<ConvertFormat[]> {
+  const res = await fetch(`${BASE}/convert/formats`);
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const body = (await res.json()) as { formats?: ConvertFormat[] };
+  return body.formats ?? [];
+}
+
+/**
+ * One file at a commit converted to another 3D format (`GET .../convert`), as
+ * bytes to save. Failures carry the server's reason: which side refused, and
+ * why, so the toast can say "the target format cannot hold this".
+ */
+export async function fetchConverted(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filePath: string,
+  sha: string,
+  to: string,
+): Promise<Blob> {
+  const res = await fetch(
+    `${BASE}/repos/${handle}/${repoName}/convert?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}&to=${encodeURIComponent(to)}`,
+    { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+  );
+  if (res.ok) return res.blob();
+  const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  throw new ApiError(res.status, [body.error ?? `HTTP ${res.status}`, body.message].filter(Boolean).join(": "));
 }
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -324,6 +364,17 @@ export async function deleteRepo(token: string, handle: string, repoName: string
 // ─── composition ─────────────────────────────────────────────────────────────
 
 /** Byte-share per format/domain at a ref (default branch when omitted). */
+/** Commit authors at a ref, most commits first (issue #209). */
+export async function getContributors(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref?: string,
+): Promise<Contributors> {
+  const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  return req(`/repos/${handle}/${repoName}/contributors${qs}`, { token: token ?? undefined });
+}
+
 export async function getComposition(
   token: string | null,
   handle: string,
@@ -870,6 +921,19 @@ export async function getCommitDiff(
 }
 
 // ─── tree / blob ────────────────────────────────────────────────────────────────────────────
+
+/** The last commit to touch each entry under `path` (issue #210). */
+export async function getTreeCommits(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+  path?: string,
+): Promise<TreeCommits> {
+  const qs = new URLSearchParams({ ref });
+  if (path) qs.set("path", path);
+  return req(`/repos/${handle}/${repoName}/tree-commits?${qs}`, { token: token ?? undefined });
+}
 
 export async function listTree(
   token: string | null,
@@ -2419,6 +2483,8 @@ export type ServerInfo = {
   sshHost: string | null;
   /** SHA256 fingerprint of the server's SSH host key, for known_hosts verification. Null when SSH is off or key not yet generated. */
   sshFingerprint: string | null;
+  /** Sign-up policy (FORGEHUB_REGISTRATION). "closed" means POST /auth/register is rejected. */
+  registration: "open" | "closed";
 };
 
 /** GET /server/info — fetch SSH config and host-key fingerprint. No auth required. */

@@ -562,6 +562,20 @@ export type CommitDetail = CommitInfo & {
   changedFiles: string[];
 };
 
+/** The last commit to touch one entry of a listing (issue #210). */
+export type EntryCommit = { sha: string; subject: string; date: string };
+
+/** `GET /repos/:h/:n/tree-commits`: last commit per entry, and the ref's commit count. */
+export type TreeCommits = {
+  ref: string | null;
+  sha: string | null;
+  path: string;
+  commits: Record<string, EntryCommit>;
+  /** False when the server stopped walking before every entry was found. */
+  complete: boolean;
+  totalCommits: number;
+};
+
 export type TreeEntry = {
   mode: string;
   type: "blob" | "tree";
@@ -827,6 +841,19 @@ export type CompositionSegment = {
   /** Semantic diffing is opted in for this format (`.forge/formats`). */
   optedIn: boolean;
 };
+
+/**
+ * A commit author (issue #209). `user` is set only when the author's email
+ * belongs to an account that can push to the repository; anyone else is listed
+ * by the name they committed under.
+ */
+export type Contributor = {
+  name: string;
+  commits: number;
+  user: { handle: string; displayName: string | null; avatarKey: string | null } | null;
+};
+
+export type Contributors = { ref: string | null; sha: string | null; total: number; contributors: Contributor[] };
 
 export type Composition = {
   ref: string;

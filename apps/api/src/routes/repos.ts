@@ -659,15 +659,20 @@ export async function repoRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { handle: handleParam, name: nameParam } = request.params as { handle: string; name: string };
 
-      // Deletion stays owner-only and personal-repo-only, matching /repos/:name —
-      // the difference is that the owning handle now has to agree.
-      const existing = await prisma.repo.findFirst({
-        where: {
-          ...repoByOwningHandleWhere(handleParam, nameParam),
-          ownerId: request.user.sub,
-          orgId: null,
-        },
+      // Deletion is owner-only: the creator for a personal repo, an OWNER of the
+      // owning org for an org repo. Anyone else — including org members and team
+      // writers — gets the same 404 as a missing repo, so nothing leaks.
+      const found = await prisma.repo.findFirst({
+        where: repoByOwningHandleWhere(handleParam, nameParam),
+        include: { org: { select: { memberships: { select: { userId: true, role: true } } } } },
       });
+      const userId = request.user.sub;
+      const mayDelete = found
+        ? !found.orgId
+          ? found.ownerId === userId
+          : (found.org?.memberships ?? []).some((m) => m.userId === userId && m.role === "OWNER")
+        : false;
+      const existing = mayDelete ? found : null;
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }

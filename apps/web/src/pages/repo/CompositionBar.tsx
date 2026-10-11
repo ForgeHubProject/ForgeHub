@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getComposition } from "../../api";
 import { Skeleton, cx } from "../../ui";
+import { SidebarSection } from "./SidebarSection";
 import type { Composition, CompositionSegment } from "../../types";
 
 type Props = {
@@ -52,26 +53,16 @@ function SemanticMark({ className }: { className?: string }) {
   );
 }
 
-function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden="true"
-      className={cx("transition-transform", open && "rotate-180")}
-    >
-      <path fillRule="evenodd" d="M12.78 6.22a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06 0L3.22 7.28a.75.75 0 011.06-1.06L8 9.94l3.72-3.72a.75.75 0 011.06 0z" />
-    </svg>
-  );
-}
-
+/**
+ * The repository's formats by byte share, in the Code tab's sidebar (#208) —
+ * ForgeHub's answer to GitHub's "Languages", and the most telling thing about a
+ * hardware repository. The bar, then every format as a row: colour, name, the
+ * semantic-diff mark, share.
+ */
 export function CompositionBar({ token, handle, repoName, refName }: Props) {
   const [data, setData] = useState<Composition | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (!refName) return;
@@ -93,37 +84,18 @@ export function CompositionBar({ token, handle, repoName, refName }: Props) {
 
   if (loading) {
     return (
-      <div className="mb-4 rounded-md border border-fh-border bg-fh-surface p-3">
+      <SidebarSection title="Formats">
         <Skeleton className="h-2.5 w-full rounded-full" />
         <Skeleton className="mt-3 h-3 w-2/3" />
-      </div>
+      </SidebarSection>
     );
   }
 
   // Nothing to show for an empty repo or a failed fetch — stay out of the way.
   if (failed || !data || data.totalFiles === 0 || colored.length === 0) return null;
 
-  // Identity summary: "43% glTF scene · 20% CSV · 12% Markdown".
-  const summary = colored.slice(0, 3).map(({ seg }) => `${seg.pct}% ${seg.label}`).join("  ·  ");
-
   return (
-    <section aria-label="Format composition" className="mb-4 rounded-md border border-fh-border bg-fh-surface p-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-fh-sm font-semibold text-fh-fg">Formats</span>
-          <span className="truncate text-fh-xs text-fh-fg-muted" title={summary}>{summary}</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-fh-xs font-medium text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg cursor-pointer"
-        >
-          {open ? "Hide" : "Details"}
-          <ChevronIcon open={open} />
-        </button>
-      </div>
-
+    <SidebarSection title="Formats">
       {/* The thin segmented bar. flex-grow = bytes → widths exactly proportional. */}
       <div
         className="flex h-2.5 w-full overflow-hidden rounded-full bg-fh-neutral-muted"
@@ -145,33 +117,32 @@ export function CompositionBar({ token, handle, repoName, refName }: Props) {
         ))}
       </div>
 
-      {/* Expandable legend with per-format percentages. */}
-      {open && (
-        <ul className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
-          {colored.map(({ seg, color }) => (
-            <li key={seg.format} className="flex items-center gap-2 text-fh-sm">
-              <span
-                aria-hidden="true"
-                className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: color }}
-              />
-              <span className="font-medium text-fh-fg">{seg.label}</span>
-              {seg.optedIn && <SemanticMark />}
-              <span className="ml-auto tabular-nums text-fh-fg-muted">{seg.pct}%</span>
-              <span className="w-16 text-right tabular-nums text-fh-xs text-fh-fg-subtle">
-                {seg.fileCount} {seg.fileCount === 1 ? "file" : "files"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="mt-3 list-none m-0 p-0 space-y-1.5">
+        {colored.map(({ seg, color }) => (
+          <li
+            key={seg.format}
+            className="flex items-center gap-2 text-fh-sm"
+            title={`${seg.fileCount} ${seg.fileCount === 1 ? "file" : "files"}`}
+          >
+            <span
+              aria-hidden="true"
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: color }}
+            />
+            <span className="min-w-0 truncate font-medium text-fh-fg">{seg.label}</span>
+            {seg.optedIn && <SemanticMark />}
+            {/* pct has one decimal: a sliver of bytes rounds to 0, which reads as "none". */}
+            <span className="ml-auto tabular-nums text-fh-fg-muted">{seg.pct === 0 && seg.bytes > 0 ? "<0.1" : seg.pct}%</span>
+          </li>
+        ))}
+      </ul>
 
-      {open && hasSemantic && (
-        <p className="mt-2.5 flex items-center gap-1.5 border-t border-fh-border pt-2.5 text-fh-xs text-fh-fg-subtle">
-          <SemanticMark />
+      {hasSemantic && (
+        <p className="mt-2.5 flex items-start gap-1.5 text-fh-xs text-fh-fg-subtle">
+          <SemanticMark className="mt-0.5" />
           Semantically diffable — ForgeHub compares these by structure, not text.
         </p>
       )}
-    </section>
+    </SidebarSection>
   );
 }

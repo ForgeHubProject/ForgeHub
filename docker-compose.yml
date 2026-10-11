@@ -39,6 +39,8 @@ services:
       # Explicit hostname used in the SSH clone URL shown in the web UI.
       # When unset the browser's hostname is used (correct for most deployments).
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
+      # Sign-up policy: open (default) | closed.
+      FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"

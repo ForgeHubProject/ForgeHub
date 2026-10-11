@@ -42,6 +42,14 @@ describe("fetchFileDiffMetaOnce", () => {
     expect(getFileDiffMeta).toHaveBeenCalledTimes(3);
   });
 
+  it("keys on basePath, so a rename and a same-path request are separate entries (#201)", async () => {
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf");
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "parts/model.gltf", "main");
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf");
+    expect(getFileDiffMeta).toHaveBeenCalledTimes(2);
+    expect(getFileDiffMeta).toHaveBeenCalledWith("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf");
+  });
+
   // Regression: a PR file view keys on the head BRANCH, which moves.
   it("expires, so a moved branch is not answered from a stale entry", async () => {
     vi.useFakeTimers();

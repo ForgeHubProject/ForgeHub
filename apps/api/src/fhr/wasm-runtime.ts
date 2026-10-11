@@ -9,6 +9,9 @@ export type WasmMergeResult = { blob: Buffer; conflicts: WasmConflict[] };
 
 export type WasmPreview = { bytes: Uint8Array; mediaType: string };
 
+/** A GLB a handler imported from its own format (FHR SPEC §7 `import`). */
+export type WasmImport = { bytes: Uint8Array };
+
 export type WasmHandler = {
   diff(base: Buffer, head: Buffer): Promise<StructuredDiff>;
   /**
@@ -30,6 +33,19 @@ export type WasmHandler = {
    * reconcile, and `conflicts` says where; empty conflicts is a clean merge.
    */
   merge?(base: Buffer, ours: Buffer, theirs: Buffer): Promise<WasmMergeResult>;
+  /**
+   * Transcoding through glTF (FHR SPEC §7 `import` / `export`): a handler that
+   * can read its format into a GLB, and one that can write a GLB out as its
+   * format. Both false or absent for a handler that does neither. `formats`
+   * is the extensions the handler owns — the targets `export` accepts.
+   */
+  readonly canImport?: boolean;
+  readonly canExport?: boolean;
+  readonly formats?: readonly string[];
+  /** The handler's own format → a GLB, faithfully. Rejects unless canImport. */
+  import?(blob: Buffer): Promise<WasmImport>;
+  /** A GLB → one of `formats`. Rejects unless canExport. */
+  export?(glb: Buffer, format: string): Promise<Uint8Array>;
 };
 
 /** Parse a wasm handler's JSON merge output. */
@@ -78,6 +94,9 @@ class WasmWorkerHandler implements WasmHandler {
   private seq = 0;
   semanticMerge = false;
   previewType: string | null = null;
+  canImport = false;
+  canExport = false;
+  formats: readonly string[] = [];
 
   constructor(
     private readonly bytes: Buffer,
@@ -101,11 +120,17 @@ class WasmWorkerHandler implements WasmHandler {
         error?: string;
         semanticMerge?: boolean;
         previewType?: string | null;
+        canImport?: boolean;
+        canExport?: boolean;
+        formats?: string[];
       }) => {
         if (msg.type === "ready") {
           ready = true;
           this.semanticMerge = msg.semanticMerge === true;
           this.previewType = msg.previewType ?? null;
+          this.canImport = msg.canImport === true;
+          this.canExport = msg.canExport === true;
+          this.formats = msg.formats ?? [];
           resolveReady();
         } else if (msg.type === "init-error") {
           rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
@@ -152,7 +177,7 @@ class WasmWorkerHandler implements WasmHandler {
   }
 
   /** One bounded call into the worker; a call that overruns kills the worker. */
-  private async call(what: "diff" | "merge" | "preview", payload: Record<string, Buffer>): Promise<WorkerResult> {
+  private async call(what: "diff" | "merge" | "preview" | "import" | "export", payload: Record<string, Buffer | string>): Promise<WorkerResult> {
     await this.ensure();
     const worker = this.worker;
     if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
@@ -185,6 +210,20 @@ class WasmWorkerHandler implements WasmHandler {
     const { bytes, mediaType } = await this.call("preview", { blob });
     if (!bytes) throw new Error(`wasm ${this.handlerId}: preview returned no bytes`);
     return { bytes, mediaType: mediaType ?? this.previewType };
+  }
+
+  async import(blob: Buffer): Promise<WasmImport> {
+    if (!this.canImport) throw new Error(`wasm ${this.handlerId}: handler cannot import`);
+    const { bytes } = await this.call("import", { blob });
+    if (!bytes) throw new Error(`wasm ${this.handlerId}: import returned no bytes`);
+    return { bytes };
+  }
+
+  async export(glb: Buffer, format: string): Promise<Uint8Array> {
+    if (!this.canExport) throw new Error(`wasm ${this.handlerId}: handler cannot export`);
+    const { bytes } = await this.call("export", { blob: glb, format });
+    if (!bytes) throw new Error(`wasm ${this.handlerId}: export returned no bytes`);
+    return bytes;
   }
 }
 

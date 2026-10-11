@@ -31,16 +31,17 @@ export async function loadServerPreviews(
   handle: string,
   repoName: string,
   path: string,
-  shas: { base?: string | null; head?: string | null },
+  /** `basePath`: where the base side lived before a rename; defaults to `path`. */
+  shas: { base?: string | null; head?: string | null; basePath?: string },
   handlerId: string | null,
   objectUrls: string[],
   fetchImpl: typeof fetchPreview = fetchPreview,
 ): Promise<RendererBlobs | undefined> {
   if (handlerId && noPreview.has(handlerId)) return undefined;
-  const side = async (sha: string | null | undefined): Promise<BlobRef | undefined> => {
+  const side = async (sha: string | null | undefined, sidePath: string): Promise<BlobRef | undefined> => {
     if (!sha) return undefined;
     try {
-      const res = await fetchImpl(token, handle, repoName, path, sha);
+      const res = await fetchImpl(token, handle, repoName, sidePath, sha);
       if (res.kind === "none") {
         const id = res.handlerId ?? handlerId;
         if (id) noPreview.add(id);
@@ -53,7 +54,7 @@ export async function loadServerPreviews(
       return undefined;
     }
   };
-  const [base, head] = await Promise.all([side(shas.base), side(shas.head)]);
+  const [base, head] = await Promise.all([side(shas.base, shas.basePath ?? path), side(shas.head, path)]);
   if (!base && !head) return undefined;
   return { ...(base ? { base } : {}), ...(head ? { head } : {}) };
 }
