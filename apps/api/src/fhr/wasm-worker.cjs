@@ -32,13 +32,26 @@ function handlerGlobals() {
     // The optional preview call (FHR SPEC §7): present only on handlers that
     // declare one, and its media type is the handler's own `info` answer.
     let previewType = null;
+    // The optional import/export calls (FHR SPEC §7): the 3D family's
+    // transcoding through glTF. Offered only when the build registers the call
+    // AND declares it, so neither a stale declaration nor a stray function
+    // makes a handler look able to convert.
+    let canImport = false;
+    let canExport = false;
+    let formats = [];
     try {
       const info = JSON.parse(api.info());
       semanticMerge = info.capabilities?.semanticMerge === true;
       if (typeof api.preview === "function") previewType = info.preview || null;
+      canImport = typeof api.import === "function" && info.capabilities?.import === true;
+      canExport = typeof api.export === "function" && info.capabilities?.export === true;
+      formats = Array.isArray(info.formats) ? info.formats : [];
     } catch {
       semanticMerge = false;
       previewType = null;
+      canImport = false;
+      canExport = false;
+      formats = [];
     }
 
     parentPort.on("message", (msg) => {
@@ -60,6 +73,22 @@ function handlerGlobals() {
           const bytes = out.blob;
           parentPort.postMessage({ type: "result", id: msg.id, bytes, mediaType: out.mediaType }, [bytes.buffer]);
           return;
+        } else if (msg.type === "import") {
+          if (!canImport) throw new Error("handler cannot import");
+          // Uint8Array in; {mediaType, blob: Uint8Array (a GLB)} or {error} out.
+          const out = api.import(msg.blob);
+          if (out.error) throw new Error(out.error);
+          const bytes = out.blob;
+          parentPort.postMessage({ type: "result", id: msg.id, bytes, mediaType: out.mediaType }, [bytes.buffer]);
+          return;
+        } else if (msg.type === "export") {
+          if (!canExport) throw new Error("handler cannot export");
+          // A GLB Uint8Array and the target extension in; {blob: Uint8Array} or {error} out.
+          const out = api.export(msg.blob, msg.format);
+          if (out.error) throw new Error(out.error);
+          const bytes = out.blob;
+          parentPort.postMessage({ type: "result", id: msg.id, bytes }, [bytes.buffer]);
+          return;
         } else {
           return;
         }
@@ -69,7 +98,7 @@ function handlerGlobals() {
       }
     });
 
-    parentPort.postMessage({ type: "ready", semanticMerge, previewType });
+    parentPort.postMessage({ type: "ready", semanticMerge, previewType, canImport, canExport, formats });
   } catch (e) {
     parentPort.postMessage({ type: "init-error", error: String((e && e.message) || e) });
   }

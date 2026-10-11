@@ -96,6 +96,7 @@ export function FileDiffCard({
     blobPath,
     sha,
     needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
+    file.status === "renamed" ? file.oldPath : undefined,
   );
 
   return (

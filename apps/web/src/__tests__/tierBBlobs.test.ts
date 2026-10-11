@@ -48,6 +48,13 @@ describe("loadTierBBlobs", () => {
     expect(await head!.text()).toBe("head");
   });
 
+  it("a RENAMED file reads the base side at its old path and the head side at the new one (#201)", async () => {
+    const f = fetcher({ [BASE_SHA]: "base", [HEAD_SHA]: "head" });
+    await loadTierBBlobs(null, "alice", "scene", "parts/model.gltf", meta(), f, "model.gltf");
+    const pathBySha = Object.fromEntries(f.mock.calls.map((c) => [c[4], c[3]]));
+    expect(pathBySha).toEqual({ [BASE_SHA]: "model.gltf", [HEAD_SHA]: "parts/model.gltf" });
+  });
+
   it("an ADDED file resolves with an empty base instead of rejecting", async () => {
     // Real parent SHA, no blob in it — exactly what filediff-meta returns.
     const f = fetcher({ [HEAD_SHA]: "head" });
