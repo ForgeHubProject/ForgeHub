@@ -11,18 +11,32 @@ export function refLabel(ref: string): string {
 }
 
 /**
- * The ref a `tree/<ref>[/<path>]` splat names. Branch names can contain
- * slashes, so the longest branch the splat starts with wins; failing that, a
- * commit hash (7–40 hex) as the first segment (#215). A branch named like a
- * hash is matched as the branch. Anything else is null.
+ * The ref a `tree/<ref>[/<path>]` or `blob/<ref>/<path>` splat names. Branch
+ * names can contain slashes, so the longest branch the splat starts with wins;
+ * failing that, a commit hash (7–40 hex) as the first segment (#215). A branch
+ * named like a hash is matched as the branch. Anything else is null.
  */
 export function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
-  if (!splat.startsWith("tree/")) return null;
-  const rest = splat.slice(5);
+  const mode = /^(tree|blob)\//.exec(splat);
+  if (!mode) return null;
+  const rest = splat.slice(mode[0].length);
   const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
   for (const b of sorted) {
     if (rest === b.name || rest.startsWith(b.name + "/")) return b.name;
   }
   const first = rest.split("/")[0] ?? "";
   return /^[0-9a-f]{7,40}$/i.test(first) ? first : null;
+}
+
+/**
+ * The ref and file path a `blob/<ref>/<path>` splat names, split where
+ * refFromSplat says the ref ends. A ref it does not know (a tag, say) is taken
+ * to be the first segment, so the server gets to decide. Null without a path.
+ */
+export function blobFromSplat(splat: string, branches: BranchInfo[]): { ref: string; path: string } | null {
+  if (!splat.startsWith("blob/")) return null;
+  const rest = splat.slice(5);
+  const ref = refFromSplat(splat, branches) ?? rest.split("/")[0] ?? "";
+  const path = rest.slice(ref.length + 1);
+  return ref && path ? { ref, path } : null;
 }
