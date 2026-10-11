@@ -14,6 +14,13 @@ export type FileViewerProps = {
    * the raw blob; text viewers receive `content` and never need this).
    */
   token?: string | null;
+  /**
+   * The FHR viewer calls this, before fetching the file, when the format's
+   * renderer does not draw single files (its bundle's `modes` omits "view"):
+   * the host then shows the file with its own viewer. Without it, the bundle
+   * is mounted anyway and shows the file's text.
+   */
+  onViewDeclined?: () => void;
   /** Repo base path (e.g. "/alice/repo"), used to build blame commit links. */
   repoBase?: string;
   /** Currently selected line range (highlighted), driven by the URL hash. */
