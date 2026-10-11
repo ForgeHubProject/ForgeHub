@@ -81,6 +81,7 @@ vi.mock("../branch-protection.js", () => ({ syncProtectionConfig: vi.fn().mockRe
 
 import { createTestServer } from "./helpers/server.js";
 import { createTestRepo, type TestRepo } from "./helpers/git.js";
+import { generateEd25519KeyPair } from "../ssh/keygen.js";
 import type { FastifyInstance } from "fastify";
 
 type GitResult = { code: number; stdout: string; stderr: string };
@@ -126,9 +127,9 @@ describe("SSH transport — real end-to-end", () => {
   beforeAll(async () => {
     // Generate credentials and publish them to the mock holder BEFORE any SSH
     // connection can happen (auth reads H.userPub / H.userFp lazily).
-    userPair = ssh2.utils.generateKeyPairSync("ed25519");
-    deployPair = ssh2.utils.generateKeyPairSync("ed25519");
-    strangerPair = ssh2.utils.generateKeyPairSync("ed25519");
+    userPair = generateEd25519KeyPair();
+    deployPair = generateEd25519KeyPair();
+    strangerPair = generateEd25519KeyPair();
     H.userPub = userPair.public.trim();
     H.deployPub = deployPair.public.trim();
     H.userFp = fingerprintFromRaw(parsePublicKey(userPair.public)!.raw);

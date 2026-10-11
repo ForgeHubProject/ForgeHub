@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import ssh2 from "ssh2";
 import { computeFingerprint, fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
+import { generateEd25519KeyPair } from "../ssh/keygen.js";
 
 // A stable ed25519 fixture with its independently-computed SHA256 fingerprint.
 const ED_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINF3319jjgEjhpwtrz3oEC7Q5v9ny/ubnpRxPF3Xt/1F";
@@ -53,7 +54,7 @@ describe("parsePublicKey", () => {
   });
 
   it("parses freshly generated ed25519 and rsa keys", () => {
-    expect(parsePublicKey(ssh2.utils.generateKeyPairSync("ed25519").public)).not.toBeNull();
+    expect(parsePublicKey(generateEd25519KeyPair().public)).not.toBeNull();
     expect(parsePublicKey(ssh2.utils.generateKeyPairSync("rsa", { bits: 2048 }).public)).not.toBeNull();
   });
 });
@@ -80,8 +81,8 @@ describe("fingerprint", () => {
   });
 
   it("gives distinct fingerprints for distinct keys", () => {
-    const a = ssh2.utils.generateKeyPairSync("ed25519").public;
-    const b = ssh2.utils.generateKeyPairSync("ed25519").public;
+    const a = generateEd25519KeyPair().public;
+    const b = generateEd25519KeyPair().public;
     expect(computeFingerprint(a)).not.toBe(computeFingerprint(b));
   });
 });
