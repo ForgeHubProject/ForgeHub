@@ -76,6 +76,8 @@ let oversizeSha: string;
 let fileSha: string;
 let dirSha: string;
 let restoredSha: string;
+let renameSha: string;
+let renameEditSha: string;
 
 // One byte past the 10 MiB the API is willing to hold in memory (#157). The
 // content is irrelevant — nothing ever parses it, because both routes refuse it
@@ -127,6 +129,17 @@ beforeAll(async () => {
   dirSha = await makeCommit(repo.workDir, { "swap.gltf/inner.gltf": gltf(2) }, "swap.gltf becomes a dir");
   await rm(join(repo.workDir, "swap.gltf"), { recursive: true });
   restoredSha = await makeCommit(repo.workDir, { "swap.gltf": gltf(3) }, "swap.gltf is a file again");
+  // Renames: two files committed, then moved (one untouched, one edited). git
+  // records both as renames, so the new path does not exist in the parent.
+  await makeCommit(
+    repo.workDir,
+    { "orig.gltf": gltf(7), "orig-edit.gltf": gltf(8) },
+    "add files to be renamed",
+  );
+  await rm(join(repo.workDir, "orig.gltf"));
+  renameSha = await makeCommit(repo.workDir, { "moved/orig.gltf": gltf(7) }, "pure rename");
+  await rm(join(repo.workDir, "orig-edit.gltf"));
+  renameEditSha = await makeCommit(repo.workDir, { "moved/orig-edit.gltf": gltf(9) }, "rename and edit");
   (MOCK_REPO as { storageKey: string }).storageKey = repo.storageKey;
   __setManifestForTests(MANIFEST);
   app = await createTestServer();
@@ -303,6 +316,48 @@ describe("GET /repos/:handle/:name/filediff", () => {
 function rawblob(query: string) {
   return app.inject({ method: "GET", url: `/repos/alice/scene/rawblob?${query}` });
 }
+
+describe("GET /repos/:handle/:name/filediff — renamed files (#201)", () => {
+  const sentToEngine = () => {
+    const [, , baseBlob, headBlob] = vi.mocked(officialWasmDiff).mock.calls[0]!;
+    return { base: Buffer.from(baseBlob).toString("utf8"), head: Buffer.from(headBlob).toString("utf8") };
+  };
+
+  it("diffs a pure rename against the file at its OLD path, so both sides are identical", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=moved/orig.gltf&sha=${renameSha}&basePath=orig.gltf`);
+    expect(res.statusCode).toBe(200);
+    expect(sentToEngine()).toEqual({ base: gltf(7), head: gltf(7) });
+  });
+
+  it("diffs a rename plus edit as old content vs new content", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=moved/orig-edit.gltf&sha=${renameEditSha}&basePath=orig-edit.gltf`);
+    expect(res.statusCode).toBe(200);
+    expect(sentToEngine()).toEqual({ base: gltf(8), head: gltf(9) });
+  });
+
+  it("defaults basePath to path: without it a rename still reads an empty base (unchanged behaviour)", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=moved/orig.gltf&sha=${renameSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(sentToEngine()).toEqual({ base: "", head: gltf(7) });
+  });
+
+  it("leaves modified files alone when basePath equals path", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=model.gltf&sha=${headSha}&basePath=model.gltf`);
+    expect(res.statusCode).toBe(200);
+    expect(sentToEngine()).toEqual({ base: gltf(0), head: gltf(5) });
+  });
+
+  it("400s for a NUL in basePath, as it does for path", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=moved/orig.gltf&sha=${renameSha}&basePath=${encodeURIComponent("orig.gltf\0x")}`);
+    expect(res.statusCode).toBe(400);
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
+});
 
 describe("GET /repos/:handle/:name/rawblob", () => {
   it("returns the raw file bytes as application/octet-stream", async () => {

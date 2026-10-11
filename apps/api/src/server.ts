@@ -14,6 +14,7 @@ import { compareRoutes } from "./routes/compare.js";
 import { fhrRoutes } from "./routes/fhr.js";
 import { fileDiffRoutes } from "./routes/filediff.js";
 import { previewRoutes } from "./routes/preview.js";
+import { convertRoutes } from "./routes/convert.js";
 import { fileDiffMetaRoutes } from "./routes/filediff-meta.js";
 import { rendererRoutes } from "./routes/renderers.js";
 import { handlerWasmRoutes } from "./routes/handler-wasm.js";
@@ -40,6 +41,8 @@ import { socialRoutes } from "./routes/social.js";
 import { topicRoutes } from "./routes/topics.js";
 import { templateRoutes } from "./routes/templates.js";
 import { compositionRoutes } from "./routes/composition.js";
+import { contributorsRoutes } from "./routes/contributors.js";
+import { treeCommitsRoutes } from "./routes/tree-commits.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
 import { timelineRoutes } from "./routes/timeline.js";
@@ -48,6 +51,7 @@ import { ciRoutes } from "./routes/ci.js";
 import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
+import { registrationMode } from "./registration.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
 import { resolvePatBearer } from "./pat-auth.js";
@@ -61,6 +65,8 @@ export async function buildServer() {
   if (!secret || secret.length < 16) {
     throw new Error("JWT_SECRET must be set to a string at least 16 characters long");
   }
+
+  registrationMode(); // fail fast on an invalid FORGEHUB_REGISTRATION
 
   const app = Fastify({ logger: true });
 
@@ -161,6 +167,7 @@ export async function buildServer() {
   await app.register(fhrRoutes);
   await app.register(fileDiffRoutes);
   await app.register(previewRoutes);
+  await app.register(convertRoutes);
   await app.register(fileDiffMetaRoutes);
   await app.register(rendererRoutes);
   await app.register(handlerWasmRoutes);
@@ -186,6 +193,8 @@ export async function buildServer() {
   await app.register(topicRoutes);
   await app.register(templateRoutes);
   await app.register(compositionRoutes);
+  await app.register(contributorsRoutes);
+  await app.register(treeCommitsRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
   await app.register(userKeyRoutes);

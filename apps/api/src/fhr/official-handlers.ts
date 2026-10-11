@@ -248,5 +248,82 @@ export async function officialWasmPreview(
   }
 }
 
+// ── convert ───────────────────────────────────────────────────────────────────
+//
+// Transcoding pivots through glTF (FHR SPEC §7): the source format's official
+// handler imports the file to a GLB, the target format's official handler
+// exports it. Each handler is the manifest-resolved official build — never a
+// community one — and the whole conversion is bounded like every wasm call.
+
+export type OfficialConvertResult =
+  | { kind: "ok"; bytes: Uint8Array; from: string; to: string }
+  /** No official handler reads the source's format (or it cannot import). */
+  | { kind: "no-source"; ext: string }
+  /** No official handler writes the target format (or it cannot export). */
+  | { kind: "no-target"; ext: string }
+  | { kind: "too-large"; limit: number }
+  /** A handler exists but refused: malformed input, or what the target cannot hold. */
+  | { kind: "failed"; stage: "import" | "export"; message: string };
+
+/** Normalise "obj", "OBJ" and ".obj" to ".obj". */
+export function normalizeExt(ext: string): string {
+  const e = ext.trim().toLowerCase();
+  return e && !e.startsWith(".") ? `.${e}` : e;
+}
+
+/**
+ * Convert one blob, the content of `srcPath`, to the format of `dstExt`.
+ * Not scoped to a repo's opted-in formats: converting a file is not diffing it,
+ * the same way viewing is not (see officialWasmPreview).
+ */
+export async function officialWasmConvert(
+  srcPath: string,
+  dstExt: string,
+  blob: Buffer,
+  deps: OfficialHandlerDeps = defaultDeps,
+): Promise<OfficialConvertResult> {
+  const to = normalizeExt(dstExt);
+  const src = await officialHandlerFor(srcPath, null, deps);
+  if (!src?.handler.canImport || !src.handler.import) {
+    return { kind: "no-source", ext: extname(srcPath).toLowerCase() };
+  }
+  const dst = await officialHandlerFor(`file${to}`, null, deps);
+  if (!dst?.handler.canExport || !dst.handler.export) return { kind: "no-target", ext: to };
+  if (blob.length > MAX_WASM_BYTES) return { kind: "too-large", limit: MAX_WASM_BYTES };
+
+  let glb: Uint8Array;
+  try {
+    glb = (await src.handler.import(blob)).bytes;
+  } catch (e) {
+    return { kind: "failed", stage: "import", message: e instanceof Error ? e.message : String(e) };
+  }
+  // The intermediate GLB can be larger than the source (STL welds, OBJ indexes),
+  // so the target is held to the same cap rather than trusted.
+  if (glb.length > MAX_WASM_BYTES) return { kind: "too-large", limit: MAX_WASM_BYTES };
+  try {
+    const bytes = await dst.handler.export(Buffer.from(glb), to);
+    return { kind: "ok", bytes, from: src.handlerId, to: dst.handlerId };
+  } catch (e) {
+    return { kind: "failed", stage: "export", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export type ConvertFormat = { ext: string; handlerId: string; canImport: boolean; canExport: boolean };
+
+/**
+ * Every manifest format whose official handler can import or export, for a
+ * client that offers "convert to…". Loads each handler once per process.
+ */
+export async function officialConvertFormats(deps: OfficialHandlerDeps = defaultDeps): Promise<ConvertFormat[]> {
+  const out: ConvertFormat[] = [];
+  for (const [ext, handlerId] of await officialFormats()) {
+    const official = await officialHandlerFor(`file${ext}`, null, deps);
+    const h = official?.handler;
+    if (!h || (!h.canImport && !h.canExport)) continue;
+    out.push({ ext, handlerId, canImport: h.canImport === true, canExport: h.canExport === true });
+  }
+  return out.sort((a, b) => a.ext.localeCompare(b.ext));
+}
+
 /** The per-blob ceiling on wasm handler calls, for callers that pre-flight. */
 export const OFFICIAL_WASM_MAX_BYTES = MAX_WASM_BYTES;
