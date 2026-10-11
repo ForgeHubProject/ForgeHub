@@ -121,3 +121,33 @@ export function canWrite(repo: RepoAccessInput, userId: string | undefined): boo
   if (teamRoleFor(repo, userId) === "WRITER") return true;
   return false;
 }
+
+/** The slice of a repo `canAdmin` needs. */
+export type RepoAdminInput = Pick<RepoAccessInput, "ownerId" | "orgId" | "org">;
+
+/**
+ * Administer access — the repository's settings and its deletion (#217, #204):
+ * a personal repo's owner, or an OWNER of the org that owns an org repo.
+ *
+ * Not an org repo's creator as such. For an org repo `ownerId` only records who
+ * happened to create it; who runs it is the org's owners, and that can change
+ * without anyone touching the repo.
+ */
+export function canAdmin(repo: RepoAdminInput, userId: string | undefined): boolean {
+  if (!userId) return false;
+  if (!repo.orgId) return repo.ownerId === userId;
+  return (repo.org?.memberships ?? []).some((m) => m.userId === userId && m.role === "OWNER");
+}
+
+export type ViewerPermission = "admin" | "write" | "read";
+
+/**
+ * The strongest access the viewer holds, or null for none — what the web app
+ * gates its controls on instead of comparing the URL's handle with its own.
+ */
+export function viewerPermission(repo: RepoAccessInput, userId: string | undefined): ViewerPermission | null {
+  if (canAdmin(repo, userId)) return "admin";
+  if (canWrite(repo, userId)) return "write";
+  if (canRead(repo, userId)) return "read";
+  return null;
+}
