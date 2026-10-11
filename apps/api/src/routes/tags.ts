@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { createTag, deleteTag, listTags, tagExists } from "../git-utils.js";
 import { isTagProtected, protectedTagPatterns, syncProtectedTagsConfig } from "../protected-tags.js";
 
@@ -100,7 +100,7 @@ export async function tagRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
-    if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can protect tags" });
+    if (!canAdmin(repo, userId)) return reply.status(403).send({ error: "Only the repository's admins can protect tags" });
 
     const { pattern } = request.body as { pattern?: string };
     const trimmed = pattern?.trim();
@@ -131,7 +131,7 @@ export async function tagRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
-    if (repo.ownerId !== userId) return reply.status(403).send({ error: "Only the owner can unprotect tags" });
+    if (!canAdmin(repo, userId)) return reply.status(403).send({ error: "Only the repository's admins can unprotect tags" });
 
     const row = await prisma.protectedTag.findFirst({ where: { id, repoId: repo.id } });
     if (!row) return reply.status(404).send({ error: "Protected tag not found" });

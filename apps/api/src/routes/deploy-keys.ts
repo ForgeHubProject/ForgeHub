@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../prisma.js";
-import { resolveRepo } from "../repo-access.js";
+import { canAdmin, resolveRepo } from "../repo-access.js";
 import { createDeployKeyBodySchema } from "../validation.js";
 import { fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
 import { fingerprintInUse } from "../ssh/store.js";
@@ -49,8 +49,8 @@ export async function deployKeyRoutes(app: FastifyInstance) {
       reply.status(404).send({ error: "Not found" });
       return null;
     }
-    if (repo.ownerId !== userId) {
-      reply.status(repo.visibility === "PRIVATE" ? 404 : 403).send({ error: "Only the repository owner can manage deploy keys" });
+    if (!canAdmin(repo, userId)) {
+      reply.status(repo.visibility === "PRIVATE" ? 404 : 403).send({ error: "Only the repository's admins can manage deploy keys" });
       return null;
     }
     return repo;
