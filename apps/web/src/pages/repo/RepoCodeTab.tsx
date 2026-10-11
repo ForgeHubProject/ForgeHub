@@ -23,7 +23,7 @@ import {
 } from "../../ui";
 import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry } from "../../types";
 import { CompositionBar } from "./CompositionBar";
-import { refLabel } from "./refs";
+import { blobFromSplat, refLabel } from "./refs";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 
 type Props = {
@@ -366,25 +366,18 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
 export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, social, canEditSettings }: Props) {
   const base = `/${handle}/${repoName}`;
 
-  // Detect blob mode — use currentRef state to correctly split ref/path even for slashed branch names
+  // Detect blob mode — split ref/path against the branch list, not currentRef,
+  // which still holds the default branch on the first render of a slashed one.
   if (splat.startsWith("blob/")) {
-    const blobPrefix = `blob/${currentRef}/`;
-    let blobRef: string, blobPath: string;
-    if (currentRef && splat.startsWith(blobPrefix)) {
-      blobRef = currentRef;
-      blobPath = splat.slice(blobPrefix.length);
-    } else {
-      const m = splat.match(/^blob\/([^/]+)\/(.+)$/);
-      if (!m) return null;
-      [, blobRef, blobPath] = m;
-    }
+    const blob = blobFromSplat(splat, branches);
+    if (!blob) return null;
     return (
       <BlobViewer
         token={token}
         handle={handle}
         repoName={repoName}
-        ref={blobRef}
-        path={blobPath}
+        ref={blob.ref}
+        path={blob.path}
         repoBase={base}
       />
     );
