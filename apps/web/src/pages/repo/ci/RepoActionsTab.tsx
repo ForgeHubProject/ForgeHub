@@ -16,6 +16,7 @@ import {
   runStateLabel,
   stateBadgeClasses,
 } from "./ciShared";
+import { useRepoPermission } from "../permission";
 
 type Props = {
   token: string;
@@ -106,7 +107,7 @@ function RunActions({
 // ─── Runs list ──────────────────────────────────────────────────────────────────
 
 function RunsList({ token, handle, repoName, user, base }: Props & { base: string }) {
-  const canWrite = user.handle === handle;
+  const { canWrite } = useRepoPermission();
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
   const [error, setError] = useState(false);
 
@@ -244,7 +245,7 @@ function JobLog({ token, handle, repoName, runId, check, defaultOpen }: {
 }
 
 function RunDetail({ token, handle, repoName, user, id, base }: Props & { id: string; base: string }) {
-  const canWrite = user.handle === handle;
+  const { canWrite } = useRepoPermission();
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [error, setError] = useState<string | null>(null);
 

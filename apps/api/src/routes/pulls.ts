@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
@@ -369,8 +369,8 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    if (pr.authorId !== userId && repo.ownerId !== userId)
-      return reply.status(403).send({ error: "Only the author or owner can mark this PR ready for review" });
+    if (pr.authorId !== userId && !canAdmin(repo, userId))
+      return reply.status(403).send({ error: "Only the author or a repository admin can mark this PR ready for review" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
     if (!pr.isDraft) return reply.status(409).send({ error: "Pull request is not a draft" });
 
@@ -989,10 +989,10 @@ export async function pullRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
     }
 
-    // ── State change: author or repo owner ────────────────────────────────────────
+    // ── State change: the author or an admin ──────────────────────────────────────
     if (state !== undefined) {
-      if (pr.authorId !== userId && repo.ownerId !== userId)
-        return reply.status(403).send({ error: "Only the author or owner can modify this PR" });
+      if (pr.authorId !== userId && !canAdmin(repo, userId))
+        return reply.status(403).send({ error: "Only the author or a repository admin can modify this PR" });
       if (!["open", "closed"].includes(state))
         return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
       if (pr.state === "MERGED") return reply.status(409).send({ error: "Cannot change state of a merged PR" });

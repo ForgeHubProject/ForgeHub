@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifyUser } from "../notifications-service.js";
 import { syncBodyReferences } from "../references-service.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
@@ -357,8 +357,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
       });
       if (!comment) return reply.status(404).send({ error: "Comment not found" });
 
-      if (comment.authorId !== userId && ctx.repo.ownerId !== userId) {
-        return reply.status(403).send({ error: "Only the author or repository owner can delete this comment" });
+      if (comment.authorId !== userId && !canAdmin(ctx.repo, userId)) {
+        return reply.status(403).send({ error: "Only the author or a repository admin can delete this comment" });
       }
 
       await prisma.pullRequestComment.delete({ where: { id: comment.id } });
@@ -793,8 +793,8 @@ export async function prCommentRoutes(app: FastifyInstance) {
       });
       if (!comment) return reply.status(404).send({ error: "Comment not found" });
 
-      if (comment.authorId !== userId && ctx.repo.ownerId !== userId) {
-        return reply.status(403).send({ error: "Only the author or repository owner can delete this comment" });
+      if (comment.authorId !== userId && !canAdmin(ctx.repo, userId)) {
+        return reply.status(403).send({ error: "Only the author or a repository admin can delete this comment" });
       }
 
       // Deleting a thread root cascades its replies (inReplyTo FK), so gather the
