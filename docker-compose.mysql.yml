@@ -58,6 +58,10 @@ services:
       FORGEHUB_CI_ROOT: "/ci"
       FORGEHUB_CI: "${FORGEHUB_CI:-}"
       FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
+      # Port clients are told to use when the host's sshd forwards port 22 here
+      # (deploy/ssh/); unset ⇒ the listening port.
+      FORGEHUB_SSH_PUBLIC_PORT: "${FORGEHUB_SSH_PUBLIC_PORT:-}"
+      FORGEHUB_SSH_FORWARD_KEY: "${FORGEHUB_SSH_FORWARD_KEY:-}"
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
       # Sign-up policy: open (default) | closed.
       FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
@@ -73,7 +77,7 @@ services:
       - "${WEB_PORT:-8080}:80"
     # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set.
     # ports:
-    #   - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+    #   - "${FORGEHUB_SSH_BIND:-0.0.0.0}:${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       - forgehub-data:/data
       - forgehub-ci:/ci

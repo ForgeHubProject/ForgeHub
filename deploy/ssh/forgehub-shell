@@ -1,0 +1,31 @@
+#!/bin/sh
+# Forced command for a registered key (see forgehub-authorized-keys):
+#   forgehub-shell <fingerprint>
+# sshd has already proven the person holds the key with that fingerprint. This
+# hands their git command to ForgeHub's built-in SSH server, over loopback, as the
+# host's forward key acting for that fingerprint. ForgeHub applies the same access
+# checks and push hooks as for HTTPS, and accepts only git-upload-pack and
+# git-receive-pack — anything else is refused there.
+set -eu
+CONF=${FORGEHUB_SSH_CONF:-/etc/forgehub/ssh.conf}
+# shellcheck disable=SC1090
+. "$CONF"
+
+fp=${1:-}
+case $fp in SHA256:*) ;; *) exit 1 ;; esac
+[ -z "$(printf %s "$fp" | tr -d 'A-Za-z0-9+/:')" ] || exit 1
+
+if [ -z "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  echo "ForgeHub: interactive shells are not provided; use git." >&2
+  exit 1
+fi
+
+b64u() { printf %s "$1" | base64 | tr -d '\n=' | tr '+/' '-_'; }
+ip=${SSH_CONNECTION:-}; ip=${ip%% *}
+user="fwd.$(b64u "$fp").$(b64u "$ip")"
+
+exec ssh -T -q -l "$user" -p "${FORGEHUB_SSH_LISTEN_PORT:-2222}" \
+  -i "${FORGEHUB_FORWARD_KEY:-/etc/forgehub/forward_key}" \
+  -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="${FORGEHUB_KNOWN_HOSTS:-/etc/forgehub/known_hosts}" \
+  127.0.0.1 "$SSH_ORIGINAL_COMMAND"
