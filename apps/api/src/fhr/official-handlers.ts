@@ -1,7 +1,7 @@
 import { extname } from "node:path";
 import type { StructuredDiff } from "../handlers/types.js";
 import { instantiateWasmHandler, type WasmConflict, type WasmHandler } from "./wasm-runtime.js";
-import { handlerWasmUrl, officialFormats } from "./manifest.js";
+import { handlerBuild, handlerWasmUrl, officialFormats } from "./manifest.js";
 
 // Official FHR format→handler resolution. The manifest (manifest.ts) is the
 // single source of truth: this module holds NO hardcoded extension or handler
@@ -42,7 +42,15 @@ const defaultDeps: OfficialHandlerDeps = {
   fetchImpl: (...args: Parameters<typeof fetch>) => fetch(...args),
 };
 
-const instanceCache = new Map<string, Promise<WasmHandler | null>>();
+// One instance per handler, stamped with the manifest build it was loaded for.
+// FHR republishes a rolling release at the same wasm URL, so the build is what
+// tells a new handler from the old one: when the manifest names a new build the
+// next call loads it and the old instance retires. Keyed by handler id alone,
+// the server ran the first build it ever loaded until the process restarted.
+// A test-installed handler answers for whatever build the manifest names.
+const ANY_BUILD = Symbol("any build");
+type InstanceEntry = { build: string | null | typeof ANY_BUILD; handler: Promise<WasmHandler | null> };
+const instanceCache = new Map<string, InstanceEntry>();
 
 /** Test hook: drop memoized handler instances. */
 export function __resetOfficialHandlers(): void {
@@ -55,27 +63,36 @@ export function __resetOfficialHandlers(): void {
  * must still map an extension to the id (and give it a wasm URL).
  */
 export function __setOfficialHandlerForTests(handlerId: string, handler: WasmHandler): void {
-  instanceCache.set(handlerId, Promise.resolve(handler));
+  instanceCache.set(handlerId, { build: ANY_BUILD, handler: Promise.resolve(handler) });
 }
 
 function loadWasmHandler(
   handlerId: string,
   wasmUrl: string,
+  build: string | null,
   deps: OfficialHandlerDeps,
 ): Promise<WasmHandler | null> {
-  let p = instanceCache.get(handlerId);
-  if (!p) {
-    p = (async () => {
-      const res = await deps.fetchImpl(wasmUrl);
-      if (!res.ok) return null;
-      const bytes = Buffer.from(await res.arrayBuffer());
-      return deps.instantiate(bytes, handlerId);
-    })();
-    instanceCache.set(handlerId, p);
-    // Don't memoize failures — allow a later retry after a transient error.
-    p.then((h) => { if (!h) instanceCache.delete(handlerId); }).catch(() => instanceCache.delete(handlerId));
-  }
-  return p;
+  const cached = instanceCache.get(handlerId);
+  if (cached && (cached.build === build || cached.build === ANY_BUILD)) return cached.handler;
+
+  // The manifest moved on: the old build finishes what it is running, then stops.
+  cached?.handler.then((h) => h?.retire?.()).catch(() => {});
+
+  const handler = (async () => {
+    const res = await deps.fetchImpl(wasmUrl);
+    if (!res.ok) return null;
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return deps.instantiate(bytes, handlerId);
+  })();
+  const entry: InstanceEntry = { build, handler };
+  instanceCache.set(handlerId, entry);
+  // Don't memoize failures — allow a later retry after a transient error. Only
+  // this entry's own failure clears it, never a newer build's entry.
+  const forget = () => {
+    if (instanceCache.get(handlerId) === entry) instanceCache.delete(handlerId);
+  };
+  handler.then((h) => { if (!h) forget(); }).catch(forget);
+  return handler;
 }
 
 export type OfficialDiffResult = {
@@ -101,10 +118,12 @@ async function officialHandlerFor(
 
   let handlerId: string | null;
   let wasmUrl: string | null;
+  let build: string | null;
   try {
     handlerId = await officialHandlerId(ext);
     if (!handlerId) return null;
     wasmUrl = await resolveWasmUrl(handlerId);
+    build = await handlerBuild(handlerId);
   } catch {
     // Manifest unreachable with no cached copy — treat as unavailable.
     return null;
@@ -112,7 +131,7 @@ async function officialHandlerFor(
   if (!wasmUrl) return null;
 
   try {
-    const handler = await loadWasmHandler(handlerId, wasmUrl, deps);
+    const handler = await loadWasmHandler(handlerId, wasmUrl, build, deps);
     return handler ? { handlerId, handler } : null;
   } catch {
     return null;

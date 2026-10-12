@@ -30,6 +30,22 @@ describe("wasm worker runtime", () => {
     await expect(h.diff(Buffer.from("a"), Buffer.from("b"))).rejects.toThrow(/timed out/);
   }, 10_000);
 
+  it("retire() lets the call in flight finish, then stops the worker", async () => {
+    const h = await instantiateWasmHandler(Buffer.from("x"), "gltf-scene", { workerPath: echoWorker });
+    const workerOf = () => (h as unknown as { worker: unknown }).worker;
+
+    const inFlight = h.diff(Buffer.from("aa"), Buffer.from("b"));
+    h.retire!();
+    expect(workerOf()).not.toBeNull(); // still busy: not torn down under the call
+    expect((await inFlight).changes[0]).toMatchObject({ before: 2, after: 1 });
+    expect(workerOf()).toBeNull();
+
+    // A late caller holding the retired instance still gets an answer; the
+    // worker respawns for it and stops again afterwards.
+    expect((await h.diff(Buffer.from("a"), Buffer.from("bbb"))).changes[0]).toMatchObject({ before: 1, after: 3 });
+    expect(workerOf()).toBeNull();
+  });
+
   it("rejects instantiation when the worker never reports ready", async () => {
     const missing = fileURLToPath(new URL("./fixtures/does-not-exist.cjs", import.meta.url));
     await expect(instantiateWasmHandler(Buffer.from("x"), "gltf-scene", { workerPath: missing })).rejects.toThrow();

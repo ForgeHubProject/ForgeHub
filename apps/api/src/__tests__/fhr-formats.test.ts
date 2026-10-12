@@ -1,7 +1,7 @@
 /**
  * Public /fhr/formats endpoint. Projects the FHR manifest's [formats] table as
- * { "formats": Record<ext, handlerId> } — the contract the web app codes
- * against. The manifest is stubbed (test hook) for the happy path; the 503 path
+ * { "formats": Record<ext, handlerId>, "builds": Record<handlerId, build> } —
+ * the contract the web app codes against. The manifest is stubbed (test hook) for the happy path; the 503 path
  * stubs an unreachable upstream so no network is used.
  */
 import { vi, describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
@@ -45,6 +45,20 @@ describe("GET /fhr/formats", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       formats: { ".gltf": "gltf-scene", ".glb": "gltf-scene" },
+      builds: { "gltf-scene": "e520cc6" },
+    });
+  });
+
+  it("leaves a handler with no stamped build out of builds", async () => {
+    __setManifestForTests(`
+[formats]
+".gltf" = { handler = "gltf-scene", build = "e520cc6" }
+".csv"  = { handler = "csv" }
+`);
+    const res = await app.inject({ method: "GET", url: "/fhr/formats" });
+    expect(res.json()).toEqual({
+      formats: { ".gltf": "gltf-scene", ".csv": "csv" },
+      builds: { "gltf-scene": "e520cc6" },
     });
   });
 
