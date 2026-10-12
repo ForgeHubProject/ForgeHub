@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build and push ForgeHub container images (sqlite, postgres, mysql) to
-# docker.io, ghcr.io and quay.io, tagged <BASE>-<N> and latest.
+# docker.io, ghcr.io and quay.io, tagged <BASE>-<N>, the floating <BASE> (e.g. 1.1) and latest.
 #
 # <N> auto-increments: the highest existing "<BASE>-<N>" tag across all three
 # registries, plus one. Assumes you are already logged in to each registry.
 #
 # Usage:
-#   scripts/release-containers.sh                 # next patch of BASE (default 1.0)
-#   BASE=1.1 scripts/release-containers.sh        # start/continue a new base
+#   scripts/release-containers.sh                 # next patch of BASE (default 1.1)
+#   BASE=1.2 scripts/release-containers.sh        # start/continue a new base
 #   scripts/release-containers.sh --dry-run       # print plan, build nothing
 #   scripts/release-containers.sh --local         # build locally only (host arch), no push
 #   Push preflight (skipped for --dry-run/--local): clean tree (ALLOW_DIRTY=1), HEAD on a
@@ -16,7 +16,7 @@
 #   REGISTRIES="docker.io/x/forgehub ghcr.io/y/forgehub" scripts/release-containers.sh
 set -euo pipefail
 
-BASE="${BASE:-1.0}"
+BASE="${BASE:-1.1}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 REGISTRIES="${REGISTRIES:-docker.io/touficmajdalani/forgehub ghcr.io/forgehubproject/forgehub quay.io/forgehubproject/forgehub}"
 DRY_RUN=0 LOCAL=0
@@ -70,7 +70,7 @@ VERSION="${BASE}-$((max_n + 1))"
 VCS_REF="$(git rev-parse --short HEAD)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-echo "Release: $VERSION (+ latest) from $VCS_REF"
+echo "Release: $VERSION (+ floating $BASE and latest) from $VCS_REF"
 echo "Registries: $REGISTRIES"
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -117,9 +117,9 @@ for v in "${VARIANTS[@]}"; do
   provider="${v%%:*}"; rest="${v#*:}"; suffix="${rest%%:*}"; url="${rest#*:}"
   tag_args=()
   for reg in $REGISTRIES; do
-    tag_args+=(-t "$reg:${VERSION}${suffix}" -t "$reg:latest${suffix}")
+    tag_args+=(-t "$reg:${VERSION}${suffix}" -t "$reg:${BASE}${suffix}" -t "$reg:latest${suffix}")
   done
-  echo "==> $provider  (${VERSION}${suffix}, latest${suffix})"
+  echo "==> $provider  (${VERSION}${suffix}, ${BASE}${suffix}, latest${suffix})"
   if (( LOCAL )); then out=(--load); plat=(); else out=(--push); plat=(--platform "$PLATFORMS"); fi
   cmd=(docker buildx build "${plat[@]}" --file Dockerfile
        --build-arg "DATABASE_PROVIDER=$provider" --build-arg "DATABASE_URL_BUILD=$url"
