@@ -9,9 +9,9 @@ vi.mock("../ssh/store.js", () => ({
   touchDeployKey: vi.fn(),
 }));
 
-import { onAuthentication, resetAuthFailures, type BoundActor } from "../ssh/server.js";
+import { isRateLimited, onAuthentication, resetAuthFailures, type BoundActor } from "../ssh/server.js";
 import { resolveActorByFingerprint, type SshActor } from "../ssh/store.js";
-import { decodeForwardUser, encodeForwardUser, forwardKeys, isForwardKey, KEYS_USER } from "../ssh/forward.js";
+import { decodeForwardUser, encodeForwardUser, forwardKeys, isForwardKey, isPrivateAddress, KEYS_USER } from "../ssh/forward.js";
 import { generateEd25519KeyPair } from "../ssh/keygen.js";
 import { fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
 
@@ -40,6 +40,7 @@ const IP = "172.18.0.1";
 const BLOB = Buffer.from("session-identifier-blob");
 
 function attempt(opts: {
+  ip?: string;
   username: string;
   key?: ParsedKey;
   signWith?: ParsedKey;
@@ -60,7 +61,7 @@ function attempt(opts: {
       accept: () => resolve({ result: "accept", bound, boundIp }),
       reject: () => resolve({ result: "reject", bound, boundIp }),
     } as unknown as AuthContext;
-    onAuthentication(app, ctx, IP, (a, ip) => {
+    onAuthentication(app, ctx, opts.ip ?? IP, (a, ip) => {
       bound = a;
       boundIp = ip;
     });
@@ -153,5 +154,31 @@ describe("forwarded authentication", () => {
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
     const r = await attempt({ username: KEYS_USER, signWith: forwardPriv });
     expect(r.result).toBe("reject");
+  });
+});
+
+describe("forwarded auth only from private addresses", () => {
+  it("classifies addresses", () => {
+    for (const ok of ["127.0.0.1", "::1", "10.1.2.3", "172.18.0.1", "172.31.255.1", "192.168.1.5", "::ffff:172.18.0.1", "fd00::1"]) {
+      expect(isPrivateAddress(ok), ok).toBe(true);
+    }
+    for (const bad of ["203.0.113.9", "8.8.8.8", "172.32.0.1", "172.15.0.1", "2001:db8::1", "999.1.1.1", "unknown", ""]) {
+      expect(isPrivateAddress(bad), bad).toBe(false);
+    }
+  });
+
+  it("refuses the forward key from a public address, even a correctly signed one", async () => {
+    const r = await attempt({ ip: "203.0.113.9", username: encodeForwardUser(personFp), signWith: forwardPriv });
+    expect(r.result).toBe("reject");
+    expect(r.bound).toBeNull();
+    expect(resolveActorByFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated public-address attempts", async () => {
+    const ip = "203.0.113.50";
+    resetAuthFailures(ip);
+    for (let i = 0; i < 5; i++) await attempt({ ip, username: KEYS_USER, signWith: forwardPriv });
+    expect(isRateLimited(ip)).toBe(true);
+    resetAuthFailures(ip);
   });
 });
