@@ -8,10 +8,16 @@ describe("sshCloneUrl", () => {
     );
   });
 
-  it("prefers an explicit server host override when set", () => {
+  it("prefers an explicit server host override when set (here on port 22)", () => {
     expect(
       sshCloneUrl({ handle: "alice", repoName: "proj", sshPort: 22, sshHost: "git.internal", hostname: "localhost" }),
-    ).toBe("ssh://git@git.internal:22/alice/proj.git");
+    ).toBe("git@git.internal:alice/proj.git");
+  });
+
+  it("drops the port and the ssh:// scheme on the standard port 22", () => {
+    expect(sshCloneUrl({ handle: "alice", repoName: "proj", sshPort: 22, hostname: "forge.example.com" })).toBe(
+      "git@forge.example.com:alice/proj.git",
+    );
   });
 
   it("falls back to the hostname when the override is null/empty", () => {

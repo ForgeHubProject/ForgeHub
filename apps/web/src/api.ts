@@ -2512,9 +2512,11 @@ export async function getServerInfo(): Promise<ServerInfo> {
 }
 
 /**
- * Build the `ssh://git@host:port/owner/repo.git` clone URL shown in the clone box
- * (issue #116). The port comes from server config; the host uses the server's
- * explicit override when set, otherwise the browser's current hostname.
+ * Build the SSH clone URL shown in the clone box (issue #116). The port comes
+ * from server config; the host uses the server's explicit override when set,
+ * otherwise the browser's current hostname. On the standard port 22 the URL is
+ * the scp-style `git@host:owner/repo.git` — no port, no `ssh://`, what every
+ * git host shows; any other port needs the `ssh://` form to carry it.
  */
 export function sshCloneUrl(opts: {
   handle: string;
@@ -2524,6 +2526,7 @@ export function sshCloneUrl(opts: {
   hostname: string;
 }): string {
   const host = opts.sshHost || opts.hostname;
+  if (opts.sshPort === 22) return `git@${host}:${opts.handle}/${opts.repoName}.git`;
   return `ssh://git@${host}:${opts.sshPort}/${opts.handle}/${opts.repoName}.git`;
 }
 
