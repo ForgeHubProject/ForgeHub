@@ -9,6 +9,7 @@ import {
   Avatar, Badge, Button, ConfirmDialog, DropdownMenu, DropdownItem,
   EmptyState, Field, Skeleton, TextInput, Textarea, RelativeTime, useToast,
 } from "../../ui";
+import { useRepoPermission } from "./permission";
 
 type Props = {
   token: string;
@@ -551,7 +552,7 @@ export function RepoReleasesTab({ token, handle, repoName, user }: Props) {
   const [deleting, setDeleting] = useState(false);
   const { toast } = useToast();
 
-  const canManage = user.handle === handle;
+  const { canWrite: canManage } = useRepoPermission();
 
   function load() {
     setLoading(true);

@@ -21,6 +21,7 @@ import { RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
 import { RepoProjectsTab } from "./repo/projects/RepoProjectsTab";
 import { RepoSettingsTab } from "./repo/RepoSettingsTab";
+import { RepoPermissionProvider, repoPermission } from "./repo/permission";
 
 type Props = {
   token: string;
@@ -357,7 +358,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
   // Settings and the other admin controls follow the server's answer (#217) — a
   // personal repo's owner, or an org repo's org owners — never "the URL handle
   // is mine", which an org repo's handle never is.
-  const canAdmin = repo.viewerPermission === "admin";
+  const { canAdmin, canWrite } = repoPermission(repo.viewerPermission);
 
   return (
     <div className="min-h-screen flex flex-col bg-fh-canvas">
@@ -446,8 +447,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
                   </DropdownItem>
                 ))}
               </DropdownMenu>
-              {/* Sync fork — owner of a fork can pull upstream changes (issue #113). */}
-              {repo.parent && user.handle === h && (
+              {/* Sync fork: anyone who can push to the fork can pull upstream changes (issue #113). */}
+              {repo.parent && canWrite && (
                 <Button
                   variant="default"
                   size="sm"
@@ -549,7 +550,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
         </div>
       )}
 
-      {/* Tab content */}
+      {/* Tab content: every tab asks the server's verdict on what the viewer may do (#218). */}
+      <RepoPermissionProvider value={repo.viewerPermission ?? null}>
       <div className={`flex-1 w-full ${column} mx-auto py-6`}>
         {activeTab === "code" && splat.startsWith("forks") && (
           <RepoForksTab token={token} handle={h} repoName={r} />
@@ -640,6 +642,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
           <RepoSettingsTab token={token} handle={h} repoName={r} canAdmin={canAdmin} />
         )}
       </div>
+      </RepoPermissionProvider>
 
       <Footer />
     </div>

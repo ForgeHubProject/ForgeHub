@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { deleteBranch, listBranches } from "../../api";
 import type { BranchInfo, User } from "../../types";
 import { Badge, ConfirmDialog, EmptyState, RelativeTime, Skeleton, cx, useToast } from "../../ui";
+import { useRepoPermission } from "./permission";
 
 type Props = {
   token: string;
@@ -123,7 +124,8 @@ export function RepoBranchesTab({ token, handle, repoName, user, base }: Props) 
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const canDelete = user.handle === handle;
+  // Deleting a branch needs write access (the API refuses a protected one).
+  const { canWrite: canDelete } = useRepoPermission();
 
   function load() {
     setLoading(true);

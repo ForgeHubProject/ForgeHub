@@ -33,6 +33,7 @@ import {
   GitCommitIcon,
   StatePill,
 } from "./prShared";
+import { useRepoPermission } from "../permission";
 
 type TabKey = "commits" | "files";
 
@@ -54,6 +55,7 @@ export function PullDetail({
   const repoRef = { owner: handle, name: repoName };
 
   const [pr, setPr] = useState<PullRequest | null>(null);
+  const { canWrite, canAdmin } = useRepoPermission();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("commits");
@@ -183,7 +185,6 @@ export function PullDetail({
 
   // ── Review derived state ──────────────────────────────────────────────────────
   const isAuthor = pr.author === user.handle;
-  const isOwner = user.handle === handle; // repo owner handle == route handle
   const pendingReview = reviews.find((r) => r.state === "pending" && r.author === user.handle) ?? null;
   const hasPendingReview = pendingReview != null;
   const pendingCount = reviewComments.filter((c) => c.pending).length;
@@ -308,11 +309,13 @@ export function PullDetail({
     reactionCtx: { token, handle, repoName },
     hasPendingReview,
     canComment,
-    canResolve: (author) => isOwner || author === user.handle,
+    // The API's rules (#218): a writer or the thread's author resolves it;
+    // applying a suggestion pushes to the branch, so it needs write access.
+    canResolve: (author) => canWrite || author === user.handle,
     // Applying writes to the head branch. The server enforces the real writer
     // gate; the UI offers the action to the owner and the PR author (the usual
     // appliers) rather than advertising it to every signed-in visitor.
-    canApplySuggestion: pr.state === "open" && (isOwner || isAuthor),
+    canApplySuggestion: pr.state === "open" && canWrite,
     busy: reviewBusy,
     onCreate: onCreateReviewComment,
     onReply: onReplyThread,
@@ -577,7 +580,7 @@ export function PullDetail({
           <PRChecks token={token} handle={handle} repoName={repoName} pr={pr} base={base} />
 
           {/* Merge box */}
-          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || isOwner} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
+          <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || canAdmin} canClose={isAuthor || canAdmin} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
         </div>
 
         {/* Sidebar */}
@@ -589,7 +592,7 @@ export function PullDetail({
             repoName={repoName}
             pr={pr}
             currentUser={user.handle}
-            canManage={isAuthor || isOwner}
+            canManage={isAuthor || canWrite}
             onRequestsChange={(requested) => {
               setPr((prev) => (prev ? { ...prev, requestedReviewers: requested } : prev));
               refreshTimeline();
