@@ -174,6 +174,25 @@ function makeRepo(overrides = {}) {
   };
 }
 
+// An org repo (#218): its admins are the org's OWNERs, not whoever created it.
+const ORG_OWNER_ID = "user-org-owner";
+const ORG_CREATOR_ID = "user-org-creator"; // created the repo, only a MEMBER of the org
+function makeOrgRepo() {
+  return makeRepo({
+    ownerId: ORG_CREATOR_ID,
+    orgId: "org-1",
+    teamAccess: [],
+    org: {
+      id: "org-1",
+      handle: "acme",
+      memberships: [
+        { userId: ORG_OWNER_ID, role: "OWNER" },
+        { userId: ORG_CREATOR_ID, role: "MEMBER" },
+      ],
+    },
+  });
+}
+
 function makeLabel(overrides = {}) {
   return {
     id: "label-1",
@@ -893,6 +912,28 @@ describe("DELETE /repos/:handle/:name/issues/:number", () => {
     });
     expect(res.statusCode).toBe(403);
   });
+
+  it("an org repo's admin (an org owner who didn't create it) can delete someone else's issue (#218)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeOrgRepo() as never);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/acme/my-repo/issues/1",
+      headers: { authorization: await authHeader(app, ORG_OWNER_ID) },
+    });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("the member who created an org repo is not its admin: 403, nothing deleted (#218)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeOrgRepo() as never);
+    vi.mocked(prisma.issue.delete).mockClear();
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/repos/acme/my-repo/issues/1",
+      headers: { authorization: await authHeader(app, ORG_CREATOR_ID) },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(vi.mocked(prisma.issue.delete)).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Comment Tests ────────────────────────────────────────────────────────────
@@ -974,6 +1015,23 @@ describe("Comments on issues", () => {
       headers: { authorization: authorToken },
     });
     expect(res.statusCode).toBe(204);
+  });
+
+  it("DELETE someone else's comment: 204 for an org repo's admin, 403 for its creating member (#218)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeOrgRepo() as never);
+    vi.mocked(prisma.issueComment.findFirst).mockResolvedValue(makeComment({ authorId: AUTHOR_ID }) as never);
+    const asAdmin = await app.inject({
+      method: "DELETE",
+      url: "/repos/acme/my-repo/issues/1/comments/comment-1",
+      headers: { authorization: await authHeader(app, ORG_OWNER_ID) },
+    });
+    expect(asAdmin.statusCode).toBe(204);
+    const asCreator = await app.inject({
+      method: "DELETE",
+      url: "/repos/acme/my-repo/issues/1/comments/comment-1",
+      headers: { authorization: await authHeader(app, ORG_CREATOR_ID) },
+    });
+    expect(asCreator.statusCode).toBe(403);
   });
 });
 

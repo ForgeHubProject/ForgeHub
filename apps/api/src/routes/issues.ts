@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { canRead, canWrite, resolveRepo } from "../repo-access.js";
+import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { syncBodyReferences } from "../references-service.js";
@@ -347,9 +347,10 @@ export async function issueRoutes(app: FastifyInstance) {
     const issue = await prisma.issue.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!issue) return reply.status(404).send({ error: "Issue not found" });
 
-    // Only author or repo owner can delete
-    if (issue.authorId !== userId && repo.ownerId !== userId) {
-      return reply.status(403).send({ error: "Only the author or repository owner can delete this issue" });
+    // Only the author or an admin can delete (#218: an org repo's admins are
+    // its org's owners, not whoever created it)
+    if (issue.authorId !== userId && !canAdmin(repo, userId)) {
+      return reply.status(403).send({ error: "Only the author or a repository admin can delete this issue" });
     }
 
     // Reactions can't FK-cascade off the polymorphic subject pair (#90), so
@@ -529,9 +530,9 @@ export async function issueRoutes(app: FastifyInstance) {
     const comment = await prisma.issueComment.findFirst({ where: { id: commentId, issueId: issue.id } });
     if (!comment) return reply.status(404).send({ error: "Comment not found" });
 
-    // Author or repo owner can delete
-    if (comment.authorId !== userId && repo.ownerId !== userId) {
-      return reply.status(403).send({ error: "Only the author or repository owner can delete this comment" });
+    // The author or an admin can delete
+    if (comment.authorId !== userId && !canAdmin(repo, userId)) {
+      return reply.status(403).send({ error: "Only the author or a repository admin can delete this comment" });
     }
 
     await prisma.issueComment.delete({ where: { id: comment.id } });

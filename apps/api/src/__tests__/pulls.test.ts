@@ -187,6 +187,25 @@ function makeRepo(overrides = {}) {
   };
 }
 
+// An org repo (#218): its admins are the org's OWNERs, not whoever created it.
+const ORG_OWNER_ID = "user-org-owner";
+const ORG_CREATOR_ID = "user-org-creator"; // created the repo, only a MEMBER of the org
+function makeOrgRepo() {
+  return makeRepo({
+    ownerId: ORG_CREATOR_ID,
+    orgId: "org-1",
+    teamAccess: [],
+    org: {
+      id: "org-1",
+      handle: "acme",
+      memberships: [
+        { userId: ORG_OWNER_ID, role: "OWNER" },
+        { userId: ORG_CREATOR_ID, role: "MEMBER" },
+      ],
+    },
+  });
+}
+
 function makePR(overrides = {}) {
   return {
     id: "pr-1",
@@ -463,6 +482,24 @@ describe("PATCH /repos/:handle/:name/pulls/:number", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().state).toBe("closed");
+  });
+
+  it("closing: an org repo's admin may, the member who created it may not (#218)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeOrgRepo() as never);
+    const asAdmin = await app.inject({
+      method: "PATCH",
+      url: "/repos/acme/my-repo/pulls/1",
+      headers: { authorization: await authHeader(app, ORG_OWNER_ID) },
+      payload: { state: "closed" },
+    });
+    expect(asAdmin.statusCode).toBe(200);
+    const asCreator = await app.inject({
+      method: "PATCH",
+      url: "/repos/acme/my-repo/pulls/1",
+      headers: { authorization: await authHeader(app, ORG_CREATOR_ID) },
+      payload: { state: "closed" },
+    });
+    expect(asCreator.statusCode).toBe(403);
   });
 
   it("200 when owner closes a PR", async () => {
@@ -1546,6 +1583,25 @@ describe("draft pull requests (issue #82)", () => {
       headers: { authorization: ownerToken },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it("/ready: an org repo's admin may, the member who created it may not (#218)", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeOrgRepo() as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ isDraft: false }) as never);
+    const asAdmin = await app.inject({
+      method: "POST",
+      url: "/repos/acme/my-repo/pulls/1/ready",
+      headers: { authorization: await authHeader(app, ORG_OWNER_ID) },
+    });
+    expect(asAdmin.statusCode).toBe(200);
+    vi.mocked(prisma.pullRequest.update).mockClear();
+    const asCreator = await app.inject({
+      method: "POST",
+      url: "/repos/acme/my-repo/pulls/1/ready",
+      headers: { authorization: await authHeader(app, ORG_CREATOR_ID) },
+    });
+    expect(asCreator.statusCode).toBe(403);
+    expect(vi.mocked(prisma.pullRequest.update)).not.toHaveBeenCalled();
   });
 
   it("403 when a stranger calls /ready", async () => {

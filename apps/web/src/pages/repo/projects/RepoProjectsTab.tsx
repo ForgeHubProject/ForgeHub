@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { listRepoMembers } from "../../../api";
+import { useRepoPermission } from "../permission";
 import type { User } from "../../../types";
 import { ProjectsListView } from "./ProjectsListView";
 import { ProjectBoardView } from "./ProjectBoardView";
@@ -22,20 +21,9 @@ type Props = {
 export function RepoProjectsTab({ token, handle, repoName, user, splat, onProjectsChanged }: Props) {
   const base = `/${handle}/${repoName}`;
 
-  // Write access drives every mutating affordance. Owner is known from the route
-  // handle; a WRITER collaborator is discovered from the members list.
-  const [canWrite, setCanWrite] = useState(user.handle === handle);
-  useEffect(() => {
-    let cancelled = false;
-    listRepoMembers(token, handle, repoName)
-      .then(({ members }) => {
-        if (cancelled) return;
-        const me = members.find((m) => m.handle === user.handle);
-        setCanWrite(me?.role === "owner" || me?.role === "writer");
-      })
-      .catch(() => { if (!cancelled) setCanWrite(user.handle === handle); });
-    return () => { cancelled = true; };
-  }, [token, handle, repoName, user.handle]);
+  // Write access drives every mutating affordance: the server's verdict for
+  // this viewer and repo (#218), so org owners and team writers get it too.
+  const { canWrite } = useRepoPermission();
 
   const detail = splat.match(/^projects\/(\d+)$/);
   if (detail) {
