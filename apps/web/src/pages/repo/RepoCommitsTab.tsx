@@ -21,6 +21,8 @@ import {
   SignatureBadge,
   formatDayHeading,
 } from "./commitUi";
+import { useStoredFlag } from "../../lib/storedFlag";
+import { SidebarToggle } from "./SidebarToggle";
 
 type Props = {
   token: string;
@@ -167,42 +169,10 @@ export function FileDiffCard({
 /** Whether the commit page's file tree is shown — a per-browser preference. */
 const FILE_TREE_KEY = "fh.commit.fileTree";
 
-/**
- * A boolean kept in localStorage. Storage can be missing or refuse (privacy
- * modes); the flag then simply doesn't stick, and the page never breaks.
- */
-function useStoredFlag(key: string, initial: boolean): [boolean, (on: boolean) => void] {
-  const [value, setValue] = useState<boolean>(() => {
-    try {
-      const stored = globalThis.localStorage?.getItem(key);
-      return stored === null || stored === undefined ? initial : stored === "1";
-    } catch {
-      return initial;
-    }
-  });
-  const set = (on: boolean): void => {
-    setValue(on);
-    try {
-      globalThis.localStorage?.setItem(key, on ? "1" : "0");
-    } catch {
-      /* not remembered */
-    }
-  };
-  return [value, set];
-}
-
 function BrowseGlyph() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path fillRule="evenodd" d="m4.72 3.22-4.25 4.25a.75.75 0 0 0 0 1.06l4.25 4.25a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L2.06 8l3.72-3.72a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215Zm6.56 0a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L13.94 8l-3.72 3.72a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215l4.25-4.25a.75.75 0 0 0 0-1.06Z" />
-    </svg>
-  );
-}
-
-function SidebarGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path fillRule="evenodd" d="M6.823 7.823a.25.25 0 0 1 0 .354l-2.396 2.396A.25.25 0 0 1 4 10.396V5.604a.25.25 0 0 1 .427-.177ZM1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0ZM1.5 1.75v12.5c0 .138.112.25.25.25H9.5v-13H1.75a.25.25 0 0 0-.25.25ZM11 14.5h3.25a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H11Z" />
     </svg>
   );
 }
@@ -431,17 +401,7 @@ function CommitDetailView({
           )}
           <div className="min-w-0 flex-1 px-4 py-4 lg:pr-8">
             <div className="mb-3 hidden md:flex">
-              <Tooltip label={treeShown ? "Hide file tree" : "Show file tree"}>
-                <button
-                  type="button"
-                  onClick={() => setTreeShown(!treeShown)}
-                  aria-pressed={treeShown}
-                  aria-label={treeShown ? "Hide file tree" : "Show file tree"}
-                  className="inline-flex items-center justify-center rounded-md border border-fh-border bg-fh-surface p-1.5 text-fh-fg-muted hover:text-fh-fg hover:border-fh-border-strong cursor-pointer"
-                >
-                  <SidebarGlyph />
-                </button>
-              </Tooltip>
+              <SidebarToggle shown={treeShown} onToggle={setTreeShown} />
             </div>
             <div className="space-y-4">
               {diffFiles.map((file, i) => (

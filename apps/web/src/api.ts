@@ -942,6 +942,16 @@ export async function getTreeCommits(
   return req(`/repos/${handle}/${repoName}/tree-commits?${qs}`, { token: token ?? undefined });
 }
 
+/** Every file path at a ref, for "Go to file" (#223). `truncated`: the repo has more than the API lists. */
+export async function listRepoPaths(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  ref: string,
+): Promise<{ ref: string; sha: string; paths: string[]; truncated: boolean }> {
+  return req(`/repos/${handle}/${repoName}/paths?ref=${encodeURIComponent(ref)}`, { token: token ?? undefined });
+}
+
 export async function listTree(
   token: string | null,
   handle: string,
