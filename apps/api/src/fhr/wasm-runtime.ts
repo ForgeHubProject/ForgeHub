@@ -46,6 +46,11 @@ export type WasmHandler = {
   import?(blob: Buffer): Promise<WasmImport>;
   /** A GLB → one of `formats`. Rejects unless canExport. */
   export?(glb: Buffer, format: string): Promise<Uint8Array>;
+  /**
+   * A newer build has replaced this one: stop its worker once the calls in
+   * flight settle. A later call still works (it respawns, then stops again).
+   */
+  retire?(): void;
 };
 
 /** Parse a wasm handler's JSON merge output. */
@@ -92,6 +97,10 @@ class WasmWorkerHandler implements WasmHandler {
   private readyP: Promise<void> | null = null;
   private pending = new Map<number, Pending>();
   private seq = 0;
+  // Calls between entering call() and settling, including those still waiting
+  // for the worker to spawn — what retire() waits out.
+  private active = 0;
+  private retired = false;
   semanticMerge = false;
   previewType: string | null = null;
   canImport = false;
@@ -164,11 +173,21 @@ class WasmWorkerHandler implements WasmHandler {
       p.reject(err);
     }
     this.pending.clear();
+    this.stop();
+  }
+
+  /** Tear the worker down; the next call respawns it. */
+  private stop(): void {
     if (this.worker) {
       void this.worker.terminate();
       this.worker = null;
     }
     this.readyP = null;
+  }
+
+  retire(): void {
+    this.retired = true;
+    if (this.active === 0) this.stop();
   }
 
   private ensure(): Promise<void> {
@@ -178,22 +197,28 @@ class WasmWorkerHandler implements WasmHandler {
 
   /** One bounded call into the worker; a call that overruns kills the worker. */
   private async call(what: "diff" | "merge" | "preview" | "import" | "export", payload: Record<string, Buffer | string>): Promise<WorkerResult> {
-    await this.ensure();
-    const worker = this.worker;
-    if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
+    this.active++;
+    try {
+      await this.ensure();
+      const worker = this.worker;
+      if (!worker) throw new Error(`wasm ${this.handlerId}: worker unavailable`);
 
-    return new Promise<WorkerResult>((resolve, reject) => {
-      const id = ++this.seq;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        // Hung call: kill the worker so it can't wedge future calls; next call respawns.
-        const err = new Error(`wasm ${this.handlerId}: ${what} timed out after ${this.timeoutMs}ms`);
-        this.fail(err);
-        reject(err);
-      }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      worker.postMessage({ type: what, id, ...payload });
-    });
+      return await new Promise<WorkerResult>((resolve, reject) => {
+        const id = ++this.seq;
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          // Hung call: kill the worker so it can't wedge future calls; next call respawns.
+          const err = new Error(`wasm ${this.handlerId}: ${what} timed out after ${this.timeoutMs}ms`);
+          this.fail(err);
+          reject(err);
+        }, this.timeoutMs);
+        this.pending.set(id, { resolve, reject, timer });
+        worker.postMessage({ type: what, id, ...payload });
+      });
+    } finally {
+      // A retired build keeps no idle worker around.
+      if (--this.active === 0 && this.retired) this.stop();
+    }
   }
 
   async diff(base: Buffer, head: Buffer): Promise<StructuredDiff> {

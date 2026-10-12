@@ -140,6 +140,11 @@ export async function handlerBuild(handlerId: string): Promise<string | null> {
   return (await getManifest()).builds.get(handlerId) ?? null;
 }
 
+/** Every stamped build, handler id → build (unstamped handlers are absent). */
+export async function handlerBuilds(): Promise<Map<string, string>> {
+  return (await getManifest()).builds;
+}
+
 /** Test hook: install a manifest directly from TOML, bypassing the fetch. */
 export function __setManifestForTests(toml: string): void {
   cache = { manifest: parseManifest(toml), fetchedAt: Date.now() };
