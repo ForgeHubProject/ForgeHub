@@ -942,6 +942,20 @@ export async function getTreeCommits(
   return req(`/repos/${handle}/${repoName}/tree-commits?${qs}`, { token: token ?? undefined });
 }
 
+/** What the file header says about a file (#225): its size without downloading it, and its FHR format. */
+export type BlobMeta = {
+  ref: string;
+  sha: string;
+  path: string;
+  size: number;
+  format: { ext: string; handlerId: string; semanticDiffs: boolean } | null;
+};
+
+export async function getBlobMeta(token: string | null, handle: string, repoName: string, ref: string, path: string): Promise<BlobMeta> {
+  const qs = new URLSearchParams({ ref, path });
+  return req(`/repos/${handle}/${repoName}/blob-meta?${qs}`, { token: token ?? undefined });
+}
+
 /** Every file path at a ref, for "Go to file" (#223). `truncated`: the repo has more than the API lists. */
 export async function listRepoPaths(
   token: string | null,

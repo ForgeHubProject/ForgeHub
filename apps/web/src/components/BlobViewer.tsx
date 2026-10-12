@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchRawBlob, getBlame, getBlob, resolveRef } from "../api";
+import { useNavigate } from "react-router-dom";
+import { fetchRawBlob, getBlame, getBlob, getBlobMeta, resolveRef, type BlobMeta } from "../api";
+import { formatBytes, lineStats } from "../lib/fileFacts";
+import { historyUrl } from "../pages/repo/LatestCommitBar";
 import { convertTargets, downloadConverted, loadConvertFormats } from "../lib/convert";
 import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, Tooltip, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
@@ -73,14 +76,6 @@ function LinkIcon() {
   );
 }
 
-function BlameIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path fillRule="evenodd" d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0114.25 16H1.75A1.75 1.75 0 010 14.25V1.75zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V1.75a.25.25 0 00-.25-.25H1.75zM3.75 4h4.5a.75.75 0 010 1.5h-4.5a.75.75 0 010-1.5zm0 3h6.5a.75.75 0 010 1.5h-6.5a.75.75 0 010-1.5zm0 3h3.5a.75.75 0 010 1.5h-3.5a.75.75 0 010-1.5z" />
-    </svg>
-  );
-}
-
 function CodeGlyph() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -145,8 +140,18 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     void loadConvertFormats().then((all) => { if (!cancelled) setTargets(convertTargets(all, filename)); });
     return () => { cancelled = true; };
   }, [filename]);
-  const lineCount = content?.split("\n").length ?? 0;
-  const sizeKb = content ? content.length / 1024 : 0;
+  const navigate = useNavigate();
+  // Size and format for every file, from the tree: no download needed (#225).
+  const [meta, setMeta] = useState<BlobMeta | null>(null);
+  useEffect(() => {
+    let live = true;
+    setMeta(null);
+    getBlobMeta(token, handle, repoName, ref, path)
+      .then((m) => { if (live) setMeta(m); })
+      .catch(() => { /* the header just omits the facts */ });
+    return () => { live = false; };
+  }, [token, handle, repoName, ref, path]);
+  const stats = useMemo(() => (content === null ? null : lineStats(content)), [content]);
 
   // Manifest-mapped files (e.g. .glb) get the FHR renderer, which fetches its
   // own raw bytes — the text fetch below is skipped for them, because decoding
@@ -280,9 +285,14 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     }
   }
 
-  function openRaw() {
-    if (content === null) return;
-    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+  // Raw for every file (#225): text from what's already loaded; anything else
+  // (a model, an image) fetched with the viewer's token, so private repos work.
+  async function openRaw() {
+    const blob = semantic || content === null
+      ? await fetchRawBlob(token, handle, repoName, path, ref).catch(() => null)
+      : new Blob([content], { type: "text/plain;charset=utf-8" });
+    if (!blob) return toast("Could not load the raw file", { tone: "danger" });
+    const url = URL.createObjectURL(blob);
     window.open(url, "_blank", "noopener,noreferrer");
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
@@ -351,33 +361,71 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
       {breadcrumb}
       {beforeFile}
       <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
-        {/* File header bar */}
-        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-fh-canvas border-b border-fh-border">
-          <div className="flex items-center gap-3 text-fh-sm text-fh-fg-muted min-w-0">
-            {/* Line/size stats describe the text fetch — meaningless for a
-                semantic (binary) file, whose viewer reports its own facts. */}
+        {/* File header (#225): Code | Blame and the file's facts on the left;
+            Raw · Copy · Download, Permalink and a ⋯ menu on the right. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2 bg-fh-canvas border-b border-fh-border">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-fh-sm text-fh-fg-muted">
             {!semantic && (
-              <>
-                <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{lineCount}</span> lines</span>
-                <span className="text-fh-border-strong">·</span>
-                <span className="whitespace-nowrap"><span className="font-semibold text-fh-fg">{sizeKb.toFixed(sizeKb < 10 ? 1 : 0)}</span> KB</span>
-              </>
+              <div role="group" aria-label="View" className="inline-flex shrink-0 overflow-hidden rounded-md border border-fh-border">
+                <button
+                  type="button"
+                  aria-pressed={!blameOn}
+                  onClick={() => blameOn && toggleBlame()}
+                  className={cx("h-6 px-2.5 text-fh-sm cursor-pointer", !blameOn ? "bg-fh-surface font-semibold text-fh-fg" : "bg-fh-canvas text-fh-fg-muted hover:text-fh-fg")}
+                >
+                  Code
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={blameOn}
+                  onClick={() => !blameOn && toggleBlame()}
+                  className={cx("h-6 border-l border-fh-border px-2.5 text-fh-sm cursor-pointer", blameOn ? "bg-fh-surface font-semibold text-fh-fg" : "bg-fh-canvas text-fh-fg-muted hover:text-fh-fg")}
+                >
+                  Blame
+                </button>
+              </div>
             )}
+            <span className="whitespace-nowrap" data-testid="file-facts">
+              {stats && !semantic && (
+                <>
+                  <span className="font-semibold text-fh-fg">{stats.lines}</span> {stats.lines === 1 ? "line" : "lines"}{" "}
+                  ({stats.loc} loc)
+                  {meta && <span className="text-fh-border-strong"> · </span>}
+                </>
+              )}
+              {meta && formatBytes(meta.size)}
+              {meta?.format && (
+                <span title={meta.format.semanticDiffs
+                  ? `Diffs of ${meta.format.ext} files are semantic in this repository (FHR handler "${meta.format.handlerId}").`
+                  : `FHR has a handler for ${meta.format.ext} ("${meta.format.handlerId}"); add ${meta.format.ext} to .forge/formats for semantic diffs.`}>
+                  <span className="text-fh-border-strong"> · </span>
+                  <span className="font-semibold text-fh-fg">{meta.format.ext.slice(1).toUpperCase()}</span>
+                  {" · "}semantic diffs {meta.format.semanticDiffs ? "on" : "off"}
+                </span>
+              )}
+            </span>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            {!semantic && (
-              <>
-                <HeaderAction icon={<BlameIcon />} onClick={toggleBlame} active={blameOn}>Blame</HeaderAction>
-              </>
-            )}
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <div role="group" aria-label="File" className="inline-flex overflow-hidden rounded-md border border-fh-border">
+              {[
+                { label: "Raw", icon: <CodeGlyph />, onClick: () => void openRaw(), show: true },
+                { label: "Copy", icon: <CopyIcon />, onClick: copy, show: !semantic && content !== null },
+                { label: "Download", icon: <DownloadIcon />, onClick: () => void download(), show: true },
+              ].filter((a) => a.show).map((a, i) => (
+                <Tooltip key={a.label} label={a.label === "Copy" ? "Copy file contents" : a.label === "Raw" ? "View raw" : "Download raw file"}>
+                  <button
+                    type="button"
+                    onClick={a.onClick}
+                    aria-label={a.label}
+                    className={cx("inline-flex h-6 items-center gap-1.5 bg-fh-surface px-2 text-fh-sm text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg cursor-pointer", i > 0 && "border-l border-fh-border")}
+                  >
+                    {a.icon}
+                    <span className="hidden sm:inline">{a.label}</span>
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
             <HeaderAction icon={<LinkIcon />} onClick={copyPermalink}>Permalink</HeaderAction>
-            {!semantic && (
-              <>
-                <HeaderAction icon={<CodeGlyph />} onClick={openRaw}>Raw</HeaderAction>
-                <HeaderAction icon={<CopyIcon />} onClick={copy}>Copy</HeaderAction>
-              </>
-            )}
-            <HeaderAction icon={<DownloadIcon />} onClick={() => void download()}>Download</HeaderAction>
             {targets.length > 0 && (
               <DropdownMenu
                 align="end"
@@ -399,6 +447,25 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
                 ))}
               </DropdownMenu>
             )}
+            <DropdownMenu
+              align="end"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="More file actions"
+                  className="inline-flex h-6 items-center rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg hover:border-fh-border-strong cursor-pointer"
+                >
+                  ⋯
+                </button>
+              }
+            >
+              <DropdownItem onSelect={copyPath}>Copy path</DropdownItem>
+              <DropdownItem onSelect={() => void copyPermalink()}>Copy permalink</DropdownItem>
+              <DropdownItem onSelect={() => navigate(historyUrl(repoBase, ref, path))}>View history</DropdownItem>
+              {!semantic && (
+                <DropdownItem onSelect={toggleBlame}>{blameOn ? "View code" : "View blame"}</DropdownItem>
+              )}
+            </DropdownMenu>
           </div>
         </div>
 
