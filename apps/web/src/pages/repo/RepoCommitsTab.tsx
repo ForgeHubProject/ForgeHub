@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
 import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
@@ -23,6 +23,7 @@ import {
 } from "./commitUi";
 import { useStoredFlag } from "../../lib/storedFlag";
 import { SidebarToggle } from "./SidebarToggle";
+import { COMMITS_PER_PAGE, commitListQuery, commitListUrl } from "./commitHistory";
 
 type Props = {
   token: string;
@@ -493,6 +494,9 @@ function CommitRow({ commit, base, status }: { commit: CommitInfo; base: string;
 // ─── Commits list ───────────────────────────────────────────────────────────────
 
 function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & { base: string }) {
+  // A file's or folder's history is this list with `?path=` (#224).
+  const [search] = useSearchParams();
+  const { ref, path, page } = commitListQuery(search, defaultBranch);
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CheckSummary>>({});
   const [loading, setLoading] = useState(true);
@@ -502,7 +506,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
     setLoading(true);
     setError(null);
     setStatuses({});
-    listCommits(token, handle, repoName, defaultBranch, { perPage: 50 })
+    listCommits(token, handle, repoName, ref, { path: path ?? undefined, page, perPage: COMMITS_PER_PAGE })
       .then((d) => {
         setCommits(d.commits);
         // Batch-fetch CI status for the visible shas (best-effort; empty when no CI).
@@ -512,7 +516,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
-  }, [token, handle, repoName, defaultBranch]);
+  }, [token, handle, repoName, ref, path, page]);
 
   if (loading) {
     return (
@@ -555,8 +559,8 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
       <div className="rounded-md border border-fh-border bg-fh-surface">
         <EmptyState
           icon={<CommitNodeIcon size={28} />}
-          title="No commits yet"
-          description="Push your first commit to see the history here."
+          title={page > 1 ? "No older commits" : path ? `No commits change ${path}` : "No commits yet"}
+          description={page > 1 || path ? `On ${ref}.` : "Push your first commit to see the history here."}
         />
       </div>
     );
@@ -566,12 +570,28 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-1.5 text-fh-sm text-fh-fg-muted">
+      <div className="mb-4 flex flex-wrap items-center gap-1.5 text-fh-sm text-fh-fg-muted">
         <CommitNodeIcon size={16} className="text-fh-fg-subtle" />
-        <span>Commits on</span>
+        {path ? (
+          <>
+            <span>History for</span>
+            <span className="font-mono text-fh-xs font-semibold text-fh-fg break-all">{path}</span>
+            <span>on</span>
+          </>
+        ) : (
+          <span>Commits on</span>
+        )}
         <span className="rounded-full border border-fh-border bg-fh-surface-muted px-2 py-0.5 font-mono text-fh-xs text-fh-fg">
-          {defaultBranch}
+          {ref}
         </span>
+        {path && (
+          <Link
+            to={commitListUrl(base, { ref, path: null, page: 1 }, defaultBranch)}
+            className="ml-1 text-fh-xs text-fh-accent-fg no-underline hover:underline"
+          >
+            Show all commits
+          </Link>
+        )}
       </div>
 
       <ol className="relative space-y-6 before:absolute before:bottom-3 before:left-[9px] before:top-3 before:w-px before:bg-fh-border">
@@ -591,6 +611,26 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
           </li>
         ))}
       </ol>
+
+      {/* GitHub's paging: Newer / Older (#224). A full page means there may be more. */}
+      {(page > 1 || commits.length === COMMITS_PER_PAGE) && (
+        <nav aria-label="Commit pages" className="mt-6 flex justify-center gap-2">
+          {page > 1 ? (
+            <Link to={commitListUrl(base, { ref, path, page: page - 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
+              Newer
+            </Link>
+          ) : (
+            <span className="rounded-md border border-fh-border px-3 py-1.5 text-fh-sm text-fh-fg-subtle">Newer</span>
+          )}
+          {commits.length === COMMITS_PER_PAGE ? (
+            <Link to={commitListUrl(base, { ref, path, page: page + 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
+              Older
+            </Link>
+          ) : (
+            <span className="rounded-md border border-fh-border px-3 py-1.5 text-fh-sm text-fh-fg-subtle">Older</span>
+          )}
+        </nav>
+      )}
     </div>
   );
 }

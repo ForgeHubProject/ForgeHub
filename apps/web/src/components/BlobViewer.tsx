@@ -21,6 +21,8 @@ type Props = {
   ref: string;
   path: string;
   repoBase: string;
+  /** Drawn between the breadcrumb and the file (the file page's latest-commit bar, #224). */
+  beforeFile?: React.ReactNode;
 };
 
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -118,7 +120,7 @@ function HeaderAction({ onClick, icon, children, href, active }: {
   );
 }
 
-export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Props) {
+export function BlobViewer({ token, handle, repoName, ref, path, repoBase, beforeFile }: Props) {
   const { toast } = useToast();
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -319,6 +321,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     return (
       <div>
         {breadcrumb}
+        {beforeFile}
         <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
           <div className="h-9 bg-fh-canvas border-b border-fh-border" />
           <div className="p-4 space-y-2">
@@ -335,6 +338,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     return (
       <div>
         {breadcrumb}
+        {beforeFile}
         <div className="border border-fh-border rounded-md bg-fh-surface p-8 text-center text-fh-danger-fg">
           {error ?? "File not found"}
         </div>
@@ -345,6 +349,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
   return (
     <div>
       {breadcrumb}
+      {beforeFile}
       <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
         {/* File header bar */}
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-fh-canvas border-b border-fh-border">
