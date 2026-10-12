@@ -155,6 +155,16 @@ export async function getFhrFormats(): Promise<Record<string, string>> {
 }
 
 /**
+ * Each handler's current build from the same manifest projection (handler id →
+ * build; an unstamped handler is absent). A renderer bundle is loaded with its
+ * build in the URL so a new build is never answered from the browser's cache.
+ */
+export async function getFhrBuilds(): Promise<Record<string, string>> {
+  const { builds } = await req<{ builds?: Record<string, string> }>("/fhr/formats");
+  return builds ?? {};
+}
+
+/**
  * Fetch the raw bytes of a file at a commit as a Blob (auth-aware).
  * Used by client renderers that need the actual file — the gltf-scene 3D
  * viewport fetches the head/base blobs to build its mesh. The caller wraps the
