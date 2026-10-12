@@ -2519,6 +2519,19 @@ export async function deleteDeployKey(token: string, handle: string, repoName: s
   return req(`/repos/${handle}/${repoName}/keys/${id}`, { method: "DELETE", token });
 }
 
+/**
+ * The HTTPS clone URL shown in the clone box. The API is often served from the
+ * site's own origin (VITE_API_URL empty), which leaves `API_BASE` blank or
+ * relative — and `git clone /git/owner/repo.git` is not a URL anyone can use.
+ * So a relative base is resolved against the page's origin.
+ */
+export function httpsCloneUrl(opts: { apiBase: string; origin: string; handle: string; repoName: string }): string {
+  const base = /^https?:\/\//i.test(opts.apiBase)
+    ? opts.apiBase.replace(/\/+$/, "")
+    : `${opts.origin.replace(/\/+$/, "")}${opts.apiBase ? `/${opts.apiBase.replace(/^\/+|\/+$/g, "")}` : ""}`;
+  return `${base}/git/${opts.handle}/${opts.repoName}.git`;
+}
+
 /** Server configuration info (issue #154) — public, no auth required. */
 export type ServerInfo = {
   sshEnabled: boolean;
