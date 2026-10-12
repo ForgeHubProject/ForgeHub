@@ -95,4 +95,34 @@ describe("officialWasmDiff", () => {
     await officialWasmDiff("b.gltf", gltfExts, Buffer.from("c"), Buffer.from("d"), d);
     expect(d.instantiate).toHaveBeenCalledTimes(1);
   });
+
+  it("loads the new build when the manifest names one, and retires the old instance", async () => {
+    // FHR republishes the wasm at the SAME URL; only the manifest's build says
+    // it changed. Keyed by handler id alone, the first build ran until restart.
+    const retired: string[] = [];
+    let loads = 0;
+    const d = deps({
+      instantiate: vi.fn(async () => {
+        const name = `build-${++loads}`;
+        return {
+          diff: async () => ({ ...sampleDiff, changes: [{ path: name, kind: "modified" as const }] }),
+          retire: () => retired.push(name),
+        };
+      }),
+    });
+
+    const before = await officialWasmDiff("a.gltf", gltfExts, Buffer.from("a"), Buffer.from("b"), d);
+    expect(before?.diff.changes[0]?.path).toBe("build-1");
+
+    __setManifestForTests(MANIFEST.replaceAll('build = "e520cc6"', 'build = "6b5162d"'));
+    const after = await officialWasmDiff("a.gltf", gltfExts, Buffer.from("a"), Buffer.from("b"), d);
+    expect(after?.diff.changes[0]?.path).toBe("build-2");
+    expect(d.fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(retired).toEqual(["build-1"]));
+
+    // Same build again: the new instance is reused, nothing else retires.
+    await officialWasmDiff("b.gltf", gltfExts, Buffer.from("c"), Buffer.from("d"), d);
+    expect(d.instantiate).toHaveBeenCalledTimes(2);
+    expect(retired).toEqual(["build-1"]);
+  });
 });
