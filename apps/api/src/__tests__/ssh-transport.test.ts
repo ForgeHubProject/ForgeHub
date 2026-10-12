@@ -125,3 +125,10 @@ describe("decideAccess — deploy key", () => {
     expect(allowed(decideAccess(deployActor("repo-1", true), repo, "git-upload-pack"))).toBe(true);
   });
 });
+
+describe("parseGitCommand length cap", () => {
+  it("refuses an absurdly long command", async () => {
+    const { parseGitCommand } = await import("../ssh/server.js");
+    expect(parseGitCommand(`git-upload-pack '${"a".repeat(5000)}/b.git'`)).toBeNull();
+  });
+});

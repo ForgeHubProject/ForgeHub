@@ -82,3 +82,21 @@ export function forwardKeys(env: NodeJS.ProcessEnv = process.env): ParsedPublicK
 export function isForwardKey(raw: Buffer, keys: ParsedPublicKey[] = forwardKeys()): boolean {
   return keys.some((k) => k.raw.equals(raw));
 }
+
+/**
+ * Is `ip` a loopback or private-network address? The host's sshd reaches ForgeHub
+ * over loopback, which from inside a container looks like the bridge gateway
+ * (private). A connection from a public address cannot be the host's sshd, so
+ * forwarded auth refuses it: a mistakenly public SSH port then cannot be used with
+ * the forward key, whoever holds it.
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const addr = ip.startsWith("::ffff:") ? ip.slice(7) : ip; // IPv4-mapped IPv6
+  if (addr === "::1") return true;
+  if (/^f[cd][0-9a-f]{2}:/i.test(addr) || /^fe80:/i.test(addr)) return true; // ULA, link-local
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if ([a, b, Number(m[3]), Number(m[4])].some((n) => n > 255)) return false;
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}

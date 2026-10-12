@@ -10,7 +10,7 @@ import { resolveRepo, canRead, canWrite, type RepoAccessInput } from "../repo-ac
 import { fingerprintFromRaw } from "./keys.js";
 import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
-import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey } from "./forward.js";
+import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isPrivateAddress } from "./forward.js";
 
 const { Server, utils: sshUtils } = ssh2;
 
@@ -98,6 +98,9 @@ export function failureRecordCount(): number {
  * the two git exec commands are accepted — no shell, no pty, no port forwarding.
  */
 
+/** No real git command is anywhere near this long; refuse before running a regex on it. */
+const MAX_COMMAND_LENGTH = 4096;
+
 type GitService = "git-upload-pack" | "git-receive-pack";
 
 type ParsedGitCommand = { service: GitService; ownerHandle: string; repoName: string };
@@ -111,6 +114,7 @@ type ParsedGitCommand = { service: GitService; ownerHandle: string; repoName: st
  * channel accepts ONLY these two commands.
  */
 export function parseGitCommand(command: string): ParsedGitCommand | null {
+  if (command.length > MAX_COMMAND_LENGTH) return null;
   const trimmed = command.trim();
   const m = /^(git-upload-pack|git-receive-pack)\s+(.+)$/.exec(trimmed);
   if (!m) return null;
@@ -409,6 +413,13 @@ function onForwardedAuthentication(
   bind: (actor: BoundActor, ip?: string) => void,
   keys: ReturnType<typeof forwardKeys>,
 ): void {
+  if (!isPrivateAddress(ip)) {
+    // Not the host's sshd. Count it, so a scan from one address is throttled too.
+    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not a loopback/private address");
+    recordAuthFailure(ip);
+    ctx.reject();
+    return;
+  }
   if (isRateLimited(ip)) {
     ctx.reject();
     return;
@@ -505,6 +516,12 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
   });
 
   app.log.info(`SSH git transport listening on port ${port}`);
+  if (forwardKeys().length > 0) {
+    app.log.warn(
+      "SSH forwarding is enabled: the forward key can act as ANY registered key. " +
+        "Publish this SSH port on loopback only (FORGEHUB_SSH_BIND=127.0.0.1).",
+    );
+  }
 
   return {
     port,
