@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, getCheckSummary, getTreeCommits, listCommits, listRepoPaths, listTree, sshCloneUrl } from "../../api";
+import { API_BASE, downloadArchive, httpsCloneUrl, getCheckSummary, getTreeCommits, listCommits, listRepoPaths, listTree, sshCloneUrl } from "../../api";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
@@ -97,11 +97,12 @@ function CloneDropdown({ token, handle, repoName, visibility, currentRef, sshPor
   sshPort?: number | null; sshHost?: string | null;
 }) {
   const { toast } = useToast();
-  const httpsUrl = `${API_BASE}/git/${handle}/${repoName}.git`;
   // SSH is offered only when the server config exposes a port (issue #116). The
   // host comes from the browser unless the server pins an explicit override.
   const sshEnabled = typeof sshPort === "number" && sshPort > 0;
   const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+  const httpsUrl = httpsCloneUrl({ apiBase: API_BASE, origin, handle, repoName });
   const sshUrl = sshEnabled ? sshCloneUrl({ handle, repoName, sshPort, sshHost, hostname }) : "";
   const [protocol, setProtocol] = useState<"https" | "ssh">("https");
   const [downloading, setDownloading] = useState(false);
