@@ -20,6 +20,7 @@ import {
   ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, KebabIcon, LockIcon,
   PencilIcon, PinIcon, TransferIcon, UnlockIcon,
 } from "./icons";
+import { useRepoPermission } from "../permission";
 
 /** One timeline entry: an author header bar over a rendered-markdown body. */
 function TimelineCard({
@@ -54,6 +55,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
   const repoRef = { owner: handle, name: repoName };
 
   const [issue, setIssue] = useState<Issue | null>(null);
+  const { canWrite } = useRepoPermission();
   const [comments, setComments] = useState<IssueComment[]>([]);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [allLabels, setAllLabels] = useState<Label[]>([]);
@@ -283,10 +285,12 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
   }
 
   const isOpen = issue.state === "open";
-  const canEdit = issue.author === user.handle || handle === user.handle;
-  // Writer/owner gate for triage actions (pin / lock / transfer).
-  const isWriter = members.some((m) => m.handle === user.handle && (m.role === "owner" || m.role === "writer"));
-  const canManage = isWriter || handle === user.handle;
+  // The server's rules (#218): the author or a writer may edit the issue
+  // (title, body, state, assignee); triage (labels, milestone, time, pin,
+  // lock, transfer) needs write access.
+  const isWriter = canWrite;
+  const canEdit = issue.author === user.handle || canWrite;
+  const canManage = canWrite;
   const isLocked = !!issue.locked;
 
   // Comments and non-comment events, interleaved chronologically.
@@ -508,7 +512,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             allLabels={allLabels}
             selected={issue.labels}
             onToggle={toggleLabel}
-            canEdit={canEdit}
+            canEdit={canManage}
           />
           <SidebarAssignee
             members={members}
@@ -526,7 +530,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
           <SidebarTimeTracking
             estimateMinutes={issue.estimateMinutes}
             spentMinutes={issue.spentMinutes}
-            canEdit={canEdit}
+            canEdit={canManage}
             onSetEstimate={(m) => setIssueEstimate(token, handle, repoName, number, m).then(refreshIssue)}
             onSetSpent={(m) => setIssueSpent(token, handle, repoName, number, m).then(refreshIssue)}
           />

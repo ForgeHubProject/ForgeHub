@@ -4,6 +4,7 @@ import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, markPullReady, m
 import type { PullRequest } from "../../../types";
 import { Button, ConfirmDialog, DropdownMenu, Icons, RelativeTime, cx } from "../../../ui";
 import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, GitPullRequestDraftIcon, PRStateIcon } from "./prShared";
+import { useRepoPermission } from "../permission";
 import {
   allowedMergeOptions,
   mergeMethodOption,
@@ -14,6 +15,9 @@ import {
 } from "./mergeMethods";
 
 /** Back-arrow glyph for the revert action (token-tinted, currentColor). */
+/** What a reader sees where the merge controls would be, as on GitHub. */
+const WRITE_ONLY_NOTE = "Only those with write access to this repository can merge pull requests.";
+
 function RevertIcon({ size = 15, className }: { size?: number; className?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" className={className} aria-hidden="true">
@@ -52,6 +56,7 @@ export function MergeBox({
   repoName,
   pr,
   canMarkReady,
+  canClose,
   onUpdate,
 }: {
   token: string;
@@ -59,9 +64,13 @@ export function MergeBox({
   repoName: string;
   pr: PullRequest;
   canMarkReady: boolean;
+  /** Closing needs the author or an admin (the API's rule, #218). */
+  canClose: boolean;
   onUpdate: (next: PullRequest) => void;
 }) {
   const navigate = useNavigate();
+  // Merge, auto-merge, revert and conflict resolution need write access (#218).
+  const { canWrite } = useRepoPermission();
   const [merging, setMerging] = useState(false);
   const [readying, setReadying] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -225,16 +234,18 @@ export function MergeBox({
             {pr.mergedAt ? " " : ""}
             {pr.mergedAt && <RelativeTime className="font-normal text-fh-fg-muted" date={pr.mergedAt} />}
           </p>
-          <Button
-            variant="default"
-            size="sm"
-            className="ml-auto"
-            leadingIcon={<RevertIcon size={14} />}
-            loading={reverting}
-            onClick={() => setConfirmRevert(true)}
-          >
-            Revert
-          </Button>
+          {canWrite && (
+            <Button
+              variant="default"
+              size="sm"
+              className="ml-auto"
+              leadingIcon={<RevertIcon size={14} />}
+              loading={reverting}
+              onClick={() => setConfirmRevert(true)}
+            >
+              Revert
+            </Button>
+          )}
         </div>
         {error && (
           <div className="px-4 pb-3">
@@ -290,16 +301,18 @@ export function MergeBox({
             : "merges when reviews and checks go green"}
         </span>
       </span>
-      <Button
-        variant="default"
-        size="sm"
-        className="ml-auto"
-        loading={autoMergeBusy}
-        disabled={busy && !autoMergeBusy}
-        onClick={doCancelAutoMerge}
-      >
-        Cancel auto-merge
-      </Button>
+      {canWrite && (
+        <Button
+          variant="default"
+          size="sm"
+          className="ml-auto"
+          loading={autoMergeBusy}
+          disabled={busy && !autoMergeBusy}
+          onClick={doCancelAutoMerge}
+        >
+          Cancel auto-merge
+        </Button>
+      )}
     </div>
   );
 
@@ -332,9 +345,11 @@ export function MergeBox({
                 Only the author or repository owner can mark this ready for review.
               </p>
             )}
-            <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy || readying} onClick={doClose}>
-              Close pull request
-            </Button>
+            {canClose && (
+              <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy || readying} onClick={doClose}>
+                Close pull request
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -398,6 +413,9 @@ export function MergeBox({
 
         {hasConflict ? (
           <div className="space-y-3">
+            {!canWrite ? (
+              <p className="text-fh-sm text-fh-fg-muted">{WRITE_ONLY_NOTE}</p>
+            ) : (
             <div className="rounded-md border border-fh-border bg-fh-canvas p-3">
               <p className="text-fh-sm font-semibold text-fh-fg mb-2">Resolve conflicts by choosing a side</p>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -429,15 +447,20 @@ export function MergeBox({
                 <span className="font-mono">{pr.toBranch}</span> keeps the base branch as-is.
               </p>
             </div>
+            )}
             <div className="flex items-center">
-              <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy} onClick={doClose}>
-                Close pull request
-              </Button>
+              {canClose && (
+                <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy} onClick={doClose}>
+                  Close pull request
+                </Button>
+              )}
             </div>
           </div>
         ) : (
           <div className="flex items-center gap-3 flex-wrap">
+            {!canWrite && <p className="text-fh-sm text-fh-fg-muted">{WRITE_ONLY_NOTE}</p>}
             {/* GitHub-style split button: primary action + method picker. */}
+            {canWrite && (
             <div className="inline-flex">
               <Button
                 variant={needsOverride ? "danger" : "primary"}
@@ -489,16 +512,19 @@ export function MergeBox({
                 </DropdownMenu>
               )}
             </div>
+            )}
             {/* Arm auto-merge (issue #119) — most useful exactly while a gate
                 (protection / checks) still blocks the direct merge button. */}
-            {!autoMerge && (
+            {canWrite && !autoMerge && (
               <Button variant="default" loading={autoMergeBusy} disabled={busy && !autoMergeBusy} onClick={doEnableAutoMerge}>
                 Enable auto-merge
               </Button>
             )}
-            <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy} onClick={doClose}>
-              Close pull request
-            </Button>
+            {canClose && (
+              <Button variant="danger" size="sm" className="ml-auto" loading={closing} disabled={busy} onClick={doClose}>
+                Close pull request
+              </Button>
+            )}
           </div>
         )}
       </div>

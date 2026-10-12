@@ -4,9 +4,10 @@ import {
   Button, ConfirmDialog, cx, Dialog, EmptyState, RelativeTime, Spinner, Textarea, TextInput, useToast,
 } from "../../../ui";
 import {
-  createMilestone, deleteMilestone, listMilestones, listRepoMembers, RepoMember, updateMilestone,
+  createMilestone, deleteMilestone, listMilestones, updateMilestone,
 } from "../../../api";
 import type { Milestone, User } from "../../../types";
+import { useRepoPermission } from "../permission";
 import { MilestoneProgress } from "./Sidebar";
 import { ChevronLeftIcon, MilestoneIcon } from "./icons";
 
@@ -38,7 +39,6 @@ export function MilestonesListView({ token, handle, repoName, user }: {
 
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [counts, setCounts] = useState<{ open: number; closed: number }>({ open: 0, closed: 0 });
-  const [members, setMembers] = useState<RepoMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<"open" | "closed">("open");
@@ -56,14 +56,10 @@ export function MilestonesListView({ token, handle, repoName, user }: {
   function reload() {
     setLoading(true);
     setError(null);
-    Promise.all([
-      listMilestones(token, handle, repoName, "all"),
-      listRepoMembers(token, handle, repoName).catch(() => ({ members: [] })),
-    ])
-      .then(([ms, mem]) => {
+    listMilestones(token, handle, repoName, "all")
+      .then((ms) => {
         setMilestones(ms.milestones);
         setCounts(ms.counts);
-        setMembers(mem.members);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load milestones"))
       .finally(() => setLoading(false));
@@ -72,8 +68,8 @@ export function MilestonesListView({ token, handle, repoName, user }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(reload, [token, handle, repoName]);
 
-  const isWriter =
-    members.some((m) => m.handle === user.handle && (m.role === "owner" || m.role === "writer")) || handle === user.handle;
+  // Creating, editing and closing milestones needs write access (#218).
+  const { canWrite: isWriter } = useRepoPermission();
 
   const visible = milestones.filter((m) => m.state === state);
 
