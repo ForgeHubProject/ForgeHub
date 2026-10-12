@@ -55,6 +55,7 @@ function deps(over: Partial<BrowserWasmDeps> = {}, worker?: FakeWorker): Browser
     fetchImpl: vi.fn(async () => new Response(new ArrayBuffer(8), { status: 200 })) as unknown as typeof fetch,
     createWorker: vi.fn(() => w),
     timeoutMs: 5000,
+    buildOf: async () => null, // no build known: the unversioned URL
     ...over,
   };
 }
@@ -67,6 +68,44 @@ describe("loadBrowserHandler", () => {
     await loadBrowserHandler("gltf-scene", d);
     expect(d.fetchImpl).toHaveBeenCalledWith(`${API_BASE}/handlers/gltf-scene`);
     expect(d.createWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the manifest build in the URL so the browser cannot keep an old build's wasm", async () => {
+    const d = deps({ buildOf: async () => "6b5162d" });
+    await loadBrowserHandler("gltf-scene", d);
+    expect(d.fetchImpl).toHaveBeenCalledWith(`${API_BASE}/handlers/6b5162d/gltf-scene`);
+  });
+
+  it("loads the new wasm once the manifest names a new build, and retires the old worker later", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldW = new FakeWorker(({ id }) => oldW.respond(id, RAW_DIFF));
+      const newW = new FakeWorker(({ id }) => newW.respond(id, RAW_DIFF));
+      let build = "aaaaaaa";
+      const d = deps({ buildOf: async () => build, createWorker: vi.fn().mockReturnValueOnce(oldW).mockReturnValueOnce(newW) });
+      const a = await loadBrowserHandler("gltf-scene", d);
+      build = "bbbbbbb";
+      const b = await loadBrowserHandler("gltf-scene", d);
+      expect(b).not.toBe(a);
+      expect(d.fetchImpl).toHaveBeenLastCalledWith(`${API_BASE}/handlers/bbbbbbb/gltf-scene`);
+      // the old build keeps running for calls already in flight, then stops
+      expect(oldW.terminated).toBe(false);
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+      expect(oldW.terminated).toBe(true);
+      expect(newW.terminated).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the loaded instance when the build lookup fails", async () => {
+    let build: string | null = "aaaaaaa";
+    const d = deps({ buildOf: async () => build });
+    const a = await loadBrowserHandler("gltf-scene", d);
+    build = null;
+    const b = await loadBrowserHandler("gltf-scene", d);
+    expect(b).toBe(a);
+    expect(d.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("memoizes the instance across loads (one worker for repeated diffs)", async () => {
