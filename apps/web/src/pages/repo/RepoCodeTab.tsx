@@ -30,6 +30,7 @@ import { useStoredFlag } from "../../lib/storedFlag";
 import { FileTreePane } from "./FileTreePane";
 import { GoToFile } from "./GoToFile";
 import { SidebarToggle } from "./SidebarToggle";
+import { HistoryGlyph, LatestCommitBar, historyUrl } from "./LatestCommitBar";
 
 type Props = {
   token: string;
@@ -81,13 +82,6 @@ function CompareGlyph() {
   );
 }
 
-function HistoryGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
-      <path fillRule="evenodd" d="M1.643 3.143L.427 1.927A.25.25 0 000 2.104V5.75c0 .138.112.25.25.25h3.646a.25.25 0 00.177-.427L2.715 4.215a6.5 6.5 0 11-1.18 4.458.75.75 0 10-1.493.154 8.001 8.001 0 101.6-5.684zM7.75 4a.75.75 0 01.75.75v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.75.75 0 017 8.25v-3.5A.75.75 0 017.75 4z" />
-    </svg>
-  );
-}
 
 function BookIcon() {
   return (
@@ -420,7 +414,15 @@ function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCre
             <div className="w-full sm:w-72">{goTo}</div>
           </div>
         )}
-        <BlobViewer token={token} handle={handle} repoName={repoName} ref={gitRef} path={path} repoBase={base} />
+        <BlobViewer
+          token={token}
+          handle={handle}
+          repoName={repoName}
+          ref={gitRef}
+          path={path}
+          repoBase={base}
+          beforeFile={<LatestCommitBar token={token} handle={handle} repoName={repoName} gitRef={gitRef} path={path} base={base} />}
+        />
       </div>
     </div>
   );
@@ -658,6 +660,16 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
                 {latestCommit.shortSha}
               </Link>
               <RelativeTime date={latestCommit.date} className="text-fh-xs text-fh-fg-subtle shrink-0 hidden md:block" />
+              {currentPath !== "" && (
+                <Link
+                  to={historyUrl(base, currentRef, currentPath)}
+                  className="inline-flex shrink-0 items-center gap-1 text-fh-xs font-semibold text-fh-fg no-underline hover:text-fh-accent-fg"
+                  title={`Commits that changed ${currentPath}`}
+                >
+                  <HistoryGlyph />
+                  History
+                </Link>
+              )}
               {currentPath === "" && lastCommits && lastCommits.totalCommits > 0 && (
                 <Link
                   to={`${base}/commits`}
