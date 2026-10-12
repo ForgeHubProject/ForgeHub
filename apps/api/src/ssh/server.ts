@@ -3,13 +3,14 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import ssh2 from "ssh2";
-import type { AuthContext, ServerChannel, Session } from "ssh2";
+import type { AuthContext, PublicKeyAuthContext, ServerChannel, Session } from "ssh2";
 import { bareRepoPathFromKey, sshHostKeyPath } from "../git-storage.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 import { resolveRepo, canRead, canWrite, type RepoAccessInput } from "../repo-access.js";
 import { fingerprintFromRaw } from "./keys.js";
 import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
+import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isPrivateAddress } from "./forward.js";
 
 const { Server, utils: sshUtils } = ssh2;
 
@@ -97,6 +98,9 @@ export function failureRecordCount(): number {
  * the two git exec commands are accepted — no shell, no pty, no port forwarding.
  */
 
+/** No real git command is anywhere near this long; refuse before running a regex on it. */
+const MAX_COMMAND_LENGTH = 4096;
+
 type GitService = "git-upload-pack" | "git-receive-pack";
 
 type ParsedGitCommand = { service: GitService; ownerHandle: string; repoName: string };
@@ -110,6 +114,7 @@ type ParsedGitCommand = { service: GitService; ownerHandle: string; repoName: st
  * channel accepts ONLY these two commands.
  */
 export function parseGitCommand(command: string): ParsedGitCommand | null {
+  if (command.length > MAX_COMMAND_LENGTH) return null;
   const trimmed = command.trim();
   const m = /^(git-upload-pack|git-receive-pack)\s+(.+)$/.exec(trimmed);
   if (!m) return null;
@@ -285,10 +290,34 @@ async function handleExec(
 
 // ─── connection wiring ────────────────────────────────────────────────────────
 
-function onSession(app: FastifyInstance, actor: SshActor, ip: string, accept: () => Session): void {
+/** What a connection is bound to once authenticated: a git actor, or the host's key lookup (ssh/forward.ts). */
+export type BoundActor = SshActor | { kind: "keylookup" };
+
+/**
+ * `forgehub-authorized-key <fingerprint>` — for the host sshd's AuthorizedKeysCommand.
+ * Prints the registered public key with that fingerprint (public information), or
+ * exits 1 when there is none.
+ */
+async function handleKeyLookup(command: string, stream: ServerChannel): Promise<void> {
+  const m = new RegExp(`^${KEY_LOOKUP_COMMAND}\\s+(SHA256:[A-Za-z0-9+/]{43})$`).exec(command.trim());
+  const found = m ? await resolveActorByFingerprint(m[1]) : null;
+  if (!found) {
+    fail(stream, "no such key", 1);
+    return;
+  }
+  stream.write(`${found.publicKey}\n`);
+  stream.exit(0);
+  stream.end();
+}
+
+function onSession(app: FastifyInstance, actor: BoundActor, ip: string, accept: () => Session): void {
   const session = accept();
   session.on("exec", (execAccept, execReject, info) => {
     const stream = execAccept();
+    if (actor.kind === "keylookup") {
+      void handleKeyLookup(info.command, stream).catch(() => fail(stream, "internal error", 1));
+      return;
+    }
     void handleExec(app, actor, info.command, stream, ip).catch((err) => {
       app.log.error({ err }, "ssh exec handler crashed");
       fail(stream, "internal error", 1);
@@ -305,11 +334,22 @@ export function onAuthentication(
   app: FastifyInstance,
   ctx: AuthContext,
   ip: string,
-  bind: (actor: SshActor) => void,
+  bind: (actor: BoundActor, ip?: string) => void,
 ): void {
   if (ctx.method !== "publickey") {
     ctx.reject(["publickey"]);
     return;
+  }
+
+  // Forwarded connections from the host's sshd (ssh/forward.ts): only a configured
+  // forward key may use these usernames; anyone else falls through to normal auth,
+  // where a username carries no meaning.
+  if (ctx.username === KEYS_USER || ctx.username?.startsWith("fwd.")) {
+    const keys = forwardKeys();
+    if (keys.length > 0) {
+      onForwardedAuthentication(app, ctx, ip, bind, keys);
+      return;
+    }
   }
 
   if (isRateLimited(ip)) {
@@ -365,6 +405,65 @@ export function onAuthentication(
   });
 }
 
+/** The forward-key half of auth: the key proves the HOST is calling, the username says for whom. */
+function onForwardedAuthentication(
+  app: FastifyInstance,
+  ctx: PublicKeyAuthContext,
+  ip: string,
+  bind: (actor: BoundActor, ip?: string) => void,
+  keys: ReturnType<typeof forwardKeys>,
+): void {
+  if (!isPrivateAddress(ip)) {
+    // Not the host's sshd. Count it, so a scan from one address is throttled too.
+    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not a loopback/private address");
+    recordAuthFailure(ip);
+    ctx.reject();
+    return;
+  }
+  if (isRateLimited(ip)) {
+    ctx.reject();
+    return;
+  }
+  void (async () => {
+    if (!isForwardKey(ctx.key.data, keys)) {
+      recordAuthFailure(ip);
+      ctx.reject();
+      return;
+    }
+    if (ctx.signature) {
+      const pub = sshUtils.parseKey(`${ctx.key.algo} ${ctx.key.data.toString("base64")}`);
+      const ok = !(pub instanceof Error) && ctx.blob ? pub.verify(ctx.blob, ctx.signature, ctx.hashAlgo) : false;
+      if (ok !== true) {
+        recordAuthFailure(ip);
+        ctx.reject();
+        return;
+      }
+    }
+    if (ctx.username === KEYS_USER) {
+      bind({ kind: "keylookup" });
+      ctx.accept();
+      return;
+    }
+    const target = decodeForwardUser(ctx.username);
+    const actor = target ? await resolveActorByFingerprint(target.fingerprint) : null;
+    if (!target || !actor) {
+      // The host's sshd just authenticated this key, so this is a key deleted in between.
+      app.log.warn({ ip }, "ssh: forwarded auth for an unregistered key");
+      ctx.reject();
+      return;
+    }
+    if (ctx.signature) {
+      app.log.info({ fingerprint: target.fingerprint, ip, forwarded: true }, "ssh: auth succeeded");
+      resetAuthFailures(ip);
+    }
+    bind(actor, target.ip ?? undefined);
+    ctx.accept();
+  })().catch((err) => {
+    app.log.error({ err }, "ssh forwarded authentication error");
+    ctx.reject();
+  });
+}
+
 export type SshServerHandle = { port: number; close: () => Promise<void> };
 
 /**
@@ -388,9 +487,15 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
 
   const server = new Server({ hostKeys: [hostKey] }, (client, info) => {
     // Per-connection resolved actor, set on successful auth and read at exec time.
-    let actor: SshActor | null = null;
-    const ip = info.ip ?? "unknown";
-    client.on("authentication", (ctx) => onAuthentication(app, ctx, ip, (a) => { actor = a; }));
+    let actor: BoundActor | null = null;
+    let ip = info.ip ?? "unknown";
+    client.on("authentication", (ctx) =>
+      onAuthentication(app, ctx, info.ip ?? "unknown", (a, clientIp) => {
+        actor = a;
+        // Forwarded: the peer is the host's sshd; record the person's address instead.
+        if (clientIp) ip = clientIp;
+      }),
+    );
     client.on("session", (accept) => {
       if (!actor) return; // ssh2 only emits `session` after `ready`, but guard anyway.
       onSession(app, actor, ip, accept);
@@ -411,6 +516,12 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
   });
 
   app.log.info(`SSH git transport listening on port ${port}`);
+  if (forwardKeys().length > 0) {
+    app.log.warn(
+      "SSH forwarding is enabled: the forward key can act as ANY registered key. " +
+        "Publish this SSH port on loopback only (FORGEHUB_SSH_BIND=127.0.0.1).",
+    );
+  }
 
   return {
     port,

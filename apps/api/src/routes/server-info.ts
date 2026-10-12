@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { sshHostKeyPath } from "../git-storage.js";
 import { registrationMode } from "../registration.js";
+import { sshClientConfig } from "../ssh/config.js";
 import { fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
 
 /**
@@ -15,20 +16,6 @@ import { fingerprintFromRaw, parsePublicKey } from "../ssh/keys.js";
  * The fingerprint is the SHA256 fingerprint of the ed25519 host public key,
  * in the same "SHA256:…" format ssh-keygen -lf produces.
  */
-
-function sshConfig(): { sshEnabled: boolean; sshPort: number | null; sshHost: string | null } {
-  const portRaw = process.env["FORGEHUB_SSH_PORT"];
-  if (!portRaw || !portRaw.trim()) return { sshEnabled: false, sshPort: null, sshHost: null };
-  const port = Number(portRaw);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    return { sshEnabled: false, sshPort: null, sshHost: null };
-  }
-  return {
-    sshEnabled: true,
-    sshPort: port,
-    sshHost: process.env["FORGEHUB_SSH_HOST"]?.trim() || null,
-  };
-}
 
 /** Read the persisted SSH host public key and return its fingerprint, or null. */
 async function readHostKeyFingerprint(): Promise<string | null> {
@@ -46,7 +33,7 @@ async function readHostKeyFingerprint(): Promise<string | null> {
 
 export async function serverInfoRoutes(app: FastifyInstance) {
   app.get("/server/info", async () => {
-    const config = sshConfig();
+    const config = sshClientConfig();
     const sshFingerprint = config.sshEnabled ? await readHostKeyFingerprint() : null;
     return { ...config, sshFingerprint, registration: registrationMode() };
   });

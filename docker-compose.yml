@@ -36,6 +36,10 @@ services:
       # also uncomment the `ports` block below so the port is reachable on the host.
       # SSH is TCP — nginx cannot proxy it; the API binds it directly.
       FORGEHUB_SSH_PORT: "${FORGEHUB_SSH_PORT:-}"
+      # Port clients are told to use when the host's sshd forwards port 22 here
+      # (deploy/ssh/); unset ⇒ the listening port.
+      FORGEHUB_SSH_PUBLIC_PORT: "${FORGEHUB_SSH_PUBLIC_PORT:-}"
+      FORGEHUB_SSH_FORWARD_KEY: "${FORGEHUB_SSH_FORWARD_KEY:-}"
       # Explicit hostname used in the SSH clone URL shown in the web UI.
       # When unset the browser's hostname is used (correct for most deployments).
       FORGEHUB_SSH_HOST: "${FORGEHUB_SSH_HOST:-}"
@@ -55,7 +59,7 @@ services:
     # The host port and the container port must match; to map port 22
     # externally use a host firewall rule or load-balancer redirect.
     # ports:
-    #   - "${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+    #   - "${FORGEHUB_SSH_BIND:-0.0.0.0}:${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       # forgehub-data: the durable forge — SQLite DB + bare repos. Losing it loses
       #                the instance.

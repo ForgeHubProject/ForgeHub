@@ -1,0 +1,22 @@
+#!/bin/sh
+# sshd AuthorizedKeysCommand for the `git` user (see sshd_config.forgehub).
+#   forgehub-authorized-keys <fingerprint>        (sshd passes %f)
+# Asks ForgeHub whether the presented key is registered and, if so, prints the
+# authorized_keys line for it. The line pins the key to forgehub-shell with its
+# fingerprint, so a registered key can do nothing on this host but git.
+set -eu
+CONF=${FORGEHUB_SSH_CONF:-/etc/forgehub/ssh.conf}
+# shellcheck disable=SC1090
+. "$CONF"
+
+fp=${1:-}
+case $fp in SHA256:*) ;; *) exit 1 ;; esac
+[ -z "$(printf %s "$fp" | tr -d 'A-Za-z0-9+/:')" ] || exit 1
+
+key=$(ssh -T -q -l _keys -p "${FORGEHUB_SSH_LISTEN_PORT:-2222}" \
+  -i "${FORGEHUB_FORWARD_KEY:-/etc/forgehub/forward_key}" \
+  -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="${FORGEHUB_KNOWN_HOSTS:-/etc/forgehub/known_hosts}" \
+  127.0.0.1 "forgehub-authorized-key $fp") || exit 1
+
+printf 'restrict,command="%s %s" %s\n' "${FORGEHUB_SHELL:-/usr/local/sbin/forgehub-shell}" "$fp" "$key"
