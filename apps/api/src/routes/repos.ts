@@ -1,3 +1,4 @@
+import { sshClientConfig } from "../ssh/config.js";
 import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
@@ -50,17 +51,15 @@ function fromDbCollaboratorRole(role: CollaboratorRole): "reader" | "writer" {
 
 /**
  * SSH clone config (issue #116) surfaced on every repo payload so the clone box
- * can offer an SSH tab. The port comes from server config (FORGEHUB_SSH_PORT);
+ * can offer an SSH tab. The port comes from server config (FORGEHUB_SSH_PUBLIC_PORT,
+ * else FORGEHUB_SSH_PORT — see ssh/config.ts);
  * null means the SSH transport is disabled and the web hides the SSH option.
  * `sshHost` is an optional explicit override (FORGEHUB_SSH_HOST) — when null the
  * web falls back to the browser's current hostname.
  */
 function sshCloneConfig(): { sshPort: number | null; sshHost: string | null } {
-  const portRaw = process.env["FORGEHUB_SSH_PORT"];
-  if (!portRaw || !portRaw.trim()) return { sshPort: null, sshHost: null };
-  const port = Number(portRaw);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) return { sshPort: null, sshHost: null };
-  return { sshPort: port, sshHost: process.env["FORGEHUB_SSH_HOST"]?.trim() || null };
+  const { sshPort, sshHost } = sshClientConfig();
+  return { sshPort, sshHost };
 }
 
 /** A repo reference in a fork chain: the owner handle + repo name to link to. */

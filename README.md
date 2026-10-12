@@ -376,6 +376,20 @@ Two credential kinds authenticate:
 
 SSH and HTTPS share **identical authorization and post-receive behavior**: a push over SSH runs the same branch-protection pre-receive hook and the same ingestion + webhook + CI fan-out as a push over HTTPS — the two transports are indistinguishable downstream. (v0 non-goals, as for PATs: SSH certificate authorities and per-key expiry.)
 
+#### Git on port 22
+
+To clone as `git clone git@forgehub.example:owner/repo.git` — the standard port, nothing else — while keeping the host's own sshd on 22 for administration, forward the `git` user to ForgeHub (the way GitHub does):
+
+```
+you ──22──▶ host sshd ──(git user: AuthorizedKeysCommand + forced command)──▶ 127.0.0.1:2222 ForgeHub SSH
+```
+
+1. Start ForgeHub with `FORGEHUB_SSH_PORT=2222` and `FORGEHUB_SSH_BIND=127.0.0.1` so the listener is reachable from the host only.
+2. On the host: `sudo deploy/ssh/install.sh 2222`. It creates the locked `git` account, a *forward key* (`/etc/forgehub/forward_key`, readable only by that account), installs the two helper scripts and an `sshd_config.d` drop-in that applies to the `git` user alone, validates with `sshd -t` and reloads. Other accounts log in as before.
+3. Put what it prints into ForgeHub's environment (`FORGEHUB_SSH_PUBLIC_PORT=22`, `FORGEHUB_SSH_FORWARD_KEY=…`) and restart. The web clone box then shows `git@host:owner/repo.git`.
+
+How it stays safe: the host's sshd proves *who* — the person signed in with a key registered in ForgeHub (looked up live, so deleting a key revokes it at once) — and ForgeHub still decides *what*, with the same access checks and push hooks as HTTPS. The `git` account can run only the forced command, which hands ForgeHub nothing but `git-upload-pack` / `git-receive-pack`. The forward key lets its holder act as any registered key, which is why the listener must stay on loopback and the private key stays root-owned (`0640 root:git`). Forwarded auth is also accepted only from loopback/private source addresses, so a mistakenly public SSH port cannot be used with the forward key, and ForgeHub logs a warning at startup whenever forwarding is on. To rotate or revoke the forward key, change `FORGEHUB_SSH_FORWARD_KEY` (or the file named by `FORGEHUB_SSH_FORWARD_KEY_FILE`, which is re-read on every login) — the old key stops working immediately. With no `FORGEHUB_SSH_FORWARD_KEY` set, none of this is reachable.
+
 ## Local development
 
 **Prerequisites:** Node 20+, Git 2.x.
