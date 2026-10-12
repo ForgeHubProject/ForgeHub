@@ -43,6 +43,7 @@ import { templateRoutes } from "./routes/templates.js";
 import { compositionRoutes } from "./routes/composition.js";
 import { contributorsRoutes } from "./routes/contributors.js";
 import { treeCommitsRoutes } from "./routes/tree-commits.js";
+import { repoPathsRoutes } from "./routes/repo-paths.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
 import { timelineRoutes } from "./routes/timeline.js";
@@ -195,6 +196,7 @@ export async function buildServer() {
   await app.register(compositionRoutes);
   await app.register(contributorsRoutes);
   await app.register(treeCommitsRoutes);
+  await app.register(repoPathsRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
   await app.register(userKeyRoutes);

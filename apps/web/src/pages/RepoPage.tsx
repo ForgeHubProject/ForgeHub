@@ -156,7 +156,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
   // the diffs and their 3D viewports want every pixel, and the repo header and
   // tab bar widen with it so all three stay aligned. Every other page keeps the
   // centred column.
-  const fullWidth = activeTab === "commits" && commitShaFromSplat(splat) !== null;
+  const fullWidth =
+    (activeTab === "commits" && commitShaFromSplat(splat) !== null) ||
+    (activeTab === "code" && splat.startsWith("blob/")); // the file page, #223
   const column = fullWidth ? "max-w-none px-4 lg:px-8" : "max-w-[1280px] px-4";
 
   const [repo, setRepo] = useState<Repo | null>(null);
