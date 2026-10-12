@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRawBlob, getBlame, getBlob, resolveRef } from "../api";
 import { convertTargets, downloadConverted, loadConvertFormats } from "../lib/convert";
-import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, cx, useToast } from "../ui";
+import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, Tooltip, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
 import { useSemanticFormatsReady } from "../lib/fhrFormats";
@@ -294,7 +294,26 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase }: Pro
     { label: filename },
   ];
 
-  const breadcrumb = <Breadcrumbs items={crumbs} className="mb-3" />;
+  function copyPath() {
+    void navigator.clipboard.writeText(path).then(() => toast("Path copied", { tone: "success" }));
+  }
+
+  // The breadcrumb, with GitHub's copy-path button beside it (#223).
+  const breadcrumb = (
+    <div className="mb-3 flex min-w-0 items-center gap-1">
+      <Breadcrumbs items={crumbs} className="min-w-0" />
+      <Tooltip label="Copy path">
+        <button
+          type="button"
+          onClick={copyPath}
+          aria-label="Copy path"
+          className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg cursor-pointer"
+        >
+          <CopyIcon />
+        </button>
+      </Tooltip>
+    </div>
+  );
 
   if (loading) {
     return (

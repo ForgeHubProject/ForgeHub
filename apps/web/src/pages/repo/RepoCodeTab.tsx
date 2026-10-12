@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, getCheckSummary, getTreeCommits, listCommits, listTree, sshCloneUrl } from "../../api";
+import { API_BASE, downloadArchive, getCheckSummary, getTreeCommits, listCommits, listRepoPaths, listTree, sshCloneUrl } from "../../api";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
@@ -25,6 +25,11 @@ import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry }
 import { CompositionBar } from "./CompositionBar";
 import { blobFromSplat, refLabel } from "./refs";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
+import { FileIcon, FolderIcon } from "./fileIcons";
+import { useStoredFlag } from "../../lib/storedFlag";
+import { FileTreePane } from "./FileTreePane";
+import { GoToFile } from "./GoToFile";
+import { SidebarToggle } from "./SidebarToggle";
 
 type Props = {
   token: string;
@@ -56,22 +61,6 @@ function BranchGlyph() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path fillRule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
-    </svg>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-accent-fg shrink-0" aria-hidden="true">
-      <path d="M1.75 1A1.75 1.75 0 000 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0016 13.25v-8.5A1.75 1.75 0 0014.25 3H7.5a.25.25 0 01-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="text-fh-fg-muted shrink-0" aria-hidden="true">
-      <path fillRule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z" />
     </svg>
   );
 }
@@ -363,6 +352,80 @@ function BranchSwitcher({ branches, currentRef, onRefChange, onCreateBranch, bas
   );
 }
 
+/** Whether the file page's repository tree is shown, a per-browser preference. */
+const FILE_PAGE_TREE_KEY = "fh.file.fileTree";
+
+/**
+ * The file page (#223), GitHub's anatomy: full width, the repository tree as a
+ * left pane (with the branch picker and Go to file above it), the file filling
+ * the rest. The pane hides, remembered per browser; its controls then sit
+ * above the file. It stacks above the file on narrow screens.
+ */
+function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCreateBranch }: {
+  token: string;
+  handle: string;
+  repoName: string;
+  base: string;
+  gitRef: string;
+  path: string;
+  branches: BranchInfo[];
+  onCreateBranch: (name: string, from: string) => Promise<void>;
+}) {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [treeShown, setTreeShown] = useStoredFlag(FILE_PAGE_TREE_KEY, true);
+
+  // Switching branch keeps the file when it exists there, and says so when not.
+  async function switchRef(next: string) {
+    if (next === gitRef) return;
+    try {
+      const { paths } = await listRepoPaths(token, handle, repoName, next);
+      if (paths.includes(path)) return navigate(`${base}/blob/${next}/${path}`);
+      toast(`${path} doesn't exist on ${next}`);
+    } catch {
+      /* fall through to the branch's root */
+    }
+    navigate(`${base}/tree/${next}`);
+  }
+
+  const picker = (
+    <BranchSwitcher branches={branches} currentRef={gitRef} onRefChange={(r) => void switchRef(r)} onCreateBranch={onCreateBranch} base={base} />
+  );
+  const goTo = <GoToFile token={token} handle={handle} repoName={repoName} gitRef={gitRef} base={base} />;
+
+  return (
+    <div className="-mx-4 -mt-6 flex flex-col md:flex-row lg:-mx-8">
+      {treeShown && (
+        // The pane stretches to the row's height so its divider runs the whole
+        // way down beside the file; only what's inside it is sticky, under the
+        // pinned site header (h-14).
+        <aside aria-label="Files" className="w-full shrink-0 border-b border-fh-border md:w-72 md:border-b-0 md:border-r">
+          <div className="space-y-3 px-4 py-4 md:sticky md:top-14 md:max-h-[calc(100vh-3.5rem)] md:overflow-y-auto lg:pl-8">
+            <div className="flex items-center gap-2">
+              <SidebarToggle shown onToggle={setTreeShown} />
+              <div className="min-w-0 flex-1">{picker}</div>
+            </div>
+            {goTo}
+            <div className="max-h-[40vh] overflow-y-auto md:max-h-none md:overflow-visible">
+              <FileTreePane token={token} handle={handle} repoName={repoName} gitRef={gitRef} currentPath={path} base={base} />
+            </div>
+          </div>
+        </aside>
+      )}
+      <div className="min-w-0 flex-1 px-4 py-4 lg:pr-8">
+        {!treeShown && (
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <SidebarToggle shown={false} onToggle={setTreeShown} />
+            {picker}
+            <div className="w-full sm:w-72">{goTo}</div>
+          </div>
+        )}
+        <BlobViewer token={token} handle={handle} repoName={repoName} ref={gitRef} path={path} repoBase={base} />
+      </div>
+    </div>
+  );
+}
+
 export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, social, canEditSettings }: Props) {
   const base = `/${handle}/${repoName}`;
 
@@ -372,13 +435,15 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
     const blob = blobFromSplat(splat, branches);
     if (!blob) return null;
     return (
-      <BlobViewer
+      <FilePage
         token={token}
         handle={handle}
         repoName={repoName}
-        ref={blob.ref}
+        base={base}
+        gitRef={blob.ref}
         path={blob.path}
-        repoBase={base}
+        branches={branches}
+        onCreateBranch={onCreateBranch}
       />
     );
   }
