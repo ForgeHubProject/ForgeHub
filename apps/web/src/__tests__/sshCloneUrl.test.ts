@@ -29,3 +29,22 @@ describe("sshCloneUrl", () => {
     );
   });
 });
+
+import { httpsCloneUrl } from "../api";
+
+describe("httpsCloneUrl", () => {
+  const o = { origin: "https://forgehubcode.com", handle: "touficmajdalani", repoName: "test" };
+  it("resolves a same-origin (empty) API base against the page origin", () => {
+    expect(httpsCloneUrl({ ...o, apiBase: "" })).toBe("https://forgehubcode.com/git/touficmajdalani/test.git");
+  });
+  it("resolves a relative API base against the page origin", () => {
+    expect(httpsCloneUrl({ ...o, apiBase: "/api" })).toBe("https://forgehubcode.com/api/git/touficmajdalani/test.git");
+    expect(httpsCloneUrl({ ...o, apiBase: "api/" })).toBe("https://forgehubcode.com/api/git/touficmajdalani/test.git");
+  });
+  it("keeps an absolute API base and trims its trailing slash", () => {
+    expect(httpsCloneUrl({ ...o, apiBase: "http://localhost:3001/" })).toBe("http://localhost:3001/git/touficmajdalani/test.git");
+  });
+  it("tolerates a trailing slash on the origin", () => {
+    expect(httpsCloneUrl({ ...o, origin: "https://forgehubcode.com/", apiBase: "" })).toBe("https://forgehubcode.com/git/touficmajdalani/test.git");
+  });
+});

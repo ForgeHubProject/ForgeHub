@@ -34,6 +34,12 @@ export function Dialog({ open, onClose, title, description, children, footer, si
   const restoreRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
+  // Callers pass an inline onClose, a new function on every render. Keeping it
+  // in a ref (rather than an effect dependency) stops the effect below re-running
+  // on each keystroke in a form inside the dialog, which re-focused the first
+  // focusable element and made a text field lose focus after every character.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +56,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       } else if (e.key === "Tab") {
         // Simple focus trap.
         const items = panelRef.current?.querySelectorAll<HTMLElement>(
@@ -75,7 +81,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       document.body.style.overflow = prevOverflow;
       restoreRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
