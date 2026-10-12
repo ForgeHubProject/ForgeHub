@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { handlerWasmUrl } from "../fhr/manifest.js";
+import type { FastifyReply } from "fastify";
+import { handlerBuild, handlerWasmUrl } from "../fhr/manifest.js";
 
 // Same-origin proxy + cache for official FHR handler *wasm builds*, the Tier-B
 // (in-browser compute) sibling of the /renderers bundle proxy. The web app
@@ -15,6 +16,13 @@ import { handlerWasmUrl } from "../fhr/manifest.js";
 // from the manifest; FHR_WASM_BASE is the same explicit self-hosting override
 // official-handlers.ts honors, deriving the URL from the fixed
 // `forge-handler-<id>.wasm` release convention.
+//
+// Like /renderers, each cached build is stamped with the manifest build it was
+// fetched for and answers only for that build: FHR republishes a rolling release
+// at the same URL, so the URL alone cannot tell an old wasm from a new one. The
+// web app asks for `/handlers/<build>/<asset>`; the build only busts the
+// browser's max-age cache — the server always serves the build its manifest
+// names, and a URL naming another build gets it with `no-store`.
 const WASM_BASE = process.env["FHR_WASM_BASE"];
 
 // Length-bounded: the id is unauthenticated attacker input and becomes a cache
@@ -28,7 +36,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 // handful of handlers; anything beyond that is noise, not working set.
 const CACHE_MAX_ENTRIES = 16;
 
-type CacheEntry = { bytes: Buffer | null; fetchedAt: number };
+type CacheEntry = { build: string | null; bytes: Buffer | null; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
 
 // Map iteration is insertion-ordered, so the first key is the oldest write.
@@ -71,16 +79,26 @@ async function fetchWasmAsset(url: string): Promise<Buffer | null> {
 }
 
 export async function handlerWasmRoutes(app: FastifyInstance) {
-  app.get("/handlers/:asset", async (request, reply) => {
-    const raw = (request.params as { asset: string }).asset;
+  const serve = async (raw: string, requestedBuild: string | undefined, reply: FastifyReply) => {
     const handlerId = handlerIdOf(raw);
     if (!handlerId) {
       return reply.status(400).send({ error: "invalid handler asset" });
     }
 
+    // The build the manifest names now; none under the self-hosting override
+    // (no manifest), where the TTL alone ages a build out.
+    let build: string | null = null;
+    if (!WASM_BASE) {
+      try {
+        build = await handlerBuild(handlerId);
+      } catch {
+        build = null; // manifest unreachable with no cache — handled below as missing
+      }
+    }
+
     const hit = cache.get(handlerId);
     let bytes: Buffer | null;
-    if (hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
+    if (hit && hit.build === build && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
       bytes = hit.bytes;
     } else {
       let url: string | null;
@@ -95,15 +113,29 @@ export async function handlerWasmRoutes(app: FastifyInstance) {
         }
       }
       bytes = url ? await fetchWasmAsset(url) : null;
-      cacheStore(handlerId, { bytes, fetchedAt: Date.now() });
+      cacheStore(handlerId, { build, bytes, fetchedAt: Date.now() });
     }
 
     if (bytes === null) {
       return reply.status(404).send({ error: `no wasm build for handler '${handlerId}'` });
     }
+    // A URL naming a build other than the one served (a tab that read the build
+    // before the manifest moved) gets the current wasm, but the browser must not
+    // keep it under that build's URL for an hour.
+    const mislabeled = requestedBuild !== undefined && build !== null && requestedBuild !== build;
     return reply
       .header("Content-Type", "application/wasm")
-      .header("Cache-Control", "public, max-age=3600")
+      .header("Cache-Control", mislabeled ? "no-store" : "public, max-age=3600")
       .send(bytes);
+  };
+
+  app.get("/handlers/:asset", async (request, reply) => {
+    const { asset } = request.params as { asset: string };
+    return serve(asset, undefined, reply);
+  });
+
+  app.get("/handlers/:build/:asset", async (request, reply) => {
+    const { build, asset } = request.params as { build: string; asset: string };
+    return serve(asset, build, reply);
   });
 }

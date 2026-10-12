@@ -123,3 +123,59 @@ describe("GET /handlers/:asset", () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+// FHR republishes a rolling release at the same wasm URL and stamps the new
+// build in the manifest, so the cache and the browser must follow the build.
+describe("GET /handlers/:build/:asset — follows the manifest build", () => {
+  const withBuild = (build: string) => MANIFEST.replace("e520cc6", build);
+
+  it("refetches the same upstream URL once the manifest names a new build", async () => {
+    const fetchMock = stubUpstream();
+    await app.inject({ method: "GET", url: "/handlers/e520cc6/gltf-scene" });
+    await app.inject({ method: "GET", url: "/handlers/e520cc6/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    __setManifestForTests(withBuild("a1b2c3d"));
+    await app.inject({ method: "GET", url: "/handlers/a1b2c3d/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String((fetchMock.mock.calls[1] as unknown[])[0])).toBe("https://cdn.test/fhr/forge-handler-gltf-scene.wasm");
+  });
+
+  it("a new build also invalidates the unversioned URL's cache", async () => {
+    const fetchMock = stubUpstream();
+    await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    __setManifestForTests(withBuild("a1b2c3d"));
+    await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the browser keep a matching build for an hour", async () => {
+    stubUpstream();
+    const res = await app.inject({ method: "GET", url: "/handlers/e520cc6/gltf-scene" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("public, max-age=3600");
+  });
+
+  it("serves the current wasm for a stale build URL but forbids the browser to keep it", async () => {
+    stubUpstream();
+    __setManifestForTests(withBuild("a1b2c3d"));
+    const res = await app.inject({ method: "GET", url: "/handlers/e520cc6/gltf-scene" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.rawPayload).toEqual(Buffer.from(WASM_BYTES));
+  });
+
+  it("400s on an invalid asset under a build", async () => {
+    const res = await app.inject({ method: "GET", url: "/handlers/e520cc6/..%2fetc" });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("leaves a handler with no stamped build on the TTL alone", async () => {
+    __setManifestForTests(MANIFEST.replace(', build = "e520cc6"', ""));
+    const fetchMock = stubUpstream();
+    const res = await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(res.headers["cache-control"]).toBe("public, max-age=3600");
+    await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

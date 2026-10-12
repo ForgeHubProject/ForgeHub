@@ -42,7 +42,7 @@ const BUILDS_TTL_MS = 5 * 60 * 1000;
 let builds: { fetchedAt: number; p: Promise<ReadonlyMap<string, string>> } | null = null;
 
 /** The handler's current build, or null when unstamped or the lookup failed. */
-async function currentBuild(handlerId: string): Promise<string | null> {
+export async function currentBuild(handlerId: string): Promise<string | null> {
   if (!builds || Date.now() - builds.fetchedAt >= BUILDS_TTL_MS) {
     const entry = {
       fetchedAt: Date.now(),

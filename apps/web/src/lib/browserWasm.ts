@@ -1,4 +1,5 @@
 import { API_BASE } from "../api";
+import { currentBuild } from "./rendererBundle";
 import { parseDiffOutput, type BrowserStructuredDiff } from "./wasmHandlerLoad";
 
 export type { BrowserStructuredDiff };
@@ -39,6 +40,8 @@ export type BrowserWasmDeps = {
   fetchImpl: typeof fetch;
   createWorker: () => WorkerLike;
   timeoutMs: number;
+  /** A handler's current manifest build (null when unknown). Default: the shared /fhr/formats lookup. */
+  buildOf?: (handlerId: string) => Promise<string | null>;
 };
 
 function defaultCreateWorker(): WorkerLike {
@@ -175,38 +178,64 @@ export class WorkerWasmHandler {
   }
 }
 
-// One in-flight/loaded handler per wasm build — the build is a singleton module.
-const cache = new Map<string, Promise<WorkerWasmHandler>>();
+// One in-flight/loaded handler per handler id, for the build it was loaded at —
+// the build is a singleton module. A new build loads the new wasm.
+type Loaded = { build: string | null; p: Promise<WorkerWasmHandler> };
+const cache = new Map<string, Loaded>();
+
+// A replaced instance may still be finishing a call; calls are bounded by the
+// timeout, so give it that long (plus a margin) before its worker goes.
+const RETIRE_GRACE_MS = 2 * 60 * 1000;
+
+function terminateWorker(p: Promise<WorkerWasmHandler>): void {
+  p.then((h) => (h as unknown as { worker: WorkerLike | null }).worker?.terminate()).catch(() => {});
+}
 
 /** Test hook: drop memoized handler instances (and their workers). */
 export function __resetBrowserHandlers(): void {
-  for (const p of cache.values()) {
-    p.then((h) => (h as unknown as { worker: WorkerLike | null }).worker?.terminate()).catch(() => {});
-  }
+  for (const { p } of cache.values()) terminateWorker(p);
   cache.clear();
 }
 
 /**
- * Fetch a handler's official wasm build through the API proxy and spawn its
- * worker, memoized per handler so repeated diffs reuse one instance. A failed
- * load is not memoized, allowing a retry after a transient error.
+ * Where a handler's wasm is served. The build sits in the PATH (like the
+ * renderer bundle, see rendererBundleUrl): it busts the browser's hour-long
+ * cache of the old build. With no build known the unversioned URL still serves.
  */
-export function loadBrowserHandler(handlerId: string, deps: BrowserWasmDeps = defaultDeps): Promise<WorkerWasmHandler> {
-  let p = cache.get(handlerId);
-  if (!p) {
-    p = (async () => {
-      const res = await deps.fetchImpl(`${API_BASE}/handlers/${encodeURIComponent(handlerId)}`);
-      if (!res.ok) throw new Error(`wasm build for '${handlerId}' unavailable (HTTP ${res.status})`);
-      const bytes = await res.arrayBuffer();
-      const handler = new WorkerWasmHandler(bytes, handlerId, deps.createWorker, deps.timeoutMs);
-      // Surface init failures now (spawn + wait for "ready") so a bad build
-      // fails the load rather than the first diff.
-      await (handler as unknown as { ensure(): Promise<void> }).ensure();
-      return handler;
-    })();
-    p.catch(() => cache.delete(handlerId));
-    cache.set(handlerId, p);
-  }
+export function handlerWasmUrl(handlerId: string, build: string | null): string {
+  const id = encodeURIComponent(handlerId);
+  return build ? `${API_BASE}/handlers/${encodeURIComponent(build)}/${id}` : `${API_BASE}/handlers/${id}`;
+}
+
+/**
+ * Fetch a handler's official wasm build through the API proxy and spawn its
+ * worker, memoized per handler and build so repeated diffs reuse one instance
+ * until the manifest names a new build. A failed load is not memoized, allowing
+ * a retry after a transient error.
+ */
+export async function loadBrowserHandler(handlerId: string, deps: BrowserWasmDeps = defaultDeps): Promise<WorkerWasmHandler> {
+  const build = await (deps.buildOf ?? currentBuild)(handlerId).catch(() => null);
+  const hit = cache.get(handlerId);
+  // An unknown build (lookup failed) keeps whatever is already loaded.
+  if (hit && (hit.build === build || build === null)) return hit.p;
+
+  const p = (async () => {
+    const res = await deps.fetchImpl(handlerWasmUrl(handlerId, build));
+    if (!res.ok) throw new Error(`wasm build for '${handlerId}' unavailable (HTTP ${res.status})`);
+    const bytes = await res.arrayBuffer();
+    const handler = new WorkerWasmHandler(bytes, handlerId, deps.createWorker, deps.timeoutMs);
+    // Surface init failures now (spawn + wait for "ready") so a bad build
+    // fails the load rather than the first diff.
+    await (handler as unknown as { ensure(): Promise<void> }).ensure();
+    return handler;
+  })();
+  const entry: Loaded = { build, p };
+  cache.set(handlerId, entry);
+  // The replaced build finishes what it is running, then stops.
+  if (hit) setTimeout(() => terminateWorker(hit.p), RETIRE_GRACE_MS);
+  p.catch(() => {
+    if (cache.get(handlerId) === entry) cache.delete(handlerId);
+  });
   return p;
 }
 
