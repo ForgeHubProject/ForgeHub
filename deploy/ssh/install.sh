@@ -73,10 +73,17 @@ if ! sshd -t; then
   echo "sshd rejected the config; reverted. Nothing was reloaded." >&2
   exit 1
 fi
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl reload sshd 2>/dev/null || systemctl reload ssh
-else
-  service sshd reload 2>/dev/null || service ssh reload
+# The config is valid; apply it. A failed reload (no init system, unusual unit
+# name) is reported, not fatal: the drop-in is in place and takes effect on the
+# next sshd restart.
+reloaded=0
+for unit in sshd ssh; do
+  if command -v systemctl >/dev/null 2>&1 && systemctl reload "$unit" 2>/dev/null; then reloaded=1; break; fi
+  if command -v service >/dev/null 2>&1 && service "$unit" reload >/dev/null 2>&1; then reloaded=1; break; fi
+done
+if [ "$reloaded" -ne 1 ]; then
+  echo "Could not reload sshd automatically. The config is valid and installed;" >&2
+  echo "reload or restart sshd yourself (e.g. systemctl reload sshd) to apply it." >&2
 fi
 
 cat <<OUT
