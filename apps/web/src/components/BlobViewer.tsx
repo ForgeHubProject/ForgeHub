@@ -174,8 +174,20 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     () => semanticViewExtensions(manifestExts, viewDeclined),
     [manifestExts, viewDeclined],
   );
-  const semantic = isSemanticFilename(filename, semanticExts);
-  const Viewer = blameOn ? CodeViewer : resolveFileViewer(filename, semanticExts);
+  // A renderer draws this file. For a text file (a notebook, an OBJ) the
+  // reader can switch to its source: Preview | Code | Blame (FHR#112), GitHub's
+  // order, Preview first. `semantic` is the renderer actually on screen.
+  const rendered = isSemanticFilename(filename, semanticExts);
+  const [source, setSource] = useState(false);
+  useEffect(() => setSource(false), [path, ref]);
+  const semantic = rendered && !source;
+  // Loading in the same render that leaves the renderer, so "File not found"
+  // (no content, not semantic) never shows before the text arrives.
+  const toSource = () => {
+    if (content === null) setLoading(true);
+    setSource(true);
+  };
+  const Viewer = blameOn ? CodeViewer : semantic ? resolveFileViewer(filename, semanticExts) : resolveFileViewer(filename);
   const declineView = useCallback(() => {
     // Loading now, in the same render that drops `semantic`, so the "File not
     // found" branch (no content, not semantic) never shows before the fetch.
@@ -365,24 +377,27 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
             Raw · Copy · Download, Permalink and a ⋯ menu on the right. */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2 bg-fh-canvas border-b border-fh-border">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-fh-sm text-fh-fg-muted">
-            {!semantic && (
+            {(!rendered || meta?.binary === false) && (
               <div role="group" aria-label="View" className="inline-flex shrink-0 overflow-hidden rounded-md border border-fh-border">
-                <button
-                  type="button"
-                  aria-pressed={!blameOn}
-                  onClick={() => blameOn && toggleBlame()}
-                  className={cx("h-6 px-2.5 text-fh-sm cursor-pointer", !blameOn ? "bg-fh-surface font-semibold text-fh-fg" : "bg-fh-canvas text-fh-fg-muted hover:text-fh-fg")}
-                >
-                  Code
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={blameOn}
-                  onClick={() => !blameOn && toggleBlame()}
-                  className={cx("h-6 border-l border-fh-border px-2.5 text-fh-sm cursor-pointer", blameOn ? "bg-fh-surface font-semibold text-fh-fg" : "bg-fh-canvas text-fh-fg-muted hover:text-fh-fg")}
-                >
-                  Blame
-                </button>
+                {[
+                  ...(rendered ? [{ label: "Preview", on: !source, go: () => { if (blameOn) toggleBlame(); setSource(false); } }] : []),
+                  { label: "Code", on: !semantic && !blameOn, go: () => { toSource(); if (blameOn) toggleBlame(); } },
+                  { label: "Blame", on: !semantic && blameOn, go: () => { toSource(); if (!blameOn) toggleBlame(); } },
+                ].map((b, i) => (
+                  <button
+                    key={b.label}
+                    type="button"
+                    aria-pressed={b.on}
+                    onClick={() => { if (!b.on) b.go(); }}
+                    className={cx(
+                      "h-6 px-2.5 text-fh-sm cursor-pointer",
+                      i > 0 && "border-l border-fh-border",
+                      b.on ? "bg-fh-surface font-semibold text-fh-fg" : "bg-fh-canvas text-fh-fg-muted hover:text-fh-fg",
+                    )}
+                  >
+                    {b.label}
+                  </button>
+                ))}
               </div>
             )}
             <span className="whitespace-nowrap" data-testid="file-facts">

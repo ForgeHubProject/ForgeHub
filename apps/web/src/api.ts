@@ -958,6 +958,8 @@ export type BlobMeta = {
   sha: string;
   path: string;
   size: number;
+  /** git's test: a NUL in the first 8000 bytes. A text file a renderer draws also gets Code and Blame. */
+  binary: boolean;
   format: { ext: string; handlerId: string; semanticDiffs: boolean } | null;
 };
 
