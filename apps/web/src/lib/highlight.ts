@@ -72,6 +72,38 @@ export function highlightCode(code: string, lang: string): string {
   }
 }
 
+/**
+ * Split highlight.js output into one HTML string per source line, so line N of
+ * the file is always entry N. A token that spans lines (a multi-line string or
+ * comment) is closed at the end of each line and reopened at the start of the
+ * next, so every line's HTML stands on its own and no line starts with the
+ * previous one's newline.
+ */
+export function splitHighlightedLines(html: string): string[] {
+  const lines: string[] = [];
+  const open: string[] = []; // the <span …> tags still open, outermost first
+  let line = "";
+  // highlight.js escapes the code, so "<" only ever starts a tag here.
+  const token = /<span[^>]*>|<\/span>|\n|[^<\n]+|</g;
+  for (const m of html.matchAll(token)) {
+    const t = m[0];
+    if (t === "\n") {
+      lines.push(line + "</span>".repeat(open.length));
+      line = open.join("");
+    } else if (t.startsWith("<span")) {
+      open.push(t);
+      line += t;
+    } else if (t === "</span>") {
+      open.pop();
+      line += t;
+    } else {
+      line += t;
+    }
+  }
+  lines.push(line + "</span>".repeat(open.length));
+  return lines;
+}
+
 export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
