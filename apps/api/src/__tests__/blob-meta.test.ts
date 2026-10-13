@@ -36,6 +36,9 @@ beforeAll(async () => {
     ".forge/formats": ".obj\n",
     "models/trap.obj": "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
     "models/desk.glb": "glTF-ish bytes",
+    "models/real.glb": "glTF\u0002\u0000\u0000\u0000binary",
+    "big.txt": "x".repeat(20000),
+    "late-nul.txt": "y".repeat(9000) + "\u0000",
   }, "initial");
   await makeCommit(repo.workDir, { "models/trap.obj": "v 0 0 0\n" }, "smaller trap", "feature");
   app = await createTestServer();
@@ -61,6 +64,15 @@ describe("GET /repos/:handle/:name/blob-meta", () => {
   it("names the handler but says semantic diffs are off when the repo hasn't opted in", async () => {
     const res = await get("ref=main&path=models%2Fdesk.glb");
     expect(res.json()).toMatchObject({ size: 14, format: { ext: ".glb", handlerId: "gltf-scene", semanticDiffs: false } });
+  });
+
+  it("says whether the file is binary, by git's own test (a NUL in the first 8000 bytes)", async () => {
+    expect((await get("ref=main&path=README.md")).json().binary).toBe(false);
+    expect((await get("ref=main&path=models%2Ftrap.obj")).json().binary).toBe(false);
+    expect((await get("ref=main&path=models%2Freal.glb")).json().binary).toBe(true);
+    expect((await get("ref=main&path=big.txt")).json()).toMatchObject({ size: 20000, binary: false });
+    // Past the first 8000 bytes git doesn't look, so neither do we.
+    expect((await get("ref=main&path=late-nul.txt")).json().binary).toBe(false);
   });
 
   it("reads the size at the ref, and defaults to the default branch", async () => {
