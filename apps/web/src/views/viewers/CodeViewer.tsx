@@ -1,28 +1,8 @@
 import { Link } from "react-router-dom";
 import { RelativeTime, cx } from "../../ui";
-import { highlightCode, langForFilename } from "../../lib/highlight";
+import { highlightCode, langForFilename, splitHighlightedLines } from "../../lib/highlight";
 import type { BlameHunk } from "../../types";
 import type { FileViewerProps } from "../fileViewerTypes";
-
-function splitHighlightedLines(highlighted: string): string[] {
-  const result: string[] = [];
-  let currentLine = "";
-  let depth = 0;
-  const parts = highlighted.split("\n");
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    currentLine += (i > 0 ? "\n" : "") + part;
-    depth += (part.match(/<span[^>]*>/g) ?? []).length;
-    depth -= (part.match(/<\/span>/g) ?? []).length;
-    if (depth <= 0) {
-      result.push(currentLine);
-      currentLine = "";
-      depth = 0;
-    }
-  }
-  if (currentLine) result.push(currentLine);
-  return result;
-}
 
 /** The blame chrome shown once per hunk, spanning its lines via rowSpan. */
 function BlameGutterCell({ hunk, span, repoBase }: { hunk: BlameHunk; span: number; repoBase?: string }) {
