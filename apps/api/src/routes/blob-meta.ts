@@ -1,15 +1,51 @@
 import type { FastifyInstance } from "fastify";
+import { spawn } from "node:child_process";
 import { extname } from "node:path";
+import { bareRepoPathFromKey } from "../git-storage.js";
 import { activeFormatsAtCommit, blobSizeAtCommit, defaultBranch, resolveRefSha } from "../git-utils.js";
 import { officialHandlerId } from "../fhr/official-handlers.js";
 import { canRead, resolveRepo } from "../repo-access.js";
 
+/** Bytes inspected for a NUL, as git does when it decides a file is binary. */
+const BINARY_SNIFF = 8000;
+
+/**
+ * Whether a blob is binary: a NUL in its first 8000 bytes, git's own test.
+ * Streams only those bytes, so a large model is never read whole.
+ */
+function isBinaryBlob(storageKey: string, sha: string, path: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["cat-file", "blob", `${sha}:${path}`], { cwd: bareRepoPathFromKey(storageKey) });
+    let seen = 0;
+    let done = false;
+    const finish = (binary: boolean) => {
+      if (done) return;
+      done = true;
+      child.kill();
+      resolve(binary);
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      const look = chunk.subarray(0, BINARY_SNIFF - seen);
+      if (look.includes(0)) return finish(true);
+      seen += look.length;
+      if (seen >= BINARY_SNIFF) finish(false);
+    });
+    child.on("error", (e) => { if (!done) { done = true; reject(e); } });
+    child.on("close", (code) => {
+      if (done) return;
+      if (code !== 0) { done = true; return reject(new Error(`git cat-file exited with ${code}`)); }
+      finish(false);
+    });
+  });
+}
+
 export async function blobMetaRoutes(app: FastifyInstance) {
   // GET /repos/:handle/:name/blob-meta?ref=&path=  — what the file page's
   // header says about any file (#225), without downloading it: its size (from
-  // the tree, so a 3D model's is known too), and, when FHR's manifest has a
-  // handler for its extension, which one and whether this repo has semantic
-  // diffs on for it (its .forge/formats at that commit).
+  // the tree, so a 3D model's is known too), whether it's binary (git's test,
+  // first 8000 bytes), and, when FHR's manifest has a handler for its
+  // extension, which one and whether this repo has semantic diffs on for it
+  // (its .forge/formats at that commit).
   app.get("/repos/:handle/:name/blob-meta", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name } = request.params as { handle: string; name: string };
     const { ref: refQ, path } = request.query as { ref?: string; path?: string };
@@ -35,7 +71,12 @@ export async function blobMetaRoutes(app: FastifyInstance) {
     } catch {
       handlerId = null; // manifest unreachable: the size still stands
     }
-    const semanticDiffs = handlerId ? (await activeFormatsAtCommit(storageKey, sha)).has(ext) : false;
-    return { ref, sha, path, size, format: handlerId ? { ext, handlerId, semanticDiffs } : null };
+    const [semanticDiffs, binary] = await Promise.all([
+      handlerId ? activeFormatsAtCommit(storageKey, sha).then((s) => s.has(ext)) : Promise.resolve(false),
+      // Whether the file has a source view: a text file with a renderer gets
+      // Preview | Code | Blame on its page (FHR#112).
+      isBinaryBlob(storageKey, sha, path),
+    ]);
+    return { ref, sha, path, size, binary, format: handlerId ? { ext, handlerId, semanticDiffs } : null };
   });
 }
