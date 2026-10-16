@@ -68,12 +68,13 @@ export function fetchFileDiffMetaOnce(
   path: string,
   sha: string,
   basePath?: string,
+  base?: string,
 ): Promise<FileDiffMeta> {
-  const key = `${token ?? ""}|${handle}/${repoName}|${sha}|${path}|${basePath ?? ""}`;
+  const key = `${token ?? ""}|${handle}/${repoName}|${base ?? ""}..${sha}|${path}|${basePath ?? ""}`;
   const hit = metaCache.get(key);
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit.promise;
 
-  const promise = getFileDiffMeta(token, handle, repoName, path, sha, basePath);
+  const promise = getFileDiffMeta(token, handle, repoName, path, sha, basePath, base);
   promise.catch(() => {
     // Don't strand a rejection in the cache — but only drop it if it's still
     // the entry we put there.
@@ -109,6 +110,7 @@ export function useFileDiffMeta(
   sha: string,
   enabled = true,
   basePath?: string,
+  base?: string,
 ): FileDiffMeta | null {
   const [meta, setMeta] = useState<FileDiffMeta | null>(null);
   // repoBase is "/handle/repo"
@@ -116,7 +118,7 @@ export function useFileDiffMeta(
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    fetchFileDiffMetaOnce(token, handle, repoName, path, sha, basePath)
+    fetchFileDiffMetaOnce(token, handle, repoName, path, sha, basePath, base)
       .then((m) => {
         if (!cancelled) setMeta(m);
       })
@@ -126,7 +128,7 @@ export function useFileDiffMeta(
     return () => {
       cancelled = true;
     };
-  }, [token, handle, repoName, path, sha, enabled, basePath]);
+  }, [token, handle, repoName, path, sha, enabled, basePath, base]);
   return meta;
 }
 

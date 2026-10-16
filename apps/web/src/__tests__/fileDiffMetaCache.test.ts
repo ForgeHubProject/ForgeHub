@@ -47,7 +47,18 @@ describe("fetchFileDiffMetaOnce", () => {
     await fetchFileDiffMetaOnce("tok", "alice", "scene", "parts/model.gltf", "main");
     await fetchFileDiffMetaOnce("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf");
     expect(getFileDiffMeta).toHaveBeenCalledTimes(2);
-    expect(getFileDiffMeta).toHaveBeenCalledWith("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf");
+    expect(getFileDiffMeta).toHaveBeenCalledWith("tok", "alice", "scene", "parts/model.gltf", "main", "model.gltf", undefined);
+  });
+
+  // A PR asks against its merge base; the same file at the same head in a
+  // commit view asks against the parent. Two different blob pairs.
+  it("keys on the base, so a PR's merge-base diff and a commit's parent diff don't collide", async () => {
+    const mb = "c".repeat(40);
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "model.gltf", "feature", undefined, mb);
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "model.gltf", "feature");
+    await fetchFileDiffMetaOnce("tok", "alice", "scene", "model.gltf", "feature", undefined, mb);
+    expect(getFileDiffMeta).toHaveBeenCalledTimes(2);
+    expect(getFileDiffMeta).toHaveBeenCalledWith("tok", "alice", "scene", "model.gltf", "feature", undefined, mb);
   });
 
   // Regression: a PR file view keys on the head BRANCH, which moves.
