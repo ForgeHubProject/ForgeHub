@@ -78,6 +78,7 @@ export function FhrFileDiffViewer({
   file,
   repoBase,
   headRef,
+  baseRef,
   token,
   computeTier,
   onComputeTierChange,
@@ -125,6 +126,7 @@ export function FhrFileDiffViewer({
       oversized: status === "too-large",
     }),
     basePath,
+    baseRef,
   );
 
   const browserReady =
@@ -203,7 +205,7 @@ export function FhrFileDiffViewer({
           }
         } else {
           // Tier S: the canonical server-computed diff (the record for review).
-          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef, basePath);
+          const result = await getFileSemanticDiff(token, handle, repoName, path, headRef, basePath, baseRef);
           if (cancelled) return revokeAll();
           // Official handler exists but the repo hasn't opted the format in —
           // show the actionable card instead of a silent fallback (#73). Only
@@ -290,7 +292,7 @@ export function FhrFileDiffViewer({
       instRef.current = null;
       revokeAll();
     };
-  }, [token, handle, repoName, path, basePath, headRef, tier, browserReady]);
+  }, [token, handle, repoName, path, basePath, headRef, baseRef, tier, browserReady]);
 
   // 404 fallback: render the base (text/binary) viewer this file would have used
   // without semantic support — no extra chrome, so it looks identical.
