@@ -85,9 +85,14 @@ function basePathParam(filePath: string, basePath?: string): string {
   return basePath && basePath !== filePath ? `&basePath=${encodeURIComponent(basePath)}` : "";
 }
 
+/** The commit a diff is against, when it isn't the head commit's parent (a PR's merge base). */
+function baseParam(base?: string): string {
+  return base ? `&base=${encodeURIComponent(base)}` : "";
+}
+
 /**
- * Compute a semantic diff for one file at a commit (base defaults to its
- * parent). May resolve to a FormatNotEnabled payload instead of a diff — see
+ * Compute a semantic diff for one file at a commit, against `base` when given
+ * (a PR's merge base) and otherwise the commit's first parent. May resolve to a FormatNotEnabled payload instead of a diff — see
  * isFormatNotEnabled — when the repo hasn't opted the (official) format in.
  */
 export async function getFileSemanticDiff(
@@ -97,9 +102,10 @@ export async function getFileSemanticDiff(
   filePath: string,
   sha: string,
   basePath?: string,
+  base?: string,
 ): Promise<SemanticFileDiff | FormatNotEnabled> {
   return req(
-    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
+    `/repos/${handle}/${repoName}/filediff?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}${baseParam(base)}`,
     { token: token ?? undefined },
   );
 }
@@ -134,9 +140,10 @@ export async function getFileDiffMeta(
   filePath: string,
   sha: string,
   basePath?: string,
+  base?: string,
 ): Promise<FileDiffMeta> {
   return req(
-    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}`,
+    `/repos/${handle}/${repoName}/filediff-meta?path=${encodeURIComponent(filePath)}&sha=${encodeURIComponent(sha)}${basePathParam(filePath, basePath)}${baseParam(base)}`,
     { token: token ?? undefined },
   );
 }
@@ -846,7 +853,7 @@ export async function listPRFiles(
   handle: string,
   repoName: string,
   number: number,
-): Promise<{ files: PRFileEntry[] }> {
+): Promise<{ files: PRFileEntry[]; mergeBaseSha?: string | null }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/files`, { token: token ?? undefined });
 }
 

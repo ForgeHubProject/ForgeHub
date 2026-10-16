@@ -72,6 +72,8 @@ export function PullDetail({
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [prFiles, setPrFiles] = useState<PRFileEntry[] | null>(null);
+  // The commit those files are diffed against; their semantic diffs use it too.
+  const [prMergeBase, setPrMergeBase] = useState<string | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
 
   useEffect(() => {
@@ -146,7 +148,10 @@ export function PullDetail({
     if (activeTab !== "files" || prFiles !== null || !pr) return;
     setFilesLoading(true);
     listPRFiles(token, handle, repoName, number)
-      .then((d) => setPrFiles(d.files))
+      .then((d) => {
+        setPrFiles(d.files);
+        setPrMergeBase(d.mergeBaseSha ?? null);
+      })
       .catch(() => setPrFiles([]))
       .finally(() => setFilesLoading(false));
   }, [activeTab, prFiles, pr, token, handle, repoName, number]);
@@ -552,6 +557,7 @@ export function PullDetail({
                         file={file}
                         base={base}
                         headRef={pr.fromBranch}
+                        baseRef={prMergeBase ?? undefined}
                         repoRef={repoRef}
                         comments={reviewComments}
                         review={reviewInteraction}
