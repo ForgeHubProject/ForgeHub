@@ -24,10 +24,41 @@ vi.mock("../timeline-service.js", () => ({
   recordEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The official FHR handler, stood in for: designs are read and diffed by it
+// (#74), and a test must not fetch the real manifest or wasm. It reads the
+// fixtures below (glTF JSON or GLB) the way the FHR scene diff does: one change
+// per node, `nodes/<name>`, with a translation row when it moved.
+const fhrCalls: Array<{ base: Buffer; head: Buffer }> = [];
+let fhrDown = false;
+vi.mock("../fhr/official-handlers.js", () => ({
+  officialHandlerId: vi.fn(async (ext: string) =>
+    ({ ".gltf": "gltf-scene", ".glb": "gltf-scene", ".png": "png" } as Record<string, string>)[ext] ?? null),
+  officialWasmDiff: vi.fn(async (_path: string, _exts: Set<string>, base: Buffer, head: Buffer) => {
+    fhrCalls.push({ base, head });
+    if (fhrDown) return null;
+    const nodes = (b: Buffer): Array<{ name: string; translation: number[] }> => {
+      if (b.length === 0) return [];
+      const json = b.subarray(0, 4).toString("latin1") === "glTF" ? b.subarray(20, 20 + b.readUInt32LE(12)) : b;
+      return JSON.parse(json.toString("utf8")).nodes;
+    };
+    const before = new Map(nodes(base).map((n) => [n.name, n.translation]));
+    const children = nodes(head).map((n) => {
+      const path = `nodes/${encodeURIComponent(n.name)}`;
+      const was = before.get(n.name);
+      if (!was) return { path, kind: "added", label: n.name };
+      return { path, kind: "modified", label: n.name, children: [{ path: `${path}/translation`, kind: "modified", label: "translation", before: was, after: n.translation }] };
+    });
+    return { diff: { version: "1.0", format: "gltf-scene", changes: [{ path: "nodes", kind: "modified", label: "nodes", children }] }, handlerId: "gltf-scene" };
+  }),
+}));
+vi.mock("../fhr/manifest.js", async (orig) => ({
+  ...(await orig<typeof import("../fhr/manifest.js")>()),
+  handlerBuild: vi.fn(async () => "b1"),
+}));
+
 import { prisma } from "../prisma.js";
 import { recordEvent } from "../timeline-service.js";
 import { buildServer } from "../server.js";
-import { gltfSceneHandler } from "../handlers/gltf-scene/index.js";
 import { authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -203,7 +234,7 @@ describe("snapshot ingestion", () => {
     });
   });
 
-  it("ingests a binary .glb into a Snapshot with a real entity tree", async () => {
+  it("records the official handler's reading of a binary .glb design", async () => {
     mockNewDesignFlow("design-glb", "gearbox.glb");
     vi.mocked(prisma.design.update).mockImplementation((async (args: { data: { currentVersion: number } }) => ({
       id: "design-glb", issueId: "issue-1", name: "gearbox.glb", currentVersion: args.data.currentVersion,
@@ -215,13 +246,13 @@ describe("snapshot ingestion", () => {
     expect(res.statusCode).toBe(201);
     expect(res.json().version.hasSnapshot).toBe(true);
 
-    // The GLB decoded — nodes and transforms, not just "a snapshot exists".
-    const entities = (vi.mocked(prisma.snapshot.create).mock.calls[0]![0] as {
-      data: { entities: { create: { name: string; path: string; posX: number; posY: number; posZ: number }[] } };
-    }).data.entities.create;
-    expect(entities.map((e) => e.name)).toEqual(["Housing"]);
-    expect(entities.map((e) => e.path)).toEqual(["housing"]);
-    expect([entities[0]!.posX, entities[0]!.posY, entities[0]!.posZ]).toEqual([4, 0, -2]);
+    // The handler got the GLB's bytes untouched, and its nodes are the entities.
+    expect(fhrCalls.at(-1)!.head.subarray(0, 4).toString("latin1")).toBe("glTF");
+    const snap = (vi.mocked(prisma.snapshot.create).mock.calls[0]![0] as {
+      data: { handlerId: string; entities: { create: { kind: string; name: string; path: string }[] } };
+    }).data;
+    expect(snap.handlerId).toBe("gltf-scene");
+    expect(snap.entities.create).toEqual([expect.objectContaining({ kind: "node", name: "Housing", path: "nodes/Housing" })]);
   });
 
   it("stores an image with NO snapshot (snapshotId null, isImage true)", async () => {
@@ -255,7 +286,7 @@ describe("version compare", () => {
     await upload(app, ownerToken, "landing-gear.gltf", v2, "model/gltf+json");
   }
 
-  it("semantic diff matches handler.diff exactly (compare parity)", async () => {
+  it("the semantic diff is the official FHR handler's", async () => {
     const v1 = gltf("Landing Gear", [0, 0, 0]);
     const v2 = gltf("Landing Gear", [5, 0, 0]);
     await seedTwoGltfVersions(v1, v2);
@@ -277,16 +308,16 @@ describe("version compare", () => {
     expect(body.mode).toBe("semantic");
     expect(body.format).toBe("gltf-scene");
 
-    // The changed node: landing-gear moved +5 on X.
-    const moved = body.changes.find((c: { path: string }) => c.path === "landing-gear");
-    expect(moved).toBeTruthy();
-    const posChild = moved.children.find((ch: { path: string }) => ch.path === "position");
-    expect(posChild.before).toEqual([0, 0, 0]);
-    expect(posChild.after).toEqual([5, 0, 0]);
+    expect(body.handlerId).toBe("gltf-scene");
 
-    // PARITY: byte-for-byte identical to what the PR/commit compare path computes.
-    const expected = await gltfSceneHandler.diff(v1, v2);
-    expect(body.changes).toEqual(expected.changes);
+    // The changed node, as the handler reported it: moved +5 on X.
+    const moved = body.changes[0].children.find((c: { path: string }) => c.path === "nodes/Landing%20Gear");
+    const translation = moved.children.find((ch: { label: string }) => ch.label === "translation");
+    expect(translation.before).toEqual([0, 0, 0]);
+    expect(translation.after).toEqual([5, 0, 0]);
+    // …computed from the two stored versions' bytes.
+    expect(fhrCalls.at(-1)!.base.equals(v1)).toBe(true);
+    expect(fhrCalls.at(-1)!.head.equals(v2)).toBe(true);
   });
 
   // Two .glb uploads: before the ingest path took bytes, neither version got a
@@ -324,13 +355,31 @@ describe("version compare", () => {
     const body = res.json();
     expect(body.mode).toBe("semantic");
     expect(body.format).toBe("gltf-scene");
-    const moved = body.changes.find((c: { path: string }) => c.path === "landing-gear");
-    const posChild = moved.children.find((ch: { path: string }) => ch.path === "position");
-    expect(posChild.before).toEqual([0, 0, 0]);
-    expect(posChild.after).toEqual([5, 0, 0]);
+    const moved = body.changes[0].children.find((c: { path: string }) => c.path === "nodes/Landing%20Gear");
+    const translation = moved.children.find((ch: { label: string }) => ch.label === "translation");
+    expect(translation.before).toEqual([0, 0, 0]);
+    expect(translation.after).toEqual([5, 0, 0]);
   });
 
-  it("caches the diff (DiffCache) keyed by git blob shas", async () => {
+  it("falls back to a byte summary when the official handler can't run", async () => {
+    const v1 = gltf("Landing Gear", [0, 0, 0]);
+    const v2 = gltf("Landing Gear", [5, 0, 0]);
+    await seedTwoGltfVersions(v1, v2);
+    vi.mocked(prisma.design.findFirst).mockResolvedValue({ id: "design-c", issueId: "issue-1", name: "landing-gear.gltf" } as never);
+    vi.mocked(prisma.designVersion.findMany).mockResolvedValue([
+      { version: 1, storageKey: "repo-1/design-c/1", contentType: "model/gltf+json", size: v1.length, snapshotId: "snap-1" },
+      { version: 2, storageKey: "repo-1/design-c/2", contentType: "model/gltf+json", size: v2.length, snapshotId: "snap-2" },
+    ] as never);
+    fhrDown = true;
+    try {
+      const res = await app.inject({ method: "GET", url: "/repos/alice/gearbox/issues/7/designs/design-c/compare?from=1&to=2", headers: { authorization: ownerToken } });
+      expect(res.json().mode).toBe("binary");
+    } finally {
+      fhrDown = false;
+    }
+  });
+
+  it("caches the diff (DiffCache) keyed by the FHR handler's build and git blob shas", async () => {
     const v1 = gltf("Landing Gear", [0, 0, 0]);
     const v2 = gltf("Landing Gear", [5, 0, 0]);
     await seedTwoGltfVersions(v1, v2);
@@ -342,7 +391,9 @@ describe("version compare", () => {
 
     await app.inject({ method: "GET", url: "/repos/alice/gearbox/issues/7/designs/design-c/compare?from=1&to=2", headers: { authorization: ownerToken } });
     const key = vi.mocked(prisma.diffCache.create).mock.calls[0]![0] as { data: { handlerId: string; baseBlobSha: string; headBlobSha: string } };
-    expect(key.data.handlerId).toBe("gltf-scene");
+    // Apart from what the retired built-in handler cached under the bare id,
+    // and from what another FHR build would compute.
+    expect(key.data.handlerId).toBe("fhr:gltf-scene@b1");
     expect(key.data.baseBlobSha).toMatch(/^[0-9a-f]{40}$/);
     expect(key.data.headBlobSha).toMatch(/^[0-9a-f]{40}$/);
   });
