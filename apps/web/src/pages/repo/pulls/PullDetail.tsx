@@ -74,6 +74,9 @@ export function PullDetail({
   const [prFiles, setPrFiles] = useState<PRFileEntry[] | null>(null);
   // The commit those files are diffed against; their semantic diffs use it too.
   const [prMergeBase, setPrMergeBase] = useState<string | null>(null);
+  // The head they are at. Once merged or closed the branch may have moved or
+  // gone, so the files are read at this commit, not at the branch's name.
+  const [prHead, setPrHead] = useState<string | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
 
   useEffect(() => {
@@ -151,6 +154,7 @@ export function PullDetail({
       .then((d) => {
         setPrFiles(d.files);
         setPrMergeBase(d.mergeBaseSha ?? null);
+        setPrHead(d.headSha ?? null);
       })
       .catch(() => setPrFiles([]))
       .finally(() => setFilesLoading(false));
@@ -556,7 +560,7 @@ export function PullDetail({
                         prNumber={number}
                         file={file}
                         base={base}
-                        headRef={pr.fromBranch}
+                        headRef={pr.state === "open" ? pr.fromBranch : (prHead ?? pr.fromBranch)}
                         baseRef={prMergeBase ?? undefined}
                         repoRef={repoRef}
                         comments={reviewComments}

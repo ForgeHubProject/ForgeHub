@@ -1,13 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, git, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
+import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { resolveMilestoneFilter } from "../milestone-filter.js";
 import { syncBodyReferences, closeIssuesForMergedPull } from "../references-service.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
+import { liveRange, pullRange } from "../pull-range.js";
 import { ingestCommitRange } from "../ingest.js";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { computeReviewSummary } from "../review-summary.js";
@@ -720,6 +721,8 @@ export async function pullRoutes(app: FastifyInstance) {
 
     const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
 
+    // The PR's range, while the branches can still name it (pull-range.ts).
+    const range = await liveRange(repo.storageKey, pr.toBranch, pr.fromBranch);
     let result: Awaited<ReturnType<typeof resolvePullRequestMerge>>;
     try {
       result = hasFiles
@@ -752,7 +755,10 @@ export async function pullRoutes(app: FastifyInstance) {
 
     await prisma.pullRequest.update({
       where: { id: pr.id },
-      data: { state: "MERGED", mergedAt: new Date(), mergeMethod: "merge", mergeCommitSha: result.sha },
+      data: {
+        state: "MERGED", mergedAt: new Date(), mergeMethod: "merge", mergeCommitSha: result.sha,
+        baseSha: range?.base ?? null, headSha: range?.head ?? null,
+      },
     });
 
     await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "merged", actorId: userId, data: { sha: result.sha } })
@@ -889,18 +895,9 @@ export async function pullRoutes(app: FastifyInstance) {
     // semantic diff of one of them must be diffed against too: without it the
     // viewer falls back to the head commit's parent, which in a PR of several
     // commits is only the last one's changes (or none, after a merge from main).
-    const storageKey = repo.storageKey;
-    const mergeBase = async (): Promise<string | null> => {
-      try {
-        return (await git(storageKey, ["merge-base", pr.toBranch, pr.fromBranch])) || null;
-      } catch {
-        return null; // unrelated histories, or a branch that is gone
-      }
-    };
-    const [files, mergeBaseSha] = await Promise.all([
-      getMergeBaseFileList(storageKey, pr.toBranch, pr.fromBranch),
-      mergeBase(),
-    ]);
+    const range = await pullRange(repo.storageKey, pr);
+    const files = range ? await getMergeBaseFileList(repo.storageKey, range.base, range.head) : [];
+    const mergeBaseSha = range?.base ?? null;
 
     // Per-user viewed state (issue #119): stamp each entry for the signed-in
     // viewer. Anonymous readers get plain `viewed: false` everywhere.
@@ -916,6 +913,8 @@ export async function pullRoutes(app: FastifyInstance) {
     return {
       files: files.map((f) => ({ ...f, viewed: viewedPaths.has(f.path) })),
       mergeBaseSha,
+      // The head those files are at: the branch while open, the merged commit after.
+      headSha: range?.head ?? null,
     };
   });
 
@@ -967,7 +966,8 @@ export async function pullRoutes(app: FastifyInstance) {
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    const files = await getMergeBaseDiff(repo.storageKey, pr.toBranch, pr.fromBranch, filePath);
+    const range = await pullRange(repo.storageKey, pr);
+    const files = range ? await getMergeBaseDiff(repo.storageKey, range.base, range.head, filePath) : [];
     return { files };
   });
 
@@ -985,7 +985,8 @@ export async function pullRoutes(app: FastifyInstance) {
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    const commits = await listMergeBaseCommits(repo.storageKey, pr.toBranch, pr.fromBranch);
+    const range = await pullRange(repo.storageKey, pr);
+    const commits = range ? await listMergeBaseCommits(repo.storageKey, range.base, range.head) : [];
     return { commits };
   });
 
@@ -1031,10 +1032,16 @@ export async function pullRoutes(app: FastifyInstance) {
       }
     }
 
+    // Closing records the PR's range, so it stays viewable after its branch
+    // moves or goes; reopening reads it live again (pull-range.ts).
+    const closing = state === "closed" && pr.state === "OPEN";
+    const range = closing && repo.storageKey ? await liveRange(repo.storageKey, pr.toBranch, pr.fromBranch) : null;
     const updated = await prisma.pullRequest.update({
       where: { id: pr.id },
       data: {
         ...(state !== undefined ? { state: state === "open" ? "OPEN" : "CLOSED" } : {}),
+        ...(closing ? { baseSha: range?.base ?? null, headSha: range?.head ?? null } : {}),
+        ...(state === "open" ? { baseSha: null, headSha: null } : {}),
         // Closing disarms auto-merge (issue #119) — a later reopen must never
         // resurrect a stale intent and merge behind everyone's back.
         ...(state === "closed" ? { autoMergeMethod: null, autoMergeById: null } : {}),
