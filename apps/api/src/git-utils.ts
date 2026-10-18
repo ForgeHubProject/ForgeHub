@@ -945,7 +945,13 @@ export async function getCommit(
     const [fullSha, authorName, authorEmail, date, parents, gStatus, signer, keyId] = meta.split("\x1f");
     const fullMsg = await git(storageKey, ["show", "--no-patch", "--format=%B", sha]);
     const subject = fullMsg.split("\n")[0]?.trim() ?? "";
-    const filesOut = await git(storageKey, ["diff-tree", "--no-commit-id", "-r", "--name-only", sha]);
+    // --root: a first commit lists what it added (diff-tree prints nothing for a
+    // commit with no parent otherwise). --diff-merges=first-parent: a merge lists
+    // what it brought into its branch, as GitHub shows it — diff-tree's default
+    // for a merge is no output at all, which read as "Empty commit".
+    const filesOut = await git(storageKey, [
+      "diff-tree", "--no-commit-id", "-r", "--name-only", "--root", "--diff-merges=first-parent", sha,
+    ]);
     const resolvedSha = fullSha ?? "";
     const g = gStatus ?? "";
     const rawSigned = g === "" || g === "N"
@@ -1062,7 +1068,9 @@ function parseDiff(raw: string): FileDiff[] {
 
 export async function getCommitDiff(storageKey: string, sha: string): Promise<FileDiff[]> {
   try {
-    const patch = await git(storageKey, ["show", "--patch", "--format=", sha]);
+    // A merge commit's patch is against its first parent (see getCommit): `git
+    // show`'s default for a merge is a combined diff, empty for a clean merge.
+    const patch = await git(storageKey, ["show", "--patch", "--format=", "--diff-merges=first-parent", sha]);
     return parseDiff(patch);
   } catch {
     return [];
