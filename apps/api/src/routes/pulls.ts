@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
+import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, git, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
@@ -885,7 +885,22 @@ export async function pullRoutes(app: FastifyInstance) {
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    const files = await getMergeBaseFileList(repo.storageKey, pr.toBranch, pr.fromBranch);
+    // The merge base is what these files are diffed against, and what a
+    // semantic diff of one of them must be diffed against too: without it the
+    // viewer falls back to the head commit's parent, which in a PR of several
+    // commits is only the last one's changes (or none, after a merge from main).
+    const storageKey = repo.storageKey;
+    const mergeBase = async (): Promise<string | null> => {
+      try {
+        return (await git(storageKey, ["merge-base", pr.toBranch, pr.fromBranch])) || null;
+      } catch {
+        return null; // unrelated histories, or a branch that is gone
+      }
+    };
+    const [files, mergeBaseSha] = await Promise.all([
+      getMergeBaseFileList(storageKey, pr.toBranch, pr.fromBranch),
+      mergeBase(),
+    ]);
 
     // Per-user viewed state (issue #119): stamp each entry for the signed-in
     // viewer. Anonymous readers get plain `viewed: false` everywhere.
@@ -898,7 +913,10 @@ export async function pullRoutes(app: FastifyInstance) {
       viewedPaths = new Set(rows.map((r) => r.filePath));
     }
 
-    return { files: files.map((f) => ({ ...f, viewed: viewedPaths.has(f.path) })) };
+    return {
+      files: files.map((f) => ({ ...f, viewed: viewedPaths.has(f.path) })),
+      mergeBaseSha,
+    };
   });
 
   // PUT /repos/:handle/:name/pulls/:number/viewed-files — set one file's viewed

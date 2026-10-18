@@ -28,6 +28,7 @@ export function PRFileRow({
   file,
   base,
   headRef,
+  baseRef,
   repoRef,
   comments,
   review,
@@ -40,6 +41,8 @@ export function PRFileRow({
   file: PRFileEntry;
   base: string;
   headRef: string;
+  /** The PR's merge base: what a semantic diff here is against (FileDiffViewerProps.baseRef). */
+  baseRef?: string;
   repoRef: RepoRef;
   comments: ReviewComment[];
   review: ReviewInteraction;
@@ -73,6 +76,7 @@ export function PRFileRow({
     headRef,
     needsFileDiffMeta({ semantic: isSemantic, pillEngaged }),
     file.status === "renamed" ? file.oldPath : undefined,
+    baseRef,
   );
 
   async function loadDiff() {
@@ -202,6 +206,7 @@ export function PRFileRow({
               file={diff}
               repoBase={base}
               headRef={headRef}
+              baseRef={baseRef}
               token={token}
               computeTier={isSemantic ? tier : undefined}
               onComputeTierChange={changeTier}
