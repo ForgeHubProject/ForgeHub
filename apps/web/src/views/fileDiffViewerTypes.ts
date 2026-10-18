@@ -6,6 +6,12 @@ export type FileDiffViewerProps = {
   file: FileDiff;
   repoBase: string; // e.g. "/owner/repo" — for blob links
   headRef: string;  // commit SHA or branch name — for blob links
+  /**
+   * What a semantic diff is against. A PR passes its merge base, the same
+   * commit its file list is diffed against; omitted (a commit view), it is the
+   * head commit's first parent.
+   */
+  baseRef?: string;
   token: string | null; // auth for viewers that fetch (e.g. semantic diffs)
   /**
    * Where a semantic diff is computed (issue #66 P4). Owned by the diff-header

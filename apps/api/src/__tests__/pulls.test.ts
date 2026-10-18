@@ -165,6 +165,7 @@ import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
+import { git } from "../git-utils.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -1297,6 +1298,23 @@ describe("PR viewed files (issue #119)", () => {
     const files = res.json().files as Array<{ path: string; viewed: boolean }>;
     expect(files.find((f) => f.path === "src/a.ts")?.viewed).toBe(true);
     expect(files.find((f) => f.path === "docs/b.md")?.viewed).toBe(false);
+  });
+
+  // A semantic diff of a PR file must be against the same commit as its text
+  // diff: the merge base. Without it the viewer fell back to the head commit's
+  // parent — only the last commit's changes, or none after a merge from main.
+  it("files payload carries the merge base the files are diffed against", async () => {
+    vi.mocked(git).mockImplementation(async (_key: string, args: string[]) =>
+      args[0] === "merge-base" ? "c".repeat(40) : "");
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mergeBaseSha).toBe("c".repeat(40));
+    expect(vi.mocked(git)).toHaveBeenCalledWith(expect.any(String), ["merge-base", "main", "feature"]);
+
+    vi.mocked(git).mockRejectedValueOnce(new Error("no merge base"));
+    const none = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().mergeBaseSha).toBeNull();
   });
 
   it("anonymous readers get viewed: false without a lookup", async () => {
