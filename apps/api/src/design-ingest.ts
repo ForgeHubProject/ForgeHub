@@ -1,25 +1,28 @@
 import { createHash } from "node:crypto";
 import { extname } from "node:path";
-import { firstHandlerForPath } from "./handlers/index.js";
-import type { ArtifactHandler } from "./handlers/types.js";
+import { officialHandlerId } from "./fhr/official-handlers.js";
+import { ingestSceneSnapshot } from "./fhr-entities.js";
 
 /**
  * Design management (issue #121) ingestion helpers.
  *
  * Designs attach to issues and are NOT commit-scoped, so — unlike the push-time
- * ingest pipeline — there is no `.forge/formats` opt-in to consult. Handler
- * eligibility is resolved straight from the global registry by file extension:
- * whatever handler claims the design's file name serves it. This keeps the
- * flagship synergy (semantic version-vs-version diffs) available for any
- * FHR-recognized attachment without a per-repo opt-in step.
+ * ingest pipeline — there is no `.forge/formats` opt-in to consult: a design is
+ * read by the official FHR handler for its extension, whatever the repo opted
+ * into. That keeps semantic version-vs-version diffs available for any format
+ * FHR reads (#74: FHR, not a ForgeHub-owned parser, is the engine).
  */
 
 /** Image formats that get a visual (before/after) compare rather than a semantic one. */
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 
-/** The handler (if any) that claims a design's file name, by extension via the registry. */
-export function designHandlerFor(name: string): ArtifactHandler | undefined {
-  return firstHandlerForPath(name);
+/** The official FHR handler that reads a design's file, by extension; null when none does. */
+export async function designHandlerId(name: string): Promise<string | null> {
+  try {
+    return await officialHandlerId(extname(name).toLowerCase());
+  } catch {
+    return null; // manifest unreachable: no semantic claim we can stand behind
+  }
 }
 
 /** True when a design file is a browser-renderable image (visual-diff eligible). */
@@ -29,31 +32,37 @@ export function isImageName(name: string, contentType?: string | null): boolean 
 }
 
 /**
- * Ingest a design file's bytes into a Snapshot if an FHR handler claims its name.
- * Reuses the exact same `handler.ingest` pipeline that push-time ingestion and
- * the /snapshots route use — no duplicated parse/persist logic. The raw bytes go
- * through untouched, so binary containers (.glb) ingest as well as their text
- * equivalents. Returns the new snapshot id, or null when the format is
- * unrecognized or the bytes could not be ingested (e.g. malformed glTF): such
- * files still store fine, just without an entity tree.
+ * Whether a design is compared semantically. An image is compared by eye, side
+ * by side — FHR's image handlers read only metadata, and that tree is no
+ * substitute for the picture — so it stays visual even though a handler exists.
+ */
+export async function designIsSemantic(name: string): Promise<boolean> {
+  return !isImageName(name) && (await designHandlerId(name)) !== null;
+}
+
+/**
+ * Record a snapshot of a design version as its official handler reads it: the
+ * scene entities for search, and — by existing at all — the mark that this
+ * version can be diffed semantically. Returns the snapshot id, or null when no
+ * official handler takes the format or it could not read the bytes (e.g. a
+ * malformed glTF): such files still store fine, without one.
  */
 export async function ingestDesignSnapshot(params: {
   repoId: string;
   name: string;
   buffer: Buffer;
 }): Promise<string | null> {
-  const handler = designHandlerFor(params.name);
-  if (!handler) return null;
+  if (isImageName(params.name)) return null; // compared visually: see designIsSemantic
   try {
-    return await handler.ingest({
+    return await ingestSceneSnapshot({
       repoId: params.repoId,
       sourceFile: params.name,
       bytes: params.buffer,
       label: null,
       gitCommitSha: null,
+      keepEmpty: true,
     });
   } catch {
-    // Unrecognized/opaque payload for this handler — keep the file, drop the tree.
     return null;
   }
 }
