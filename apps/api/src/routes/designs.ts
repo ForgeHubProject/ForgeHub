@@ -1,10 +1,13 @@
+import { extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import {
   buildDesignStorageKey, writeDesignStream, readDesignStream, readDesignBuffer, removeDesign,
 } from "../git-storage.js";
-import { designHandlerFor, isImageName, ingestDesignSnapshot, gitBlobSha } from "../design-ingest.js";
+import { designHandlerId, designIsSemantic, isImageName, ingestDesignSnapshot, gitBlobSha } from "../design-ingest.js";
+import { officialWasmDiff } from "../fhr/official-handlers.js";
+import { handlerBuild } from "../fhr/manifest.js";
 import { sanitizeAssetName } from "./releases.js";
 import { recordEvent } from "../timeline-service.js";
 import type { StructuredDiff, DiffChange } from "../handlers/types.js";
@@ -49,14 +52,14 @@ function formatVersion(name: string, v: VersionRecord) {
   };
 }
 
-function formatDesign(d: DesignRecord) {
+function formatDesign(d: DesignRecord, semantic: boolean) {
   const sorted = (d.versions ?? []).slice().sort((a, b) => a.version - b.version);
   return {
     id: d.id,
     name: d.name,
     currentVersion: d.currentVersion,
-    // Whether the format supports FHR semantic diffing at all (by extension).
-    semantic: designHandlerFor(d.name) !== undefined,
+    // Whether an official FHR handler reads the format at all (by extension).
+    semantic,
     isImage: isImageName(d.name),
     createdBy: d.createdBy?.handle ?? null,
     createdAt: d.createdAt.toISOString(),
@@ -108,7 +111,9 @@ export async function designRoutes(app: FastifyInstance) {
         orderBy: { createdAt: "asc" },
       });
 
-      return { designs: designs.map(formatDesign) };
+      return {
+        designs: await Promise.all(designs.map(async (d) => formatDesign(d, await designIsSemantic(d.name)))),
+      };
     },
   );
 
@@ -209,7 +214,8 @@ export async function designRoutes(app: FastifyInstance) {
         data: { design: designName, version },
       }).catch((err) => request.log.error({ err }, "recordEvent design"));
 
-      return reply.status(201).send({ design: formatDesign(updated), version: formatVersion(designName, created as VersionRecord) });
+      const semantic = await designIsSemantic(updated.name);
+      return reply.status(201).send({ design: formatDesign(updated, semantic), version: formatVersion(designName, created as VersionRecord) });
     },
   );
 
@@ -246,9 +252,9 @@ export async function designRoutes(app: FastifyInstance) {
   );
 
   // GET .../designs/:designId/compare?from=&to= — version-vs-version diff.
-  // Reuses the SAME handler.diff() + DiffCache machinery as routes/compare.ts when
-  // both versions carry snapshots of the design's handler; visual for images; else
-  // a byte summary. The response `mode` makes the branch explicit.
+  // Semantic when the design's official FHR handler read both versions (each has
+  // a snapshot), computed by that handler and cached per handler build; visual for
+  // images; else a byte summary. The response `mode` makes the branch explicit.
   app.get(
     "/repos/:handle/:name/issues/:number/designs/:designId/compare",
     { preHandler: [app.optionalAuthenticate] },
@@ -286,11 +292,11 @@ export async function designRoutes(app: FastifyInstance) {
       if (!baseV) return reply.status(404).send({ error: `Version ${fromV} not found` });
       if (!headV) return reply.status(404).send({ error: `Version ${toV} not found` });
 
-      // Handler is resolved by the design's file extension (registry) — designs are
-      // not commit-scoped, so no `.forge/formats` opt-in applies. Same name across
-      // versions ⇒ same handler; a snapshot on both ⇒ both were ingested by it.
-      const handler = designHandlerFor(design.name);
-      if (handler && baseV.snapshotId && headV.snapshotId) {
+      // The design's official FHR handler, by extension — designs are not
+      // commit-scoped, so no `.forge/formats` opt-in applies. A snapshot on both
+      // versions means that handler read both.
+      const handlerId = isImageName(design.name) ? null : await designHandlerId(design.name);
+      if (handlerId && baseV.snapshotId && headV.snapshotId) {
         const [baseBuf, headBuf] = await Promise.all([
           readDesignBuffer(baseV.storageKey),
           readDesignBuffer(headV.storageKey),
@@ -298,30 +304,39 @@ export async function designRoutes(app: FastifyInstance) {
         const baseBlobSha = gitBlobSha(baseBuf);
         const headBlobSha = gitBlobSha(headBuf);
 
-        // Same DiffCache the PR/commit compare path uses — keyed on git blob shas.
+        // Keyed by handler AND build: a new FHR release may diff differently, and
+        // the prefix keeps these apart from what the retired built-in handler
+        // cached under the bare id.
+        const cacheId = `fhr:${handlerId}@${(await handlerBuild(handlerId).catch(() => null)) ?? "unstamped"}`;
         const cached = await prisma.diffCache.findUnique({
-          where: { handlerId_baseBlobSha_headBlobSha: { handlerId: handler.id, baseBlobSha, headBlobSha } },
+          where: { handlerId_baseBlobSha_headBlobSha: { handlerId: cacheId, baseBlobSha, headBlobSha } },
         });
-        let diff: StructuredDiff;
-        if (cached) {
-          diff = JSON.parse(cached.result) as StructuredDiff;
-        } else {
-          diff = await handler.diff(baseBuf, headBuf);
-          prisma.diffCache.create({
-            data: { handlerId: handler.id, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
-          }).catch(() => undefined);
+        let diff: StructuredDiff | null = cached ? (JSON.parse(cached.result) as StructuredDiff) : null;
+        if (!diff) {
+          const ext = extname(design.name).toLowerCase();
+          const official = await officialWasmDiff(design.name, new Set([ext]), baseBuf, headBuf);
+          diff = official?.diff ?? null;
+          if (diff) {
+            prisma.diffCache.create({
+              data: { handlerId: cacheId, baseBlobSha, headBlobSha, result: JSON.stringify(diff) },
+            }).catch(() => undefined);
+          }
         }
 
-        const changes: DiffChange[] = diff.changes;
-        return {
-          mode: "semantic" as const,
-          handlerId: handler.id,
-          format: diff.format,
-          version: diff.version,
-          from: fromV,
-          to: toV,
-          changes,
-        };
+        if (diff) {
+          const changes: DiffChange[] = diff.changes;
+          return {
+            mode: "semantic" as const,
+            handlerId,
+            format: diff.format,
+            version: diff.version,
+            from: fromV,
+            to: toV,
+            changes,
+          };
+        }
+        // The handler couldn't run (release unreachable, over its size limit):
+        // fall through to what can still be shown.
       }
 
       const bothImages =

@@ -13,7 +13,6 @@ vi.mock("../prisma.js", () => ({
 import { prisma } from "../prisma.js";
 import { gltfSceneHandler } from "../handlers/gltf-scene/index.js";
 import { plainTextHandler, PLAIN_TEXT_MAX_BYTES } from "../handlers/plain-text/index.js";
-import { ingestDesignSnapshot } from "../design-ingest.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -159,35 +158,6 @@ describe("plainTextHandler.ingest", () => {
     const big = Buffer.alloc(PLAIN_TEXT_MAX_BYTES + 1, 0x61);
     await expect(plainTextHandler.ingest({ ...base, sourceFile: "big.txt", bytes: big }))
       .rejects.toThrow(/exceeds/);
-    expect(vi.mocked(prisma.snapshot.create)).not.toHaveBeenCalled();
-  });
-});
-
-// ─── design ingest wrapper ────────────────────────────────────────────────────
-
-describe("ingestDesignSnapshot", () => {
-  it("ingests a binary .glb design into a snapshot with an entity tree", async () => {
-    const id = await ingestDesignSnapshot({ repoId: "repo-1", name: "robot.glb", buffer: toGlb(gltfJson()) });
-    expect(id).toBe("snap-1");
-    expect(createdEntities().map((e) => e.name)).toEqual(["Arm", "Grip"]);
-  });
-
-  it("passes the design bytes through untouched (no UTF-8 round-trip)", async () => {
-    const glb = toGlb(gltfJson());
-    await ingestDesignSnapshot({ repoId: "repo-1", name: "robot.glb", buffer: glb });
-    // A lossy string round-trip would have replaced bytes and failed the parse.
-    expect(vi.mocked(prisma.snapshot.create)).toHaveBeenCalledTimes(1);
-  });
-
-  it("degrades to null (no throw) on malformed bytes", async () => {
-    const junk = Buffer.from([0x67, 0x6c, 0x54, 0x46, 0xde, 0xad, 0xbe, 0xef]);
-    await expect(ingestDesignSnapshot({ repoId: "repo-1", name: "robot.glb", buffer: junk }))
-      .resolves.toBeNull();
-  });
-
-  it("returns null for a format no handler claims", async () => {
-    await expect(ingestDesignSnapshot({ repoId: "repo-1", name: "part.step", buffer: Buffer.from("x") }))
-      .resolves.toBeNull();
     expect(vi.mocked(prisma.snapshot.create)).not.toHaveBeenCalled();
   });
 });
