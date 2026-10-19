@@ -38,7 +38,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { listCommits, getCommit, listTree, defaultBranch } from "../git-utils.js";
+import { listCommits, getCommit, getCommitDiff, listTree, defaultBranch } from "../git-utils.js";
 import {
   bareRepoPathFromKey, createDeepHistoryRepo, createMergeHistoryRepo, createMergedAwayRepo,
   createTestRepo, makeCommit, checkoutBranch, type TestRepo,
@@ -326,6 +326,16 @@ describe("getCommit()", () => {
     expect(commit!.parents).toEqual([]);
   });
 
+  // A first commit has no parent to diff against: it lists what it added.
+  // diff-tree printed nothing for it, and the page read "Empty commit".
+  it("initial commit lists the files it added, and its patch adds them", async () => {
+    const commit = await getCommit(repo.storageKey, sha1);
+    expect(commit!.changedFiles.sort()).toEqual(["readme.txt", "src/main.ts"]);
+    const diff = await getCommitDiff(repo.storageKey, sha1);
+    expect(diff.map((f) => f.newPath).sort()).toEqual(["readme.txt", "src/main.ts"]);
+    expect(diff.every((f) => f.status === "added")).toBe(true);
+  });
+
   it("returns null for an unknown SHA", async () => {
     const commit = await getCommit(repo.storageKey, "0".repeat(40));
     expect(commit).toBeNull();
@@ -522,5 +532,35 @@ describe("GET /repos/:h/:r/blob/:ref/*", () => {
   it("returns 404 for a nonexistent file", async () => {
     const res = await app.inject({ method: "GET", url: `/repos/alice/my-repo/blob/${defBranch}/does-not-exist.txt` });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// ─── merge commits ───────────────────────────────────────────────────────────
+
+// A merge lists what it brought into its branch — against its first parent, as
+// GitHub shows it. diff-tree's default for a merge is no output, and `git show`'s
+// is a combined diff that is empty for a clean merge, so every "Merge pull
+// request" commit read as "Empty commit".
+describe("getCommit() / getCommitDiff() on a merge commit", () => {
+  let merge: string;
+
+  beforeAll(async () => {
+    const run = promisify(execFileCb);
+    await run("git", ["-C", repo.workDir, "checkout", defBranch]);
+    await makeCommit(repo.workDir, { "notes.md": "on the default branch" }, "docs: notes");
+    await run("git", ["-C", repo.workDir, "merge", "--no-ff", "-m", "Merge feature/cfg", "feature/cfg"]);
+    await run("git", ["-C", repo.workDir, "push", "origin", "HEAD"]);
+    merge = (await run("git", ["-C", repo.workDir, "rev-parse", "HEAD"])).stdout.trim();
+  }, 30_000);
+
+  it("lists the files the merge brought in, not those already on its branch", async () => {
+    const commit = await getCommit(repo.storageKey, merge);
+    expect(commit!.parents).toHaveLength(2);
+    expect(commit!.changedFiles).toEqual(["config.json"]);
+  });
+
+  it("gives the merge's patch against its first parent", async () => {
+    const diff = await getCommitDiff(repo.storageKey, merge);
+    expect(diff.map((f) => [f.newPath, f.status])).toEqual([["config.json", "added"]]);
   });
 });
