@@ -165,7 +165,7 @@ import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
-import { git } from "../git-utils.js";
+import { getMergeBaseFileList, git } from "../git-utils.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -595,6 +595,23 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
         data: expect.objectContaining({ state: "MERGED", autoMergeMethod: null, autoMergeById: null }),
       }),
     );
+  });
+
+  // After the merge the branches can no longer name the PR's range (the base
+  // branch contains the head), so it is recorded while they still can.
+  it("records the PR's range — merge base and head — as it merges", async () => {
+    const { performMerge } = await import("../git-utils.js");
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+    vi.mocked(git).mockImplementation(async (_key: string, args: string[]) =>
+      args[0] === "merge-base" ? "c".repeat(40) : args[0] === "rev-parse" ? "d".repeat(40) : "");
+
+    await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: { authorization: ownerToken } });
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "MERGED", baseSha: "c".repeat(40), headSha: "d".repeat(40) }),
+      }),
+    );
+    vi.mocked(git).mockReset();
   });
 
   it("defaults to the merge method (performMerge) when none is supplied", async () => {
@@ -1284,6 +1301,10 @@ describe("PR viewed files (issue #119)", () => {
     vi.mocked(prisma.pullRequestFileView.findMany).mockClear().mockResolvedValue([] as never);
     vi.mocked(prisma.pullRequestFileView.upsert).mockClear();
     vi.mocked(prisma.pullRequestFileView.deleteMany).mockClear();
+    // An open PR's range is read live: its merge base and its head.
+    vi.mocked(git).mockImplementation(async (_key: string, args: string[]) =>
+      args[0] === "merge-base" ? "c".repeat(40) : args[0] === "rev-parse" ? "d".repeat(40) : "");
+    vi.mocked(getMergeBaseFileList).mockClear();
   });
 
   it("files payload stamps the caller's viewed state per entry", async () => {
@@ -1304,17 +1325,27 @@ describe("PR viewed files (issue #119)", () => {
   // diff: the merge base. Without it the viewer fell back to the head commit's
   // parent — only the last commit's changes, or none after a merge from main.
   it("files payload carries the merge base the files are diffed against", async () => {
-    vi.mocked(git).mockImplementation(async (_key: string, args: string[]) =>
-      args[0] === "merge-base" ? "c".repeat(40) : "");
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
     expect(res.statusCode).toBe(200);
     expect(res.json().mergeBaseSha).toBe("c".repeat(40));
+    expect(res.json().headSha).toBe("d".repeat(40));
     expect(vi.mocked(git)).toHaveBeenCalledWith(expect.any(String), ["merge-base", "main", "feature"]);
 
     vi.mocked(git).mockRejectedValueOnce(new Error("no merge base"));
     const none = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
     expect(none.statusCode).toBe(200);
     expect(none.json().mergeBaseSha).toBeNull();
+  });
+
+  // Once merged, the base branch contains the head, so the branches name an
+  // empty range ("0 files changed"). The range recorded at merge is used.
+  it("a merged PR's files are its recorded range, not the branches'", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", baseSha: "a".repeat(40), headSha: "b".repeat(40) }) as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(getMergeBaseFileList)).toHaveBeenCalledWith(expect.any(String), "a".repeat(40), "b".repeat(40));
+    expect(res.json()).toMatchObject({ mergeBaseSha: "a".repeat(40), headSha: "b".repeat(40) });
   });
 
   it("anonymous readers get viewed: false without a lookup", async () => {
