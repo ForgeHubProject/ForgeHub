@@ -853,7 +853,7 @@ export async function listPRFiles(
   handle: string,
   repoName: string,
   number: number,
-): Promise<{ files: PRFileEntry[]; mergeBaseSha?: string | null }> {
+): Promise<{ files: PRFileEntry[]; mergeBaseSha?: string | null; headSha?: string | null }> {
   return req(`/repos/${handle}/${repoName}/pulls/${number}/files`, { token: token ?? undefined });
 }
 

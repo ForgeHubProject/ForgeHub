@@ -262,6 +262,13 @@ model PullRequest {
   mergeMethod    String?
   /** SHA of the resulting merge/squash/rebase commit on the base branch. Null until merged. Needed to revert. */
   mergeCommitSha String?
+  /**
+   * The commits this PR's files and commits are between — its merge base and its
+   * head — recorded when it is merged or closed (pull-range.ts). Once merged, the
+   * branches can no longer say: the base branch contains the head. Null while open.
+   */
+  baseSha        String?
+  headSha        String?
 
   // ─── Auto-merge intent (issue #119) ───────────────────────────────────────────
   // Non-null `autoMergeMethod` ("merge" | "squash" | "rebase") means auto-merge is

@@ -14,6 +14,7 @@ import { closeIssuesForMergedPull } from "./references-service.js";
 import { ingestCommitRange } from "./ingest.js";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { emitPushEvents, ZERO_SHA } from "./push-events.js";
+import { liveRange } from "./pull-range.js";
 
 /**
  * The merge EXECUTION shared by the merge endpoint and auto-merge (issue #119):
@@ -64,6 +65,8 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
 
   // Capture the toBranch SHA before merge for the ingestion range + push event.
   const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
+  // And the PR's own range, while the branches can still name it (pull-range.ts).
+  const range = await liveRange(repo.storageKey, pr.toBranch, pr.fromBranch);
 
   let result: Awaited<ReturnType<typeof performMerge>>;
   try {
@@ -93,6 +96,7 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
     where: { id: pr.id },
     data: {
       state: "MERGED", mergedAt: new Date(), mergeMethod, mergeCommitSha: result.sha,
+      baseSha: range?.base ?? null, headSha: range?.head ?? null,
       // The armed intent is spent — clear it so a merged PR never reports
       // auto-merge as still pending (issue #119). Closing disarms for the same
       // reason; a merge is the other terminal state.
