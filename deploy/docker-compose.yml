@@ -66,18 +66,17 @@ services:
     ports:
       # Bound to loopback only — NPM (on the same host) proxies in from the internet.
       - "127.0.0.1:${WEB_PORT:-8080}:80"
-      # SSH git transport — NOT published by default. To enable, BOTH set
-      # FORGEHUB_SSH_PORT in .env (turns the server on inside the container) AND
-      # uncomment the line below (compose can't publish a port conditionally).
-      # Setting only one leaves SSH either unreachable or mapped to nothing.
-      # NPM cannot proxy raw TCP. Two ways to serve it:
-      #  - git on the standard port 22 (recommended): keep the host's sshd on 22 and
+      # SSH git transport. Published on LOOPBACK ONLY by default, so this line is
+      # safe to leave always on: with FORGEHUB_SSH_PORT unset nothing listens
+      # inside the container and the mapping does nothing. Enabling SSH is a .env
+      # change only (see deploy/.env.example):
+      #  - git on the standard port 22 (recommended): keep the host's sshd on 22,
       #    run deploy/ssh/install.sh, then set FORGEHUB_SSH_PORT=2222,
-      #    FORGEHUB_SSH_PUBLIC_PORT=22, FORGEHUB_SSH_FORWARD_KEY and publish on
-      #    LOOPBACK ONLY with FORGEHUB_SSH_BIND=127.0.0.1 (README: "Git on port 22").
-      #  - direct: leave FORGEHUB_SSH_BIND unset and open the port in the VPS
-      #    firewall (clones then need the port in the URL).
-      # - "${FORGEHUB_SSH_BIND:-0.0.0.0}:${FORGEHUB_SSH_PORT:?set FORGEHUB_SSH_PORT in .env}:${FORGEHUB_SSH_PORT}"
+      #    FORGEHUB_SSH_PUBLIC_PORT=22 and FORGEHUB_SSH_FORWARD_KEY. Leave
+      #    FORGEHUB_SSH_BIND alone (README: "Git on port 22").
+      #  - direct: set FORGEHUB_SSH_BIND=0.0.0.0 and open the port in the VPS
+      #    firewall (clones then need the port in the URL). NPM cannot proxy raw TCP.
+      - "${FORGEHUB_SSH_BIND:-127.0.0.1}:${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       - forgehub-data:/data
       - forgehub-ci:/ci
