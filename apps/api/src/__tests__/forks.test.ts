@@ -192,6 +192,30 @@ describe("fork routes", () => {
       expect((createArg.data as { forkedFromId?: string }).forkedFromId).toBe("src-9");
       expect(res.json().parent).toEqual({ handle: "other", name: "repo" });
     });
+
+    it("removes its clone when the row insert fails, leaving the source intact", async () => {
+      const parent = await createTestRepo(PARENT_KEY);
+      try {
+        const sha = await makeCommit(parent.workDir, { "README.md": "line 1\n" }, "init");
+        vi.mocked(prisma.repo.findFirst)
+          .mockResolvedValueOnce(parentRepoRow() as never) // resolveRepo(source)
+          .mockResolvedValueOnce(null as never); // existing-name check
+        vi.mocked(prisma.repo.create).mockRejectedValueOnce(new Error("db down"));
+
+        const res = await app.inject({
+          method: "POST", url: "/repos/other/repo/fork",
+          headers: { authorization: ownerToken },
+        });
+
+        expect(res.statusCode).toBe(500);
+        const { readdir } = await import("node:fs/promises");
+        expect(await readdir(join(parent.storageRoot, "forks"))).toEqual([]);
+        const { stdout } = await execFile("git", ["rev-parse", "refs/heads/main"], { cwd: parent.bareRepoPath });
+        expect(stdout.trim()).toBe(sha);
+      } finally {
+        await parent.cleanup();
+      }
+    });
   });
 
   // ── GET forks: visibility respected ──

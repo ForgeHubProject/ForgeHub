@@ -28,6 +28,11 @@ function viewerId(request: FastifyRequest): string | undefined {
   return u?.sub;
 }
 
+/** The `code` of a Prisma (P2002) or filesystem (EEXIST) error, if it has one. */
+function errorCode(e: unknown): string | undefined {
+  return typeof e === "object" && e !== null && "code" in e ? String((e as { code: unknown }).code) : undefined;
+}
+
 function canViewRepo(
   id: string | undefined,
   repo: { ownerId: string; visibility: RepoVisibility; collaborators?: Array<{ userId: string }> },
@@ -400,12 +405,29 @@ export async function repoRoutes(app: FastifyInstance) {
       }
 
       const storageKey = buildStorageKey(namespaceHandle, name);
-      let bareRepoCreated = false;
+      const nameTaken = orgId
+        ? "This organization already has a repository with this name"
+        : "You already have a repository with this name";
 
+      // Never touch storage that existed before this request. The row check is
+      // the common case; createBareRepo refusing an existing path covers a race
+      // with a concurrent create and storage left behind without a row.
+      const existing = await prisma.repo.findUnique({ where: { storageKey }, select: { id: true } });
+      if (existing) {
+        return reply.status(409).send({ error: nameTaken });
+      }
       try {
         await createBareRepo(storageKey);
-        bareRepoCreated = true;
-        const repo = await prisma.repo.create({
+      } catch (e: unknown) {
+        if (errorCode(e) === "EEXIST") {
+          return reply.status(409).send({ error: nameTaken });
+        }
+        throw e;
+      }
+
+      let repo;
+      try {
+        repo = await prisma.repo.create({
           data: {
             name,
             description: parsed.data.description?.trim() || null,
@@ -416,18 +438,17 @@ export async function repoRoutes(app: FastifyInstance) {
           },
           include: { owner: { select: { handle: true } }, org: { select: { handle: true } } },
         });
-        // The creator implicitly watches their new repo at ALL (issue #88).
-        await ensureImplicitWatch(repo.id, ownerId);
-        return reply.status(201).send(repoResponse(repo));
       } catch (e: unknown) {
-        if (bareRepoCreated) {
-          await removeBareRepo(storageKey);
-        }
-        if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
-          return reply.status(409).send({ error: "You already have a repository with this name" });
+        // The directory is the one createBareRepo just made for this request.
+        await removeBareRepo(storageKey);
+        if (errorCode(e) === "P2002") {
+          return reply.status(409).send({ error: nameTaken });
         }
         throw e;
       }
+      // The creator implicitly watches their new repo at ALL (issue #88).
+      await ensureImplicitWatch(repo.id, ownerId);
+      return reply.status(201).send(repoResponse(repo));
     },
   );
 
@@ -621,7 +642,9 @@ export async function repoRoutes(app: FastifyInstance) {
         if (moved && existing.storageKey && newStorageKey) {
           await moveBareRepo(newStorageKey, existing.storageKey).catch(() => undefined);
         }
-        if (typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "P2002") {
+        // EEXIST: moveBareRepo found the target directory taken and moved nothing.
+        const code = errorCode(e);
+        if (code === "P2002" || code === "EEXIST") {
           return reply.status(409).send({ error: "You already have a repository with this name" });
         }
         throw e;
