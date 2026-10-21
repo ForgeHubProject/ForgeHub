@@ -64,6 +64,16 @@ describe("createBareRepo", () => {
     const returned = await createBareRepo("alice/test.git");
     expect(returned).toBe(bareRepoPathFromKey("alice/test.git"));
   });
+
+  it("refuses an existing path with EEXIST and leaves what is there alone", async () => {
+    const { mkdir, writeFile, readFile } = await import("node:fs/promises");
+    const full = bareRepoPathFromKey("alice/taken.git");
+    await mkdir(full, { recursive: true });
+    await writeFile(join(full, "marker"), "still here");
+
+    await expect(createBareRepo("alice/taken.git")).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readFile(join(full, "marker"), "utf8")).toBe("still here");
+  });
 });
 
 describe("inspectBareRepo", () => {
@@ -111,6 +121,24 @@ describe("moveBareRepo", () => {
     expect(before.exists).toBe(false);
     expect(after.exists).toBe(true);
     expect(after.isBare).toBe(true);
+  });
+
+  it("refuses an existing target with EEXIST and moves nothing", async () => {
+    await createBareRepo("alice/source.git");
+    await createBareRepo("alice/target.git");
+
+    await expect(moveBareRepo("alice/source.git", "alice/target.git")).rejects.toMatchObject({ code: "EEXIST" });
+    expect((await inspectBareRepo("alice/source.git")).isBare).toBe(true);
+    expect((await inspectBareRepo("alice/target.git")).isBare).toBe(true);
+  });
+
+  it("refuses an existing EMPTY target too (rename(2) would replace it)", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    await createBareRepo("alice/source.git");
+    await mkdir(bareRepoPathFromKey("alice/empty.git"), { recursive: true });
+
+    await expect(moveBareRepo("alice/source.git", "alice/empty.git")).rejects.toMatchObject({ code: "EEXIST" });
+    expect((await inspectBareRepo("alice/source.git")).isBare).toBe(true);
   });
 });
 

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { cloneMirror, syncForkBranch } from "../git-utils.js";
-import { bareRepoPathFromKey } from "../git-storage.js";
+import { bareRepoPathFromKey, removeBareRepo } from "../git-storage.js";
 import { ingestCommitRange } from "../ingest.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { ensureImplicitWatch } from "../watch-service.js";
@@ -51,17 +51,25 @@ export async function forkRoutes(app: FastifyInstance) {
       await cloneMirror(repo.storageKey, forkStorageKey);
     }
 
-    const fork = await prisma.repo.create({
-      data: {
-        name: forkName,
-        description: repo.description ? `Fork of ${handle}/${repo.name}. ${repo.description}` : `Fork of ${handle}/${repo.name}`,
-        visibility: repo.visibility,
-        ownerId: userId,
-        storageKey: forkStorageKey,
-        // Record lineage so the fork tracks its upstream (issue #113).
-        forkedFromId: repo.id,
-      },
-    });
+    let fork;
+    try {
+      fork = await prisma.repo.create({
+        data: {
+          name: forkName,
+          description: repo.description ? `Fork of ${handle}/${repo.name}. ${repo.description}` : `Fork of ${handle}/${repo.name}`,
+          visibility: repo.visibility,
+          ownerId: userId,
+          storageKey: forkStorageKey,
+          // Record lineage so the fork tracks its upstream (issue #113).
+          forkedFromId: repo.id,
+        },
+      });
+    } catch (e) {
+      // The clone sits at a fresh random key (and `git clone` refuses a non-empty
+      // target), so this only removes what this request wrote.
+      if (forkStorageKey) await removeBareRepo(forkStorageKey);
+      throw e;
+    }
 
     // The fork's owner implicitly watches it at ALL (issue #88).
     await ensureImplicitWatch(fork.id, userId);

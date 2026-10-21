@@ -27,7 +27,7 @@ vi.mock("../prisma.js", () => ({
     },
     teamMembership: { upsert: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
     teamRepoAccess: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
-    repo: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
+    repo: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     $transaction: vi.fn().mockResolvedValue([]),
   },
 }));
