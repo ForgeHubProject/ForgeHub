@@ -263,13 +263,39 @@ export function bareRepoPathFromKey(key: string): string {
   return full;
 }
 
+/** The error createBareRepo / moveBareRepo throw when the target path is taken. */
+function bareRepoExists(storageKey: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`Bare repository already exists: ${storageKey}`), { code: "EEXIST" });
+}
+
+/**
+ * Create a fresh bare repo. Throws with `code: "EEXIST"` when anything already
+ * sits at the path, and never touches it: `git init --bare` happily
+ * reinitialises an existing repo, so a caller that rolled back on a later
+ * failure used to `rm -rf` a live repository it had only "created".
+ */
 export async function createBareRepo(storageKey: string): Promise<string> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await execFile("git", ["init", "--bare", "--initial-branch=main", fullPath]);
-  // Install the branch-protection pre-receive hook (issue #85). No rules file is
-  // written yet, so the hook is inert until a branch is protected.
-  await installPreReceiveHook(fullPath);
+  // The non-recursive mkdir is the claim: it fails if the directory exists, so
+  // everything below — and any rollback by the caller — acts on a directory
+  // this call created.
+  try {
+    await mkdir(fullPath);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") throw bareRepoExists(storageKey);
+    throw e;
+  }
+  try {
+    await execFile("git", ["init", "--bare", "--initial-branch=main", fullPath]);
+    // Install the branch-protection pre-receive hook (issue #85). No rules file is
+    // written yet, so the hook is inert until a branch is protected.
+    await installPreReceiveHook(fullPath);
+  } catch (e) {
+    // Don't leave a half-made directory behind to block the next attempt.
+    await rm(fullPath, { recursive: true, force: true });
+    throw e;
+  }
   return fullPath;
 }
 
@@ -278,10 +304,15 @@ export async function removeBareRepo(storageKey: string): Promise<void> {
   await rm(fullPath, { recursive: true, force: true });
 }
 
+/** Move a bare repo to a new key. Throws with `code: "EEXIST"` if the target exists. */
 export async function moveBareRepo(oldStorageKey: string, newStorageKey: string): Promise<void> {
   const oldPath = bareRepoPathFromKey(oldStorageKey);
   const newPath = bareRepoPathFromKey(newStorageKey);
   await mkdir(path.dirname(newPath), { recursive: true });
+  // rename(2) would silently replace an empty directory at the target and fail
+  // with a bare ENOTEMPTY on a full one; check first so both read as "taken".
+  const taken = await access(newPath).then(() => true, () => false);
+  if (taken) throw bareRepoExists(newStorageKey);
   await rename(oldPath, newPath);
 }
 
