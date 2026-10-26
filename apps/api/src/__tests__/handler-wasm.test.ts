@@ -179,3 +179,37 @@ describe("GET /handlers/:build/:asset — follows the manifest build", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("GET /handlers/:asset — fhr-wasm-1 first (FHR SPEC §7)", () => {
+  const BOTH = MANIFEST.replace(
+    `"wasm" = "https://cdn.test/fhr/forge-handler-gltf-scene.wasm"`,
+    `"wasm" = "https://cdn.test/fhr/forge-handler-gltf-scene.wasm"
+"wasm-fhr1" = "https://cdn.test/fhr/forge-handler-gltf-scene.fhr1.wasm"`,
+  );
+  // Each upstream answers with its own URL as the body, so the test sees which was served.
+  function stubByUrl(missing: string[] = []) {
+    const fn = vi.fn(async (url: string) =>
+      missing.includes(url) ? new Response("Not Found", { status: 404 }) : new Response(url, { status: 200 }),
+    );
+    globalThis.fetch = fn as unknown as typeof fetch;
+    return fn;
+  }
+
+  it("serves the fhr-wasm-1 module when the manifest lists one, and says which", async () => {
+    __setManifestForTests(BOTH);
+    stubByUrl();
+    const res = await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toBe("https://cdn.test/fhr/forge-handler-gltf-scene.fhr1.wasm");
+    expect(res.headers["x-fhr-wasm-abi"]).toBe("fhr-wasm-1");
+  });
+
+  it("serves the Go build while the module isn't published yet", async () => {
+    __setManifestForTests(BOTH);
+    stubByUrl(["https://cdn.test/fhr/forge-handler-gltf-scene.fhr1.wasm"]);
+    const res = await app.inject({ method: "GET", url: "/handlers/gltf-scene" });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toBe("https://cdn.test/fhr/forge-handler-gltf-scene.wasm");
+    expect(res.headers["x-fhr-wasm-abi"]).toBe("go-js");
+  });
+});

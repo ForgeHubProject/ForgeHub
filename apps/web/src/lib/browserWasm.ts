@@ -99,6 +99,7 @@ export class WorkerWasmHandler {
           mediaType?: string;
           previewType?: string | null;
           error?: string;
+          crashed?: boolean;
         };
         if (msg.type === "ready") {
           ready = true;
@@ -108,11 +109,17 @@ export class WorkerWasmHandler {
           rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
         } else if (msg.type === "result" && msg.id !== undefined) {
           const p = this.pending.get(msg.id);
-          if (!p) return;
-          clearTimeout(p.timer);
-          this.pending.delete(msg.id);
-          if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
-          else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
+          if (p) {
+            clearTimeout(p.timer);
+            this.pending.delete(msg.id);
+            if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
+            else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
+          }
+          // The handler crashed: drop this worker before another call reaches
+          // it; the next call respawns a fresh instance.
+          if (msg.crashed && this.worker === worker) {
+            this.fail(new Error(`wasm ${this.handlerId}: the handler crashed (${msg.error})`));
+          }
         }
       };
       worker.onerror = (ev: ErrorEvent) => {

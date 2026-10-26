@@ -20,8 +20,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export type ParsedManifest = {
   /** lowercased file extension (".gltf") → official handler id ("gltf-scene"). */
   formats: Map<string, string>;
-  /** handler id → wasm build download URL. */
+  /** handler id → wasm build download URL (the older Go-only `GOOS=js` build). */
   wasmUrls: Map<string, string>;
+  /** handler id → fhr-wasm-1 module URL (FHR SPEC §7: the contract any language implements). */
+  wasmFhr1Urls: Map<string, string>;
   /** handler id → renderer ESM bundle URL. */
   rendererUrls: Map<string, string>;
   /**
@@ -42,6 +44,7 @@ let inflight: Promise<ParsedManifest> | null = null;
  * (see ForgeHubProject/FHR/manifest.toml):
  *   [formats]  ".gltf" = { handler = "gltf-scene", build = "…" }
  *   [assets.handlers."gltf-scene"]  wasm = "https://…/forge-handler-gltf-scene.wasm"
+ *                                   "wasm-fhr1" = "https://…/forge-handler-gltf-scene.fhr1.wasm"
  *   [assets.renderers]  "gltf-scene" = "https://…/renderer-gltf-scene.js"
  * Unknown/extra keys (native binaries, metadata) are ignored — ForgeHub only
  * consumes the wasm build and the renderer bundle.
@@ -68,9 +71,12 @@ export function parseManifest(toml: string): ParsedManifest {
   }
 
   const wasmUrls = new Map<string, string>();
+  const wasmFhr1Urls = new Map<string, string>();
   for (const [id, assets] of Object.entries(raw.assets?.handlers ?? {})) {
     const wasm = assets?.["wasm"];
     if (typeof wasm === "string") wasmUrls.set(id, wasm);
+    const fhr1 = assets?.["wasm-fhr1"];
+    if (typeof fhr1 === "string") wasmFhr1Urls.set(id, fhr1);
   }
 
   const rendererUrls = new Map<string, string>();
@@ -78,7 +84,7 @@ export function parseManifest(toml: string): ParsedManifest {
     if (typeof url === "string") rendererUrls.set(id, url);
   }
 
-  return { formats, wasmUrls, rendererUrls, builds };
+  return { formats, wasmUrls, wasmFhr1Urls, rendererUrls, builds };
 }
 
 /**
@@ -116,9 +122,14 @@ export async function officialFormats(): Promise<Map<string, string>> {
   return (await getManifest()).formats;
 }
 
-/** The wasm build URL for a handler id, or null if the manifest has none. */
+/** The Go-only wasm build URL for a handler id, or null if the manifest has none. */
 export async function handlerWasmUrl(handlerId: string): Promise<string | null> {
   return (await getManifest()).wasmUrls.get(handlerId) ?? null;
+}
+
+/** The fhr-wasm-1 module URL for a handler id, or null if the manifest has none. */
+export async function handlerWasmFhr1Url(handlerId: string): Promise<string | null> {
+  return (await getManifest()).wasmFhr1Urls.get(handlerId) ?? null;
 }
 
 /** The renderer bundle URL for a handler id, or null if the manifest has none. */

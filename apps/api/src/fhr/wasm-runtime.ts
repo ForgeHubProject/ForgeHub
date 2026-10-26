@@ -51,10 +51,20 @@ export type WasmHandler = {
    * flight settle. A later call still works (it respawns, then stops again).
    */
   retire?(): void;
+  /**
+   * Which wasm contract the build speaks: "fhr-wasm-1" (FHR SPEC §7, any
+   * language) or "go-js" (the older Go-only build). Known once ready.
+   */
+  readonly abi?: WasmAbi;
 };
 
-/** Parse a wasm handler's JSON merge output. */
-function parseMergeOutput(raw: string, handlerId: string): WasmMergeResult {
+export type WasmAbi = "fhr-wasm-1" | "go-js";
+
+/**
+ * Parse a wasm handler's merge output: JSON with the conflicts, and the merged
+ * blob either as `bytes` (fhr-wasm-1, raw) or base64 in the JSON (a Go build).
+ */
+function parseMergeOutput(raw: string, handlerId: string, bytes?: Uint8Array): WasmMergeResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -63,6 +73,7 @@ function parseMergeOutput(raw: string, handlerId: string): WasmMergeResult {
   }
   const obj = parsed as { error?: string; blob?: string; conflicts?: WasmConflict[] };
   if (obj.error) throw new Error(`wasm ${handlerId}: ${obj.error}`);
+  if (bytes) return { blob: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), conflicts: obj.conflicts ?? [] };
   if (typeof obj.blob !== "string") throw new Error(`wasm ${handlerId}: merge returned no blob`);
   return { blob: Buffer.from(obj.blob, "base64"), conflicts: obj.conflicts ?? [] };
 }
@@ -106,12 +117,14 @@ class WasmWorkerHandler implements WasmHandler {
   canImport = false;
   canExport = false;
   formats: readonly string[] = [];
+  abi: WasmAbi | undefined = undefined;
 
   constructor(
     private readonly bytes: Buffer,
     private readonly handlerId: string,
     private readonly workerPath: string,
     private readonly timeoutMs: number,
+    private readonly onLog: (line: string) => void,
   ) {}
 
   private spawn(): Promise<void> {
@@ -132,24 +145,36 @@ class WasmWorkerHandler implements WasmHandler {
         canImport?: boolean;
         canExport?: boolean;
         formats?: string[];
+        abi?: WasmAbi;
+        line?: string;
+        crashed?: boolean;
       }) => {
-        if (msg.type === "ready") {
+        if (msg.type === "log") {
+          this.onLog(msg.line ?? "");
+        } else if (msg.type === "ready") {
           ready = true;
           this.semanticMerge = msg.semanticMerge === true;
           this.previewType = msg.previewType ?? null;
           this.canImport = msg.canImport === true;
           this.canExport = msg.canExport === true;
           this.formats = msg.formats ?? [];
+          this.abi = msg.abi;
           resolveReady();
         } else if (msg.type === "init-error") {
           rejectReady(new Error(`wasm ${this.handlerId} init: ${msg.error}`));
         } else if (msg.type === "result" && msg.id !== undefined) {
           const p = this.pending.get(msg.id);
-          if (!p) return;
-          clearTimeout(p.timer);
-          this.pending.delete(msg.id);
-          if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
-          else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
+          if (p) {
+            clearTimeout(p.timer);
+            this.pending.delete(msg.id);
+            if (msg.error) p.reject(new Error(`wasm ${this.handlerId}: ${msg.error}`));
+            else p.resolve({ raw: msg.raw, bytes: msg.bytes, mediaType: msg.mediaType });
+          }
+          // The handler crashed: its memory can't be trusted, so this worker
+          // goes now, before another call reaches it; the next call respawns.
+          if (msg.crashed && this.worker === worker) {
+            this.fail(new Error(`wasm ${this.handlerId}: the handler crashed (${msg.error})`));
+          }
         }
       });
       worker.on("error", (err) => {
@@ -227,7 +252,8 @@ class WasmWorkerHandler implements WasmHandler {
 
   async merge(base: Buffer, ours: Buffer, theirs: Buffer): Promise<WasmMergeResult> {
     if (!this.semanticMerge) throw new Error(`wasm ${this.handlerId}: handler declares no semantic merge`);
-    return parseMergeOutput((await this.call("merge", { base, ours, theirs })).raw ?? "", this.handlerId);
+    const { raw, bytes } = await this.call("merge", { base, ours, theirs });
+    return parseMergeOutput(raw ?? "", this.handlerId, bytes);
   }
 
   async preview(blob: Buffer): Promise<WasmPreview> {
@@ -252,7 +278,12 @@ class WasmWorkerHandler implements WasmHandler {
   }
 }
 
-export type InstantiateOptions = { workerPath?: string; timeoutMs?: number };
+export type InstantiateOptions = {
+  workerPath?: string;
+  timeoutMs?: number;
+  /** Lines an fhr-wasm-1 module writes to stdout/stderr (a crash's trace, say). Default: the API's stderr. */
+  onLog?: (line: string) => void;
+};
 
 /**
  * Instantiate an official FHR handler's WebAssembly build in a Worker and
@@ -261,8 +292,9 @@ export type InstantiateOptions = { workerPath?: string; timeoutMs?: number };
  *
  * Security: only *official* handlers reach here (see official-handlers.ts);
  * community handlers are never fetched or executed server-side. The wasm runs
- * with wasm_exec's built-in minimal fs stub (no Node fs/child_process), inside
- * an isolated worker, under a per-call timeout.
+ * inside an isolated worker, under a per-call timeout, with no file system,
+ * network or environment: an fhr-wasm-1 module gets only the sandboxed WASI of
+ * fhr-wasm1.cjs, a Go GOOS=js build only wasm_exec's minimal fs stub.
  */
 export async function instantiateWasmHandler(
   bytes: Buffer,
@@ -274,6 +306,7 @@ export async function instantiateWasmHandler(
     handlerId,
     opts.workerPath ?? DEFAULT_WORKER,
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    opts.onLog ?? ((line) => process.stderr.write(`[wasm ${handlerId}] ${line}\n`)),
   );
   // Surface init failures now (spawn + wait for "ready") so official-handlers
   // can cache null and fall back rather than failing on first diff.

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { FastifyReply } from "fastify";
-import { handlerBuild, handlerWasmUrl } from "../fhr/manifest.js";
+import { handlerBuild } from "../fhr/manifest.js";
+import { fetchCandidate, wasmCandidates } from "../fhr/wasm-assets.js";
+import type { WasmAbi } from "../fhr/wasm-runtime.js";
 
 // Same-origin proxy + cache for official FHR handler *wasm builds*, the Tier-B
 // (in-browser compute) sibling of the /renderers bundle proxy. The web app
@@ -12,10 +14,11 @@ import { handlerBuild, handlerWasmUrl } from "../fhr/manifest.js";
 //
 // Trust model is identical to /renderers and the server's own wasm runner:
 // ONLY handlers the official manifest declares a wasm build for are served —
-// this proxy never fetches a community source. Where each build lives comes
-// from the manifest; FHR_WASM_BASE is the same explicit self-hosting override
-// official-handlers.ts honors, deriving the URL from the fixed
-// `forge-handler-<id>.wasm` release convention.
+// this proxy never fetches a community source. Which build, and from where,
+// is wasm-assets.ts's choice, shared with the server's runner: the fhr-wasm-1
+// module when the handler ships one (FHR SPEC §7), else its Go build. The
+// browser tells them apart by the module's own exports; X-FHR-Wasm-ABI names
+// the one served, for anyone debugging.
 //
 // Like /renderers, each cached build is stamped with the manifest build it was
 // fetched for and answers only for that build: FHR republishes a rolling release
@@ -36,7 +39,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 // handful of handlers; anything beyond that is noise, not working set.
 const CACHE_MAX_ENTRIES = 16;
 
-type CacheEntry = { build: string | null; bytes: Buffer | null; fetchedAt: number };
+type CacheEntry = { build: string | null; bytes: Buffer | null; abi: WasmAbi | null; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
 
 // Map iteration is insertion-ordered, so the first key is the oldest write.
@@ -68,16 +71,6 @@ function handlerIdOf(raw: string): string | null {
   return null;
 }
 
-async function fetchWasmAsset(url: string): Promise<Buffer | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
 export async function handlerWasmRoutes(app: FastifyInstance) {
   const serve = async (raw: string, requestedBuild: string | undefined, reply: FastifyReply) => {
     const handlerId = handlerIdOf(raw);
@@ -97,25 +90,26 @@ export async function handlerWasmRoutes(app: FastifyInstance) {
     }
 
     const hit = cache.get(handlerId);
-    let bytes: Buffer | null;
+    let bytes: Buffer | null = null;
+    let abi: WasmAbi | null = null;
     if (hit && hit.build === build && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
-      bytes = hit.bytes;
+      ({ bytes, abi } = hit);
     } else {
-      let url: string | null;
-      if (WASM_BASE) {
-        // Self-hosting override: fixed release-layout URL, manifest skipped.
-        url = `${WASM_BASE}/forge-handler-${handlerId}.wasm`;
-      } else {
-        try {
-          url = await handlerWasmUrl(handlerId);
-        } catch {
-          url = null; // manifest unreachable with no cache — treat as missing
+      let candidates: Awaited<ReturnType<typeof wasmCandidates>> = [];
+      try {
+        candidates = await wasmCandidates(handlerId);
+      } catch {
+        candidates = []; // manifest unreachable with no cache — treat as missing
+      }
+      for (const candidate of candidates) {
+        bytes = await fetchCandidate(candidate, fetch);
+        if (bytes) {
+          abi = candidate.abi;
+          break;
         }
       }
-      bytes = url ? await fetchWasmAsset(url) : null;
-      cacheStore(handlerId, { build, bytes, fetchedAt: Date.now() });
+      cacheStore(handlerId, { build, bytes, abi, fetchedAt: Date.now() });
     }
-
     if (bytes === null) {
       return reply.status(404).send({ error: `no wasm build for handler '${handlerId}'` });
     }
@@ -125,6 +119,7 @@ export async function handlerWasmRoutes(app: FastifyInstance) {
     const mislabeled = requestedBuild !== undefined && build !== null && requestedBuild !== build;
     return reply
       .header("Content-Type", "application/wasm")
+      .header("X-FHR-Wasm-ABI", abi ?? "unknown")
       .header("Cache-Control", mislabeled ? "no-store" : "public, max-age=3600")
       .send(bytes);
   };

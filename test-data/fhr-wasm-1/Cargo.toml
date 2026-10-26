@@ -1,0 +1,14 @@
+[package]
+name = "fhr-wasm-1-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

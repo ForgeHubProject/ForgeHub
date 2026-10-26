@@ -195,4 +195,24 @@ describe("browserWasmDiff", () => {
     await expect(handler.diff(new Uint8Array(), new Uint8Array())).rejects.toThrow(/timed out/);
     expect(spawnCount).toBe(2);
   }, 10_000);
+
+  it("drops a worker whose handler crashed, so the next call gets a fresh one", async () => {
+    const workers: FakeWorker[] = [];
+    const createWorker = () => {
+      const w: FakeWorker = new FakeWorker(({ id, head }) => {
+        if (new TextDecoder().decode(head) === "trap") {
+          w.onmessage?.({ data: { type: "result", id, error: "unreachable", crashed: true } } as MessageEvent);
+        } else {
+          w.respond(id, RAW_DIFF);
+        }
+      });
+      workers.push(w);
+      return w;
+    };
+    const handler = await loadBrowserHandler("gltf-scene", deps({ createWorker }));
+    await expect(handler.diff(new Uint8Array(), new TextEncoder().encode("trap"))).rejects.toThrow("unreachable");
+    expect(workers[0]!.terminated).toBe(true);
+    await expect(handler.diff(new Uint8Array(), new Uint8Array())).resolves.toBe(RAW_DIFF);
+    expect(workers).toHaveLength(2);
+  });
 });
