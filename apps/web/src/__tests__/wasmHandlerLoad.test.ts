@@ -6,7 +6,9 @@
  * one — runs for real without a real wasm build.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
+  instantiateHandler,
   instantiateOnPage,
   parseDiffOutput,
   type PageInstantiateDeps,
@@ -120,5 +122,36 @@ describe("parseDiffOutput (same contract as the server runtime)", () => {
 
   it("throws on an error payload", () => {
     expect(() => parseDiffOutput('{"error":"boom"}', "gltf-scene")).toThrow("boom");
+  });
+});
+
+// fhr-wasm-1 (FHR SPEC §7) for real: test-data/fhr-wasm-1/fixture.wasm is a
+// small Rust handler (answers are fixed functions of input lengths; it writes
+// to stderr and draws randomness through the sandboxed WASI).
+describe("instantiateHandler with an fhr-wasm-1 module", () => {
+  const fixture = readFileSync(new URL("../../../../test-data/fhr-wasm-1/fixture.wasm", import.meta.url));
+  const bytes = () => fixture.buffer.slice(fixture.byteOffset, fixture.byteOffset + fixture.byteLength) as ArrayBuffer;
+  const enc = (s: string) => new TextEncoder().encode(s);
+
+  it("answers diff and info as JSON strings, as a Go build does", async () => {
+    const h = await instantiateHandler(bytes(), "fixture");
+    expect(parseDiffOutput(h.diff(enc("abc"), enc("abcdef")), "fixture")).toEqual({
+      version: "1.0",
+      format: "fixture",
+      changes: [{ path: "bytes", kind: "modified", label: "bytes", before: "3", after: "6" }],
+    });
+    expect(JSON.parse(h.info!())).toMatchObject({ id: "fixture", preview: "model/gltf-binary" });
+  });
+
+  it("previews with the bytes intact", async () => {
+    const h = await instantiateHandler(bytes(), "fixture");
+    const out = h.preview!(new Uint8Array([1, 2, 3]));
+    expect(out.mediaType).toBe("model/gltf-binary");
+    expect([...out.blob!]).toEqual([3, 2, 1]);
+  });
+
+  it("lets a crash surface as a wasm trap, which the worker flags so the module is dropped", async () => {
+    const h = await instantiateHandler(bytes(), "fixture");
+    expect(() => h.diff(enc("x"), enc("trap"))).toThrow(WebAssembly.RuntimeError);
   });
 });

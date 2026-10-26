@@ -3,7 +3,8 @@ import type { FastifyInstance } from "fastify";
 import { canRead, resolveRepo } from "../repo-access.js";
 import { git, activeFormatsAtCommit, handlerPinsAtCommit, blobSizeAtCommit, resolveRefSha } from "../git-utils.js";
 import { officialHandlerId } from "../fhr/official-handlers.js";
-import { handlerBuild, handlerWasmUrl } from "../fhr/manifest.js";
+import { handlerBuild } from "../fhr/manifest.js";
+import { wasmCandidates } from "../fhr/wasm-assets.js";
 
 // Compute-tier metadata for one file at a commit, WITHOUT computing the diff
 // (issue #66 P4). This is everything the web app needs to decide which tier to
@@ -100,11 +101,11 @@ export async function fileDiffMetaRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "File not found at this commit" });
       }
 
-      const [pins, wasmUrl, officialBuild] = await Promise.all([
+      const [pins, wasmBuilds, officialBuild] = await Promise.all([
         handlerPinsAtCommit(storageKey, sha),
         // Manifest lookups can't reject here: officialHandlerId above already
         // proved a manifest is cached.
-        handlerWasmUrl(handlerId),
+        wasmCandidates(handlerId),
         handlerBuild(handlerId),
       ]);
 
@@ -116,9 +117,9 @@ export async function fileDiffMetaRoutes(app: FastifyInstance) {
         baseSize,
         headSize,
         // Capability, not location: the client computes through the /handlers
-        // proxy, so all it needs to know is whether a build exists (or a
-        // self-hosting override serves one).
-        wasmAvailable: Boolean(process.env["FHR_WASM_BASE"]) || wasmUrl !== null,
+        // proxy, so all it needs to know is whether a build exists — either
+        // kind, or a self-hosting override serving one (wasm-assets.ts).
+        wasmAvailable: wasmBuilds.length > 0,
         officialBuild,
         // null when the repo pins nothing for this handler (no lockfile, or an
         // explicit unpinned `null` entry — indistinguishable on purpose: both

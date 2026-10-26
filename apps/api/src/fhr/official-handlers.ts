@@ -1,7 +1,8 @@
 import { extname } from "node:path";
 import type { StructuredDiff } from "../handlers/types.js";
 import { instantiateWasmHandler, type WasmConflict, type WasmHandler } from "./wasm-runtime.js";
-import { handlerBuild, handlerWasmUrl, officialFormats } from "./manifest.js";
+import { handlerBuild, officialFormats } from "./manifest.js";
+import { fetchCandidate, wasmCandidates, type WasmCandidate } from "./wasm-assets.js";
 
 // Official FHR format→handler resolution. The manifest (manifest.ts) is the
 // single source of truth: this module holds NO hardcoded extension or handler
@@ -19,17 +20,6 @@ const MAX_WASM_BYTES = 8 * 1024 * 1024;
 /** The official handler id for an extension, or null. Manifest-driven. */
 export async function officialHandlerId(ext: string): Promise<string | null> {
   return (await officialFormats()).get(ext.toLowerCase()) ?? null;
-}
-
-/**
- * Resolve where a handler's wasm build lives. Normally the manifest is the
- * authority; FHR_WASM_BASE is an explicit self-hosting override that, when set,
- * derives the URL by the fixed `forge-handler-<id>.wasm` release convention.
- */
-async function resolveWasmUrl(handlerId: string): Promise<string | null> {
-  const base = process.env["FHR_WASM_BASE"];
-  if (base) return `${base}/forge-handler-${handlerId}.wasm`;
-  return handlerWasmUrl(handlerId);
 }
 
 export type OfficialHandlerDeps = {
@@ -68,7 +58,7 @@ export function __setOfficialHandlerForTests(handlerId: string, handler: WasmHan
 
 function loadWasmHandler(
   handlerId: string,
-  wasmUrl: string,
+  candidates: WasmCandidate[],
   build: string | null,
   deps: OfficialHandlerDeps,
 ): Promise<WasmHandler | null> {
@@ -78,11 +68,21 @@ function loadWasmHandler(
   // The manifest moved on: the old build finishes what it is running, then stops.
   cached?.handler.then((h) => h?.retire?.()).catch(() => {});
 
+  // The first build that downloads and starts: the fhr-wasm-1 module, else the
+  // Go build (wasm-assets.ts). A module that will not start falls through too.
   const handler = (async () => {
-    const res = await deps.fetchImpl(wasmUrl);
-    if (!res.ok) return null;
-    const bytes = Buffer.from(await res.arrayBuffer());
-    return deps.instantiate(bytes, handlerId);
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      const bytes = await fetchCandidate(candidate, deps.fetchImpl);
+      if (!bytes) continue;
+      try {
+        return await deps.instantiate(bytes, handlerId);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError) throw lastError;
+    return null;
   })();
   const entry: InstanceEntry = { build, handler };
   instanceCache.set(handlerId, entry);
@@ -117,21 +117,21 @@ async function officialHandlerFor(
   if (activeExts && !activeExts.has(ext)) return null;
 
   let handlerId: string | null;
-  let wasmUrl: string | null;
+  let candidates: WasmCandidate[];
   let build: string | null;
   try {
     handlerId = await officialHandlerId(ext);
     if (!handlerId) return null;
-    wasmUrl = await resolveWasmUrl(handlerId);
+    candidates = await wasmCandidates(handlerId);
     build = await handlerBuild(handlerId);
   } catch {
     // Manifest unreachable with no cached copy — treat as unavailable.
     return null;
   }
-  if (!wasmUrl) return null;
+  if (!candidates.length) return null;
 
   try {
-    const handler = await loadWasmHandler(handlerId, wasmUrl, build, deps);
+    const handler = await loadWasmHandler(handlerId, candidates, build, deps);
     return handler ? { handlerId, handler } : null;
   } catch {
     return null;
