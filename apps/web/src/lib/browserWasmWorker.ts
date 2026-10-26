@@ -1,7 +1,8 @@
-import { instantiateOnPage, previewTypeOf, type BrowserWasmHandler } from "./wasmHandlerLoad";
+import { instantiateHandler, previewTypeOf, type BrowserWasmHandler } from "./wasmHandlerLoad";
 
 // Dedicated Web Worker entry point (issue #177): runs the official handler's
-// wasm build off the page's main thread, so a pathological input hangs only
+// wasm build — an fhr-wasm-1 module or a Go build, see instantiateHandler — off
+// the page's main thread, so a pathological input hangs only
 // this worker — which browserWasm.ts kills on timeout — instead of freezing
 // the tab. Mirrors the API's wasm-worker.cjs, one thread flavor over (Worker
 // vs. node:worker_threads). Bundled as its own chunk by Vite's
@@ -11,7 +12,7 @@ import { instantiateOnPage, previewTypeOf, type BrowserWasmHandler } from "./was
 //   → {type: "init", bytes, handlerId}
 //   ← {type: "ready", previewType} | {type: "init-error", error}
 //   → {type: "diff", id, base, head}
-//   ← {type: "result", id, raw} | {type: "result", id, error}
+//   ← {type: "result", id, raw} | {type: "result", id, error, crashed}
 //   → {type: "preview", id, blob}           (FHR SPEC §7, when previewType)
 //   ← {type: "result", id, bytes, mediaType} | {type: "result", id, error}
 //
@@ -25,10 +26,14 @@ type PreviewMsg = { type: "preview"; id: number; blob: Uint8Array };
 
 let handlerP: Promise<BrowserWasmHandler> | null = null;
 
+// A trap: the module crashed mid-call and its memory can't be trusted. The
+// main thread drops this worker on it, so the next call starts a fresh one.
+const crashed = (e: unknown): boolean => e instanceof WebAssembly.RuntimeError;
+
 self.onmessage = (ev: MessageEvent<InitMsg | DiffMsg | PreviewMsg>) => {
   const msg = ev.data;
   if (msg.type === "init") {
-    handlerP = instantiateOnPage(msg.bytes, msg.handlerId);
+    handlerP = instantiateHandler(msg.bytes, msg.handlerId);
     handlerP.then(
       (handler) => postMessage({ type: "ready", previewType: previewTypeOf(handler) }),
       (e: unknown) => postMessage({ type: "init-error", error: String((e as Error)?.message ?? e) }),
@@ -43,7 +48,7 @@ self.onmessage = (ev: MessageEvent<InitMsg | DiffMsg | PreviewMsg>) => {
         const raw = handler.diff(msg.base, msg.head);
         postMessage({ type: "result", id: msg.id, raw });
       } catch (e) {
-        postMessage({ type: "result", id: msg.id, error: String((e as Error)?.message ?? e) });
+        postMessage({ type: "result", id: msg.id, error: String((e as Error)?.message ?? e), crashed: crashed(e) });
       }
     })();
   }
@@ -60,7 +65,7 @@ self.onmessage = (ev: MessageEvent<InitMsg | DiffMsg | PreviewMsg>) => {
           [out.blob.buffer],
         );
       } catch (e) {
-        postMessage({ type: "result", id: msg.id, error: String((e as Error)?.message ?? e) });
+        postMessage({ type: "result", id: msg.id, error: String((e as Error)?.message ?? e), crashed: crashed(e) });
       }
     })();
   }
