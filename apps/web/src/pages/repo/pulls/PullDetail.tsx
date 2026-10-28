@@ -35,19 +35,22 @@ import {
 } from "./prShared";
 import { useRepoPermission } from "../permission";
 
-type TabKey = "commits" | "files";
+export type TabKey = "commits" | "files";
 
 export function PullDetail({
   token,
   handle,
   repoName,
   number,
+  tab: activeTab,
   user,
 }: {
   token: string;
   handle: string;
   repoName: string;
   number: number;
+  /** The tab below the conversation, from the URL (`pulls/:number/files` is Files changed). */
+  tab: TabKey;
   user: User;
 }) {
   const navigate = useNavigate();
@@ -58,7 +61,6 @@ export function PullDetail({
   const { canWrite, canAdmin } = useRepoPermission();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>("commits");
 
   const [comments, setComments] = useState<IssueComment[]>([]);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
@@ -462,7 +464,7 @@ export function PullDetail({
               active={activeTab === "commits"}
               icon={<GitCommitIcon size={15} />}
               count={commits?.length}
-              onClick={() => setActiveTab("commits")}
+              to={`${base}/pulls/${number}`}
             >
               Commits
             </TabItem>
@@ -470,7 +472,7 @@ export function PullDetail({
               active={activeTab === "files"}
               icon={<FileDiffIcon size={15} />}
               count={prFiles?.length}
-              onClick={() => setActiveTab("files")}
+              to={`${base}/pulls/${number}/files`}
             >
               Files changed
             </TabItem>
@@ -593,26 +595,29 @@ export function PullDetail({
           <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || canAdmin} canClose={isAuthor || canAdmin} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
         </div>
 
-        {/* Sidebar */}
-        <aside className="w-full lg:w-56 shrink-0 text-fh-sm">
-          {/* Reviewers: reviews + request state, with request/re-request (issue #82) */}
-          <ReviewersPanel
-            token={token}
-            handle={handle}
-            repoName={repoName}
-            pr={pr}
-            currentUser={user.handle}
-            canManage={isAuthor || canWrite}
-            onRequestsChange={(requested) => {
-              setPr((prev) => (prev ? { ...prev, requestedReviewers: requested } : prev));
-              refreshTimeline();
-            }}
-          />
-          <div>
-            <p className="font-semibold text-fh-fg mb-1.5">Labels</p>
-            <p className="text-fh-xs text-fh-fg-subtle">No labels yet.</p>
-          </div>
-        </aside>
+        {/* Sidebar. Files changed goes without it, like GitHub's: the page is
+            the window's full width there (RepoPage), and the diffs take it all. */}
+        {activeTab !== "files" && (
+          <aside className="w-full lg:w-56 shrink-0 text-fh-sm">
+            {/* Reviewers: reviews + request state, with request/re-request (issue #82) */}
+            <ReviewersPanel
+              token={token}
+              handle={handle}
+              repoName={repoName}
+              pr={pr}
+              currentUser={user.handle}
+              canManage={isAuthor || canWrite}
+              onRequestsChange={(requested) => {
+                setPr((prev) => (prev ? { ...prev, requestedReviewers: requested } : prev));
+                refreshTimeline();
+              }}
+            />
+            <div>
+              <p className="font-semibold text-fh-fg mb-1.5">Labels</p>
+              <p className="text-fh-xs text-fh-fg-subtle">No labels yet.</p>
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );
