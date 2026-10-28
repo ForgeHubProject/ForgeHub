@@ -17,7 +17,7 @@ import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoForksTab } from "./repo/RepoForksTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
-import { RepoPullsTab } from "./repo/RepoPullsTab";
+import { PULL_DETAIL, RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
 import { RepoProjectsTab } from "./repo/projects/RepoProjectsTab";
 import { RepoSettingsTab } from "./repo/RepoSettingsTab";
@@ -158,7 +158,8 @@ export function RepoPage({ token, user, onLogout }: Props) {
   // centred column.
   const fullWidth =
     (activeTab === "commits" && commitShaFromSplat(splat) !== null) ||
-    (activeTab === "code" && splat.startsWith("blob/")); // the file page, #223
+    (activeTab === "code" && splat.startsWith("blob/")) || // the file page, #223
+    (activeTab === "pulls" && PULL_DETAIL.exec(splat)?.[2] !== undefined); // a PR's Files changed
   const column = fullWidth ? "max-w-none px-4 lg:px-8" : "max-w-[1280px] px-4";
 
   const [repo, setRepo] = useState<Repo | null>(null);
