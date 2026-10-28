@@ -8,6 +8,8 @@ import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, Toolt
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
 import { useSemanticFormatsReady } from "../lib/fhrFormats";
+import { fileBody } from "../lib/fileBody";
+import { LatestFileChange } from "./LatestFileChange";
 import {
   extensionKey,
   isSemanticFilename,
@@ -141,16 +143,20 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     return () => { cancelled = true; };
   }, [filename]);
   const navigate = useNavigate();
-  // Size and format for every file, from the tree: no download needed (#225).
-  const [meta, setMeta] = useState<BlobMeta | null>(null);
+  // Size, format and whether it is binary, for every file, from the tree: no
+  // download needed (#225). Kept with the file it is about, so a page moving
+  // to another file never reads the last one's facts: undefined while they
+  // load, null when they could not be had (the header then just omits them).
+  const metaKey = `${ref}\0${path}`;
+  const [metaFor, setMetaFor] = useState<{ key: string; meta: BlobMeta | null } | null>(null);
+  const meta = metaFor?.key === metaKey ? metaFor.meta : undefined;
   useEffect(() => {
     let live = true;
-    setMeta(null);
     getBlobMeta(token, handle, repoName, ref, path)
-      .then((m) => { if (live) setMeta(m); })
-      .catch(() => { /* the header just omits the facts */ });
+      .then((m) => { if (live) setMetaFor({ key: metaKey, meta: m }); })
+      .catch(() => { if (live) setMetaFor({ key: metaKey, meta: null }); });
     return () => { live = false; };
-  }, [token, handle, repoName, ref, path]);
+  }, [token, handle, repoName, ref, path, metaKey]);
   const stats = useMemo(() => (content === null ? null : lineStats(content)), [content]);
 
   // Manifest-mapped files (e.g. .glb) get the FHR renderer, which fetches its
@@ -188,6 +194,10 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     setSource(true);
   };
   const Viewer = blameOn ? CodeViewer : semantic ? resolveFileViewer(filename, semanticExts) : resolveFileViewer(filename);
+  // A binary file nothing draws is never decoded as text: it shows what its
+  // latest commit changed when its format has semantic diffs, else a download.
+  const body = fileBody({ semantic, manifestSettled, meta });
+  const binaryBody = body === "latest-change" || body === "binary";
   const declineView = useCallback(() => {
     // Loading now, in the same render that drops `semantic`, so the "File not
     // found" branch (no content, not semantic) never shows before the fetch.
@@ -196,10 +206,15 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
   }, [filename]);
 
   useEffect(() => {
-    if (!manifestSettled) return; // still loading; the skeleton stays up
-    if (semantic) {
+    if (body === "pending") {
+      setLoading(true); // the skeleton, until the file's facts decide what it shows
+      return;
+    }
+    if (body !== "text") {
       setLoading(false);
       setError(null);
+      // A renderer's file keeps its text for the Code view; a binary's has none.
+      if (body !== "renderer") setContent(null);
       return;
     }
     let cancelled = false;
@@ -210,7 +225,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load file"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [token, handle, repoName, path, ref, semantic, manifestSettled]);
+  }, [token, handle, repoName, path, ref, body]);
 
   // Keep the selection in sync with browser back/forward and manual hash edits.
   useEffect(() => {
@@ -266,12 +281,10 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
   }
 
   async function download() {
-    // Semantic files never had text content — download the true bytes instead.
-    const blob = semantic
+    // Semantic and binary files never had text content — download the true bytes instead.
+    const blob = semantic || content === null
       ? await fetchRawBlob(token, handle, repoName, path, ref).catch(() => null)
-      : content !== null
-        ? new Blob([content], { type: "text/plain;charset=utf-8" })
-        : null;
+      : new Blob([content], { type: "text/plain;charset=utf-8" });
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -356,7 +369,7 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     );
   }
 
-  if (error || (content === null && !semantic)) {
+  if (error || (content === null && !semantic && !binaryBody)) {
     return (
       <div>
         {breadcrumb}
@@ -372,12 +385,13 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
     <div>
       {breadcrumb}
       {beforeFile}
-      <div className="border border-fh-border rounded-md overflow-hidden bg-fh-surface">
+      {/* The latest change's tier menu opens downward past a short body; clipping would cut it off. */}
+      <div className={cx("border border-fh-border rounded-md bg-fh-surface", body !== "latest-change" && "overflow-hidden")}>
         {/* File header (#225): Code | Blame and the file's facts on the left;
             Raw · Copy · Download, Permalink and a ⋯ menu on the right. */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2 bg-fh-canvas border-b border-fh-border">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-fh-sm text-fh-fg-muted">
-            {(!rendered || meta?.binary === false) && (
+            {!binaryBody && (!rendered || meta?.binary === false) && (
               <div role="group" aria-label="View" className="inline-flex shrink-0 overflow-hidden rounded-md border border-fh-border">
                 {[
                   ...(rendered ? [{ label: "Preview", on: !source, go: () => { if (blameOn) toggleBlame(); setSource(false); } }] : []),
@@ -477,14 +491,23 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
               <DropdownItem onSelect={copyPath}>Copy path</DropdownItem>
               <DropdownItem onSelect={() => void copyPermalink()}>Copy permalink</DropdownItem>
               <DropdownItem onSelect={() => navigate(historyUrl(repoBase, ref, path))}>View history</DropdownItem>
-              {!semantic && (
+              {!semantic && !binaryBody && (
                 <DropdownItem onSelect={toggleBlame}>{blameOn ? "View code" : "View blame"}</DropdownItem>
               )}
             </DropdownMenu>
           </div>
         </div>
 
-        {blameOn && blameLoading ? (
+        {body === "latest-change" ? (
+          <LatestFileChange token={token} handle={handle} repoName={repoName} repoBase={repoBase} gitRef={ref} path={path} />
+        ) : body === "binary" ? (
+          <div className="p-8 text-center text-fh-sm text-fh-fg-muted" data-testid="binary-file">
+            Binary file not shown{meta ? ` (${formatBytes(meta.size)})` : ""}.{" "}
+            <button type="button" onClick={() => void download()} className="text-fh-accent-fg hover:underline cursor-pointer">
+              Download
+            </button>
+          </div>
+        ) : blameOn && blameLoading ? (
           <div className="p-4 space-y-2">
             {[...Array(8)].map((_, i) => <Skeleton key={i} className="h-3" width={`${50 + ((i * 13) % 40)}%`} />)}
           </div>
