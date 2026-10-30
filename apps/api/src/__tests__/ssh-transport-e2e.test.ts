@@ -203,10 +203,11 @@ describe("SSH transport — real end-to-end", () => {
     expect(await bareHeadSha(repo.bareRepoPath)).toBe(before); // unchanged
   }, 45000);
 
-  it("an unregistered key is rejected at authentication", async () => {
+  it("an unregistered key cannot clone a private repo", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fh-ssh-stranger-"));
     tmpDirs.push(dir);
     const clone = await runGit(["clone", url, dir], { keyPath: strangerKeyPath });
     expect(clone.code).not.toBe(0);
+    expect(clone.stderr.toLowerCase()).toContain("not found");
   }, 45000);
 });

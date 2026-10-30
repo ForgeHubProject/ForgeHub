@@ -142,18 +142,20 @@ describe("forwarded authentication", () => {
     expect(r.result).toBe("reject");
   });
 
-  it("refuses to act for a key that is not registered", async () => {
+  it("acts as a read-only anonymous visitor for a key that is not registered", async () => {
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
     const r = await attempt({ username: encodeForwardUser(personFp), signWith: forwardPriv });
-    expect(r.result).toBe("reject");
+    expect(r.result).toBe("accept");
+    expect(r.bound).toEqual({ kind: "anonymous" });
   });
 
   it("does nothing special when no forward key is configured", async () => {
     delete process.env["FORGEHUB_SSH_FORWARD_KEY"];
-    // The forward key is not a registered key, so ordinary auth turns it away.
+    // The forward key is not a registered key, so ordinary auth treats it as any
+    // stranger's key: a read-only anonymous visitor, never the key-lookup session.
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
     const r = await attempt({ username: KEYS_USER, signWith: forwardPriv });
-    expect(r.result).toBe("reject");
+    expect(r.bound).toEqual({ kind: "anonymous" });
   });
 });
 

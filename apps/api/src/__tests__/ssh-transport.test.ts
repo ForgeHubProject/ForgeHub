@@ -102,6 +102,25 @@ describe("decideAccess — user SSH key", () => {
   });
 });
 
+describe("decideAccess — anonymous (unregistered key)", () => {
+  const anon: SshActor = { kind: "anonymous" };
+
+  it("may clone a public repo", () => {
+    expect(allowed(decideAccess(anon, publicRepo, "git-upload-pack"))).toBe(true);
+  });
+
+  it("can never push, even to a public repo, and is told to register the key", () => {
+    const d = decideAccess(anon, publicRepo, "git-receive-pack");
+    expect(d.allowed).toBe(false);
+    if (!d.allowed) expect(d.reason).toContain("Settings → SSH keys");
+  });
+
+  it("sees a private repo as not found", () => {
+    const d = decideAccess(anon, repo, "git-upload-pack");
+    expect(d).toEqual({ allowed: false, reason: "Repository not found" });
+  });
+});
+
 describe("decideAccess — deploy key", () => {
   it("read-only deploy key can clone its repo but its push is REFUSED", () => {
     expect(allowed(decideAccess(deployActor("repo-1", true), repo, "git-upload-pack"))).toBe(true);
