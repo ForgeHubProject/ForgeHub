@@ -118,12 +118,19 @@ describe("onAuthentication vs the rate limiter", () => {
     await expect(attempt({ signWith: parsedUserPriv })).resolves.toBe("reject");
   });
 
-  it("unknown fingerprints lock the IP after 5 attempts through the real flow", async () => {
+  it("an unregistered key is an anonymous visitor, not a failure, so it never locks the IP", async () => {
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
 
-    for (let i = 0; i < 5; i++) {
-      await expect(attempt()).resolves.toBe("reject");
+    for (let i = 0; i < 10; i++) {
+      await expect(attempt()).resolves.toBe("accept");
     }
-    expect(isRateLimited(IP)).toBe(true);
+    expect(isRateLimited(IP)).toBe(false);
+  });
+
+  it("an unregistered key must still prove possession: a signature by another key is rejected", async () => {
+    vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
+
+    await expect(attempt({ signWith: parsedStrangerPriv })).resolves.toBe("reject");
+    await expect(attempt({ signWith: parsedUserPriv })).resolves.toBe("accept");
   });
 });
