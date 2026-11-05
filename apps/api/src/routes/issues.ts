@@ -4,6 +4,7 @@ import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { syncBodyReferences } from "../references-service.js";
+import { nextNumber } from "../numbering.js";
 import { parseQuickActions, applyQuickActions } from "../quick-actions.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { resolveMilestoneFilter } from "../milestone-filter.js";
@@ -165,11 +166,11 @@ export async function issueRoutes(app: FastifyInstance) {
     if (!title?.trim()) return reply.status(400).send({ error: "title is required" });
 
     const issue = await prisma.$transaction(async (tx) => {
-      const count = await tx.issue.count({ where: { repoId: repo.id } });
+      const number = await nextNumber(tx, repo.id);
       return tx.issue.create({
         data: {
           repoId: repo.id,
-          number: count + 1,
+          number,
           title: title.trim(),
           body: body?.trim() || null,
           state: "OPEN",
@@ -826,11 +827,8 @@ export async function issueRoutes(app: FastifyInstance) {
     }
     if (!canWrite(target, userId)) return reply.status(403).send({ error: "Write access to the target repository is required" });
 
-    // Fresh number = max(number)+1 in the target (robust against gaps from prior transfers).
-    const top = await prisma.issue.findFirst({
-      where: { repoId: target.id }, orderBy: { number: "desc" }, select: { number: true },
-    });
-    const newNumber = (top?.number ?? 0) + 1;
+    // A fresh number from the target's sequence, shared with its pull requests (#259).
+    const newNumber = await nextNumber(prisma, target.id);
 
     // Remap labels to the target repo by name; unmatched labels are dropped.
     const targetLabels = await prisma.label.findMany({ where: { repoId: target.id }, select: { id: true, name: true } });

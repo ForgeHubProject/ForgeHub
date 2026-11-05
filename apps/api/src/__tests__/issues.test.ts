@@ -108,6 +108,9 @@ vi.mock("../references-service.js", () => ({
   closeIssuesForMergedPull: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The number allocator has its own tests (numbering.test.ts); here it hands out 1.
+vi.mock("../numbering.js", () => ({ nextNumber: vi.fn(async () => 1) }));
+
 vi.mock("../git-storage.js", () => ({
   buildStorageKey: vi.fn().mockReturnValue("alice/my-repo.git"),
   createBareRepo: vi.fn().mockResolvedValue("/tmp/repo"),
@@ -147,6 +150,7 @@ vi.mock("bcryptjs", () => ({
 
 import { prisma } from "../prisma.js";
 import { recordEvent } from "../timeline-service.js";
+import { nextNumber } from "../numbering.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { hashToken } from "../tokens.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
@@ -1415,10 +1419,9 @@ describe("Issue transfer", () => {
     vi.mocked(prisma.repo.findFirst)
       .mockResolvedValueOnce(makeRepo() as never)
       .mockResolvedValueOnce(makeRepo({ id: "repo-target", name: "other-repo" }) as never);
-    // issue.findFirst: source issue (with labels), then the target's top number.
-    vi.mocked(prisma.issue.findFirst)
-      .mockResolvedValueOnce(makeIssue({ labels: [] }) as never)
-      .mockResolvedValueOnce({ number: 5 } as never);
+    vi.mocked(prisma.issue.findFirst).mockResolvedValueOnce(makeIssue({ labels: [] }) as never);
+    // The target's next number, from the sequence it shares with its pull requests.
+    vi.mocked(nextNumber).mockResolvedValueOnce(6);
 
     const res = await app.inject({
       method: "POST",
@@ -1429,7 +1432,8 @@ describe("Issue transfer", () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.number).toBe(6); // max(5) + 1 in the target
+    expect(body.number).toBe(6);
+    expect(nextNumber).toHaveBeenCalledWith(expect.anything(), "repo-target");
     expect(body.repo).toBe("alice/other-repo");
 
     // The moved row is updated to the target repo + fresh number.

@@ -67,7 +67,7 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
       const pull = num(d.closedByPull);
       return {
         icon: <ClosedMark />, tone: "text-fh-purple-fg",
-        body: <>closed this{pull != null && <> via <Link to={`${base}/pulls/${pull}`} className="text-fh-accent-fg hover:underline">!{pull}</Link></>}</>,
+        body: <>closed this{pull != null && <> via <Link to={`${base}/pulls/${pull}`} className="text-fh-accent-fg hover:underline">#{pull}</Link></>}</>,
       };
     }
     case "reopened":
@@ -104,7 +104,7 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
       const sourceTitle = str(d.sourceTitle);
       const isPull = sourceType === "PULL_REQUEST";
       const path = sourceNumber != null ? `${base}/${isPull ? "pulls" : "issues"}/${sourceNumber}` : null;
-      const ref = sourceNumber != null ? `${isPull ? "!" : "#"}${sourceNumber}` : "";
+      const ref = sourceNumber != null ? `#${sourceNumber}` : "";
       return {
         icon: <LinkMark />, tone: "text-fh-fg-subtle",
         body: <>referenced this{path && <> in{" "}

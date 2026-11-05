@@ -96,6 +96,9 @@ vi.mock("../references-service.js", () => ({
   closeIssuesForMergedPull: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The number allocator has its own tests (numbering.test.ts); here it hands out 1.
+vi.mock("../numbering.js", () => ({ nextNumber: vi.fn(async () => 1) }));
+
 vi.mock("../git-storage.js", () => ({
   buildStorageKey: vi.fn().mockReturnValue("alice/my-repo.git"),
   createBareRepo: vi.fn().mockResolvedValue("/tmp/repo"),

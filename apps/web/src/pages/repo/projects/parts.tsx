@@ -119,9 +119,9 @@ export function SubjectStateIcon({ subject, size = 15 }: { subject: NonNullable<
   return <PullRequestIcon size={size} className="shrink-0 text-fh-success-fg" />;
 }
 
-/** `#N` for an issue, `!N` for a PR — matching the repo's cross-ref convention. */
-export function subjectRef(type: ProjectSubjectType, number: number): string {
-  return `${type === "pull" ? "!" : "#"}${number}`;
+/** `#N`: issues and pull requests share one sequence (#259). */
+export function subjectRef(number: number): string {
+  return `#${number}`;
 }
 
 /** Deep link to the underlying issue/PR. */
