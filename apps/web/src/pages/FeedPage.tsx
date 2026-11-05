@@ -46,9 +46,7 @@ function itemMark(item: FeedItem): { path: string; tone: string } {
 function ItemBody({ item }: { item: FeedItem }) {
   const base = `/${item.repo.ownerHandle}/${item.repo.name}`;
   const subjectPath = item.subjectType === "pull_request" || item.type === "pr_opened" ? "pulls" : "issues";
-  const ref = item.number != null
-    ? `${subjectPath === "pulls" ? "!" : "#"}${item.number}`
-    : "";
+  const ref = item.number != null ? `#${item.number}` : "";
   const subjectLink = item.number != null && (
     <Link to={`${base}/${subjectPath}/${item.number}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">
       {ref}{item.title ? ` ${item.title}` : ""}

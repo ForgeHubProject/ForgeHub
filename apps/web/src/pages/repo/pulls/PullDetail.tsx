@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  applySuggestion, createPullComment, createReview, createReviewComment, deleteReview, getPull,
+  ApiError, applySuggestion, createPullComment, createReview, createReviewComment, deleteReview, getIssue, getPull,
   listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
   listReviews, replyToReviewThread, setPRFileViewed, setReviewThreadResolved, submitReview,
 } from "../../../api";
@@ -86,7 +86,14 @@ export function PullDetail({
     setError(null);
     getPull(token, handle, repoName, number)
       .then(setPr)
-      .catch((e) => setError(e instanceof Error ? e.message : "Not found"))
+      .catch(async (e) => {
+        // One sequence for issues and pull requests (#259): N may be an issue.
+        if (e instanceof ApiError && e.status === 404) {
+          const issue = await getIssue(token, handle, repoName, number).catch(() => null);
+          if (issue) return navigate(`${base}/issues/${number}`, { replace: true });
+        }
+        setError(e instanceof Error ? e.message : "Not found");
+      })
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
 

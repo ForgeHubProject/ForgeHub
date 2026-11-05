@@ -7,6 +7,7 @@ import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
 import { resolveMilestoneFilter } from "../milestone-filter.js";
 import { syncBodyReferences, closeIssuesForMergedPull } from "../references-service.js";
+import { nextNumber } from "../numbering.js";
 import { resolvePullRequestMerge, type MergeFileResolution } from "../merge/resolve-pull.js";
 import { liveRange, pullRange } from "../pull-range.js";
 import { ingestCommitRange } from "../ingest.js";
@@ -221,11 +222,10 @@ export async function pullRoutes(app: FastifyInstance) {
     });
     if (dup) return reply.status(409).send({ error: "An open pull request already exists for this branch pair" });
 
-    const count = await prisma.pullRequest.count({ where: { repoId: repo.id } });
     const pr = await prisma.pullRequest.create({
       data: {
         repoId: repo.id,
-        number: count + 1,
+        number: await nextNumber(prisma, repo.id),
         title: title.trim(),
         description: description?.trim() || null,
         fromBranch,
@@ -828,12 +828,11 @@ export async function pullRoutes(app: FastifyInstance) {
       });
     }
 
-    const count = await prisma.pullRequest.count({ where: { repoId: repo.id } });
     const revertPr = await prisma.pullRequest.create({
       data: {
         repoId: repo.id,
-        number: count + 1,
-        title: `Revert "${pr.title}" (!${pr.number})`,
+        number: await nextNumber(prisma, repo.id),
+        title: `Revert "${pr.title}" (#${pr.number})`,
         description: `Reverts #${pr.number}.`,
         fromBranch: revertBranch,
         toBranch: pr.toBranch,

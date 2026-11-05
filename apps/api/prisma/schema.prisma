@@ -135,6 +135,13 @@ model Repo {
   allowedMergeMethods String @default("merge,squash,rebase")
   defaultMergeMethod  String @default("merge")
 
+  // ─── Issue and pull request numbers (issue #259) ──────────────────────────────
+  // One sequence for both, as on GitHub: the highest number handed out to an
+  // issue or a pull request. `nextNumber` (numbering.ts) raises it to the rows
+  // already there before counting on, so repos from before this column, and rows
+  // written with their own numbers, start the sequence above what exists.
+  lastNumber Int @default(0)
+
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
   // deleting an upstream orphans its forks rather than cascade-deleting them.

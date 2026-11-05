@@ -5,7 +5,7 @@ import {
   EmptyState, RelativeTime, Skeleton, Textarea, TextInput, useToast,
 } from "../../../ui";
 import {
-  addIssueLabel, createIssueCommentWithActions, getIssue, listIssueComments, listIssueTimeline,
+  addIssueLabel, ApiError, createIssueCommentWithActions, getIssue, getPull, listIssueComments, listIssueTimeline,
   listLabels, listMilestones, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember,
   setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
 } from "../../../api";
@@ -98,7 +98,15 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
         setEvents(tl.events);
         setMilestones(ms.milestones);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Issue not found"))
+      .catch(async (e) => {
+        // Issues and pull requests share one sequence (#259): `#N` links here even
+        // when N is a pull request, so go there, as GitHub does.
+        if (e instanceof ApiError && e.status === 404) {
+          const pull = await getPull(token, handle, repoName, number).catch(() => null);
+          if (pull) return navigate(`${base}/pulls/${number}`, { replace: true });
+        }
+        setError(e instanceof Error ? e.message : "Issue not found");
+      })
       .finally(() => setLoading(false));
   }, [token, handle, repoName, number]);
 

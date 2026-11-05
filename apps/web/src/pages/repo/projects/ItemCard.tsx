@@ -52,7 +52,7 @@ export function ItemCard({
               >
                 {subject.title}
               </Link>
-              <div className="mt-0.5 text-fh-xs font-mono text-fh-fg-subtle">{subjectRef(subject.type, subject.number)}</div>
+              <div className="mt-0.5 text-fh-xs font-mono text-fh-fg-subtle">{subjectRef(subject.number)}</div>
             </div>
             {canWrite && (
               <span className="shrink-0 -mr-1 flex items-center">
@@ -105,7 +105,7 @@ export function ItemCard({
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <p className="text-fh-fg-muted italic">This {item.subjectType === "pull" ? "pull request" : "issue"} is no longer available</p>
-            <div className="mt-0.5 text-fh-xs font-mono text-fh-fg-subtle">{subjectRef(item.subjectType, item.subjectNumber)}</div>
+            <div className="mt-0.5 text-fh-xs font-mono text-fh-fg-subtle">{subjectRef(item.subjectNumber)}</div>
           </div>
           {canWrite && (
             <button

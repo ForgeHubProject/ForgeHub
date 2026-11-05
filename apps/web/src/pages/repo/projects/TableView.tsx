@@ -122,7 +122,7 @@ export function TableView({ columns, base, canWrite, onRemoveItem }: Props) {
                 ) : (
                   <span className="italic text-fh-fg-muted">No longer available</span>
                 )}
-                <span className="ml-1.5 font-mono text-fh-xs text-fh-fg-subtle">{subjectRef(r.type, r.number)}</span>
+                <span className="ml-1.5 font-mono text-fh-xs text-fh-fg-subtle">{subjectRef(r.number)}</span>
               </td>
               <td className="px-3 py-2 align-top">
                 {r.state ? <Badge tone={stateTone(r.type, r.state)}>{r.state}</Badge> : <span className="text-fh-fg-subtle">—</span>}
