@@ -103,25 +103,36 @@ export function SidebarLabels({
 
 /**
  * Assignee sidebar section (single assignee). Clicking the current assignee
- * again clears it.
+ * again clears it. With `selfHandle`, an empty section offers GitHub's
+ * "assign yourself" (#253) when that person is a member.
  */
 export function SidebarAssignee({
   members,
   selectedHandle,
   onSelect,
   canEdit,
+  selfHandle,
 }: {
   members: RepoMember[];
   selectedHandle: string | null;
   onSelect: (handle: string | null) => void;
   canEdit: boolean;
+  selfHandle?: string;
 }) {
+  const canAssignSelf = canEdit && !!selfHandle && members.some((m) => m.handle === selfHandle);
   const applied =
     selectedHandle ? (
       <div className="flex items-center gap-2">
         <Avatar name={selectedHandle} size={20} />
         <span className="text-fh-sm text-fh-fg">{selectedHandle}</span>
       </div>
+    ) : canAssignSelf ? (
+      <p className="text-fh-sm text-fh-fg-muted">
+        No one —{" "}
+        <button type="button" onClick={() => onSelect(selfHandle!)} className="text-fh-accent-fg hover:underline">
+          assign yourself
+        </button>
+      </p>
     ) : (
       <p className="text-fh-sm text-fh-fg-muted">No one assigned</p>
     );

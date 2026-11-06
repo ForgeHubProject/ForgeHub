@@ -1,17 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Avatar, Button, Field, Select, Textarea, TextInput } from "../../../ui";
-import { createIssue, listLabels, listRepoMembers, listRepoTemplates, RepoMember, updateIssue } from "../../../api";
-import type { IssueTemplate, Label, User } from "../../../types";
+import { Avatar, Button, Field, Select, TextInput, useToast } from "../../../ui";
+import {
+  createIssue, listLabels, listMilestones, listRepoMembers, listRepoTemplates, RepoMember, updateIssue,
+} from "../../../api";
+import { MarkdownEditor } from "../../../components/MarkdownEditor";
+import type { IssueTemplate, Label, Milestone, User } from "../../../types";
 import { canReplaceBody, resolveTemplateLabels } from "../templatesModel";
-import { SidebarAssignee, SidebarLabels } from "./Sidebar";
+import { SidebarAssignee, SidebarLabels, SidebarMilestone } from "./Sidebar";
 import { ChevronLeftIcon } from "./icons";
 
 export function NewIssueComposer({ token, handle, repoName, user }: {
   token: string; handle: string; repoName: string; user: User;
 }) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const base = `/${handle}/${repoName}`;
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -19,6 +24,10 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
   const [members, setMembers] = useState<RepoMember[]>([]);
   const [selected, setSelected] = useState<Label[]>([]);
   const [assignee, setAssignee] = useState<string | null>(null);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [milestoneId, setMilestoneId] = useState<string | null>(null);
+  // GitHub's "Create more": stay on a fresh form after creating.
+  const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Repo-provided issue templates (issue #89) — absent for most repos.
@@ -29,6 +38,7 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
   useEffect(() => {
     listLabels(token, handle, repoName).then((d) => setAllLabels(d.labels)).catch(() => {});
     listRepoMembers(token, handle, repoName).then((d) => setMembers(d.members)).catch(() => {});
+    listMilestones(token, handle, repoName, "open").then((d) => setMilestones(d.milestones)).catch(() => {});
     // A repo without templates (or an unreadable one) just leaves the picker off.
     listRepoTemplates(token, handle, repoName).then((d) => setTemplates(d.issueTemplates)).catch(() => {});
   }, [token, handle, repoName]);
@@ -70,11 +80,23 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
         body.trim() || undefined,
         selected.map((l) => l.id),
       );
-      if (assignee) {
-        const member = members.find((m) => m.handle === assignee);
-        if (member) {
-          try { await updateIssue(token, handle, repoName, issue.number, { assigneeId: member.id }); } catch { /* non-fatal */ }
-        }
+      const member = assignee ? members.find((m) => m.handle === assignee) : null;
+      if (member || milestoneId) {
+        try {
+          await updateIssue(token, handle, repoName, issue.number, {
+            ...(member ? { assigneeId: member.id } : {}),
+            ...(milestoneId ? { milestoneId } : {}),
+          });
+        } catch { /* non-fatal */ }
+      }
+      if (createMore) {
+        toast(`Created issue #${issue.number}`, { tone: "success" });
+        setTitle("");
+        setBody("");
+        setAppliedBody(null);
+        setTemplatePath("");
+        setSubmitting(false);
+        return;
       }
       navigate(`${base}/issues/${issue.number}`);
     } catch (err) {
@@ -95,7 +117,7 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
 
       <h1 className="text-fh-xl font-semibold text-fh-fg pb-4 mb-6 border-b border-fh-border">New issue</h1>
 
-      <form onSubmit={submit} className="flex flex-col lg:flex-row gap-6">
+      <form ref={formRef} onSubmit={submit} className="flex flex-col lg:flex-row gap-6">
         {/* Main form */}
         <div className="flex-1 min-w-0">
           <div className="flex gap-3">
@@ -127,19 +149,24 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
                   )}
                 </Field>
               )}
-              <Field label="Description" hint="Styling with Markdown is supported.">
-                {(id) => (
-                  <Textarea
-                    id={id}
-                    rows={10}
-                    placeholder="Leave a description"
-                    value={body}
-                    onChange={(e) => setBody(e.target.value)}
-                  />
-                )}
-              </Field>
+              <div>
+                <p className="mb-1.5 text-fh-sm font-semibold text-fh-fg">Description</p>
+                <MarkdownEditor
+                  rows={10}
+                  placeholder="Leave a description"
+                  value={body}
+                  onValueChange={setBody}
+                  onSubmit={() => formRef.current?.requestSubmit()}
+                  token={token}
+                  repo={{ owner: handle, name: repoName }}
+                />
+              </div>
               {error && <p className="text-fh-sm text-fh-danger-fg bg-fh-danger-muted rounded-md px-3 py-2">{error}</p>}
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-fh-border-muted">
+                <label className="mr-auto inline-flex items-center gap-1.5 text-fh-sm text-fh-fg-muted cursor-pointer">
+                  <input type="checkbox" checked={createMore} onChange={(e) => setCreateMore(e.target.checked)} />
+                  Create more
+                </label>
                 <Button variant="default" onClick={() => navigate(`${base}/issues`)}>Cancel</Button>
                 <Button type="submit" variant="primary" loading={submitting} disabled={!title.trim()}>
                   Submit new issue
@@ -152,7 +179,14 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
         {/* Sidebar */}
         <aside className="w-full lg:w-64 shrink-0">
           <SidebarLabels allLabels={allLabels} selected={selected} onToggle={toggleLabel} canEdit />
-          <SidebarAssignee members={members} selectedHandle={assignee} onSelect={setAssignee} canEdit />
+          <SidebarAssignee members={members} selectedHandle={assignee} onSelect={setAssignee} canEdit selfHandle={user.handle} />
+          <SidebarMilestone
+            milestones={milestones}
+            selected={milestones.find((m) => m.id === milestoneId) ?? null}
+            onSelect={setMilestoneId}
+            canEdit
+            base={base}
+          />
         </aside>
       </form>
     </div>
