@@ -37,7 +37,7 @@ function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("projects")) return "projects";
   if (subpath.startsWith("actions")) return "actions";
   if (subpath.startsWith("commits")) return "commits";
-  if (subpath.startsWith("releases")) return "releases";
+  if (subpath.startsWith("releases") || subpath.startsWith("tags")) return "releases";
   if (subpath.startsWith("settings")) return "settings";
   return "code";
 }
@@ -640,6 +640,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             handle={h}
             repoName={r}
             user={user}
+            splat={splat}
           />
         )}
         {activeTab === "settings" && canAdmin && (
