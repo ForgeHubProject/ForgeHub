@@ -16,6 +16,8 @@ import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { SettingsSessionsPage } from "./pages/SettingsSessionsPage";
 import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
+import { YourWorkPage } from "./pages/YourWorkPage";
+import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
 import { DEFAULT_TITLE } from "./pages/useDocumentTitle";
 import type { User } from "./types";
 
@@ -97,6 +99,7 @@ function AppRoutes() {
   return (
     <>
       <DefaultTitle />
+      {authed && <KeyboardShortcuts />}
       <Routes>
       <Route
         path="/login"
@@ -188,6 +191,14 @@ function AppRoutes() {
             <Navigate to="/login" replace />
           )
         }
+      />
+      <Route
+        path="/issues"
+        element={authed ? <YourWorkPage kind="issues" token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/pulls"
+        element={authed ? <YourWorkPage kind="pulls" token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/organizations/new"
