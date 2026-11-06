@@ -630,6 +630,12 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
 
         <div className="flex-1" />
 
+        {/* GitHub's "Go to file" beside the buttons (#255); `t` focuses it. */}
+        {branches.length > 0 && (
+          <div className="hidden w-56 md:block">
+            <GoToFile token={token} handle={handle} repoName={repoName} gitRef={currentRef} base={base} />
+          </div>
+        )}
         <Button variant="default" size="sm" leadingIcon={<CommitGlyph />} onClick={() => navigate(`${base}/commits`)}>
           Commits
         </Button>

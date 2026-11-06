@@ -1042,6 +1042,31 @@ export async function getBlob(
   return req(`/repos/${handle}/${repoName}/blob?${qs}`, { token: token ?? undefined });
 }
 
+/** An issue or pull request on the "your issues / pull requests" pages (#255). */
+export type MyWorkItem = {
+  repo: { owner: string; name: string };
+  number: number;
+  title: string;
+  state: string;
+  isDraft?: boolean;
+  author: string;
+  assignee: string | null;
+  labels: Label[];
+  comments: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Issues across every repository: assigned to, created by, or mentioning the caller (#255). */
+export async function listMyIssues(token: string, filter: string, state: "open" | "closed" | "all" = "open"): Promise<{ issues: MyWorkItem[] }> {
+  return req(`/user/issues?${new URLSearchParams({ filter, state })}`, { token });
+}
+
+/** Pull requests across every repository: created, assigned, review requested, or involving the caller (#255). */
+export async function listMyPulls(token: string, filter: string, state: "open" | "closed" | "merged" | "all" = "open"): Promise<{ pulls: MyWorkItem[] }> {
+  return req(`/user/pulls?${new URLSearchParams({ filter, state })}`, { token });
+}
+
 /** One change in a web commit (#254): write `content`, delete, or move `from` (optionally with new content). */
 export type ContentChange =
   | { path: string; content: string; encoding?: "utf8" | "base64" }
