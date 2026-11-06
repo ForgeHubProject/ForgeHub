@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { getCollaboratingRepos, getMyOrgs, getMyRepos } from "../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { getCollaboratingRepos, getMyOrgs, getMyRepos, listMyIssues, listMyPulls, type MyWorkItem } from "../api";
 import { CreateRepoDialog } from "../components/CreateRepoDialog";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import type { Organization, Repo, User } from "../types";
-import { Avatar, Button, EmptyState, Icons, Skeleton, TextInput } from "../ui";
-import { PlusIcon, RepoIcon, RepoRow, RowList } from "./listShared";
+import { Avatar, Button, EmptyState, Icons, Skeleton, TabItem, TabNav, TextInput } from "../ui";
+import { FeedList } from "./FeedPage";
+import { PlusIcon, RepoIcon } from "./listShared";
+import { WorkRow } from "./YourWorkPage";
 
 type Props = {
   token: string;
@@ -27,7 +29,11 @@ export function RepoListPage({ token, user, onLogout }: Props) {
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [params, setParams] = useSearchParams();
+  // "+ New repository" in the header lands here with ?new=repo.
+  const [showCreate, setShowCreate] = useState(params.get("new") === "repo");
+  const [showAll, setShowAll] = useState(false);
+  const tab = params.get("tab") === "feed" ? "feed" : "home";
 
   useEffect(() => {
     Promise.all([getMyRepos(token), getCollaboratingRepos(token)])
@@ -115,10 +121,36 @@ export function RepoListPage({ token, user, onLogout }: Props) {
                   />
                 </div>
 
-                {!loading && !error && totalCount > 0 && (
-                  <p className="mt-3 text-fh-xs text-fh-fg-subtle">
-                    {totalCount} {totalCount === 1 ? "repository" : "repositories"}
-                  </p>
+                {loading ? (
+                  <div className="mt-3 space-y-2" aria-hidden="true">
+                    {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="text" width={`${70 - i * 8}%`} />)}
+                  </div>
+                ) : error ? (
+                  <p className="mt-3 text-fh-sm text-fh-danger-fg">{error}</p>
+                ) : (
+                  <>
+                    <ul className="mt-3 space-y-0.5">
+                      {[...filteredOwn, ...filteredCollab].slice(0, showAll ? undefined : 10).map((repo) => (
+                        <li key={repo.id}>
+                          <Link
+                            to={repoHref(repo)}
+                            className="flex items-center gap-2 rounded-md px-1 py-1 text-fh-sm text-fh-fg no-underline hover:bg-fh-surface-muted"
+                          >
+                            <Avatar name={repo.ownerHandle ?? user.handle} size={16} square={!!repo.orgId} />
+                            <span className="truncate font-semibold">{repo.ownerHandle ?? user.handle}/{repo.name}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                    {!showAll && filteredOwn.length + filteredCollab.length > 10 && (
+                      <button type="button" onClick={() => setShowAll(true)} className="mt-1 px-1 text-fh-xs text-fh-fg-muted hover:text-fh-accent-fg">
+                        Show more
+                      </button>
+                    )}
+                    {totalCount > 0 && !hasResults && (
+                      <p className="mt-2 px-1 text-fh-xs text-fh-fg-subtle">No repository matches “{filter.trim()}”.</p>
+                    )}
+                  </>
                 )}
 
                 {/* Organizations the caller belongs to */}
@@ -147,29 +179,16 @@ export function RepoListPage({ token, user, onLogout }: Props) {
             </div>
           </aside>
 
-          {/* Main — repository rows */}
+          {/* Main — GitHub's dashboard: Home (your work) and Feed */}
           <main className="min-w-0 flex-1">
-            {loading && (
-              <RowList aria-hidden="true">
-                {[0, 1, 2, 3].map((i) => (
-                  <div key={i} className="flex items-start gap-3 px-4 py-3">
-                    <Skeleton variant="circle" width={16} height={16} className="mt-0.5" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton variant="text" width="40%" />
-                      <Skeleton variant="text" width="70%" />
-                    </div>
-                  </div>
-                ))}
-              </RowList>
-            )}
+            <TabNav aria-label="Dashboard" className="mb-5">
+              <TabItem active={tab === "home"} onClick={() => setParams({})}>Home</TabItem>
+              <TabItem active={tab === "feed"} onClick={() => setParams({ tab: "feed" })}>Feed</TabItem>
+            </TabNav>
 
-            {!loading && error && (
-              <div className="rounded-md border border-fh-border bg-fh-surface px-4 py-4 text-fh-sm text-fh-danger-fg">
-                {error}
-              </div>
-            )}
-
-            {!loading && !error && totalCount === 0 && (
+            {tab === "feed" ? (
+              <FeedList token={token} />
+            ) : !loading && !error && totalCount === 0 ? (
               <EmptyState
                 bordered
                 icon={<RepoIcon size={28} />}
@@ -181,60 +200,29 @@ export function RepoListPage({ token, user, onLogout }: Props) {
                   </Button>
                 }
               />
-            )}
-
-            {!loading && !error && totalCount > 0 && (
+            ) : (
               <div className="space-y-6">
-                {filteredOwn.length > 0 && (
-                  <RowList aria-label="Your repositories">
-                    {filteredOwn.map((repo) => (
-                      <RepoRow
-                        key={repo.id}
-                        to={repoHref(repo)}
-                        name={repo.name}
-                        description={repo.description}
-                        visibility={repo.visibility}
-                        updatedAt={repo.updatedAt}
-                        topics={repo.topics}
-                      />
-                    ))}
-                  </RowList>
-                )}
-
-                {filteredCollab.length > 0 && (
-                  <section>
-                    <h3 className="mb-2 text-fh-xs font-semibold uppercase tracking-wide text-fh-fg-subtle">
-                      Collaborating on
-                    </h3>
-                    <RowList aria-label="Repositories you collaborate on">
-                      {filteredCollab.map((repo) => (
-                        <RepoRow
-                          key={repo.id}
-                          to={repoHref(repo)}
-                          name={repo.fullName ?? `${repo.ownerHandle}/${repo.name}`}
-                          description={repo.description}
-                          visibility={repo.visibility}
-                          updatedAt={repo.updatedAt}
-                          topics={repo.topics}
-                        />
-                      ))}
-                    </RowList>
-                  </section>
-                )}
-
-                {!hasResults && (
-                  <EmptyState
-                    bordered
-                    icon={<Icons.SearchIcon size={28} />}
-                    title="No matching repositories"
-                    description={`No repository matches “${filter.trim()}”.`}
-                    actions={
-                      <Button variant="default" onClick={() => setFilter("")}>
-                        Clear filter
-                      </Button>
-                    }
-                  />
-                )}
+                <WorkSection
+                  title="Review requests"
+                  kind="pulls"
+                  load={() => listMyPulls(token, "review_requested").then((d) => d.pulls)}
+                  all="/pulls?filter=review_requested"
+                  empty="No pull requests are waiting for your review."
+                />
+                <WorkSection
+                  title="Your pull requests"
+                  kind="pulls"
+                  load={() => listMyPulls(token, "created").then((d) => d.pulls)}
+                  all="/pulls?filter=created"
+                  empty="You have no open pull requests."
+                />
+                <WorkSection
+                  title="Issues assigned to you"
+                  kind="issues"
+                  load={() => listMyIssues(token, "assigned").then((d) => d.issues)}
+                  all="/issues?filter=assigned"
+                  empty="No open issues are assigned to you."
+                />
               </div>
             )}
           </main>
@@ -248,9 +236,52 @@ export function RepoListPage({ token, user, onLogout }: Props) {
         token={token}
         personalHandle={user.handle}
         orgs={orgs}
-        onClose={() => setShowCreate(false)}
+        onClose={() => {
+          setShowCreate(false);
+          if (params.get("new")) setParams({});
+        }}
         onCreated={onCreated}
       />
     </div>
+  );
+}
+
+/** One block of the Home tab: up to five of your open items and a link to all of them. */
+function WorkSection({ title, kind, load, all, empty }: {
+  title: string;
+  kind: "issues" | "pulls";
+  load: () => Promise<MyWorkItem[]>;
+  all: string;
+  empty: string;
+}) {
+  const [items, setItems] = useState<MyWorkItem[] | null>(null);
+  // `load` is a fresh closure each render; run it once per mount.
+  useEffect(() => {
+    load().then(setItems).catch(() => setItems([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-fh-base font-semibold text-fh-fg">{title}</h2>
+        {items && items.length > 0 && <Link to={all} className="text-fh-sm text-fh-accent-fg hover:underline">View all</Link>}
+      </div>
+      <div className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+        {items === null ? (
+          <div className="px-4 py-3 space-y-2" aria-hidden="true">
+            <Skeleton variant="text" width="55%" />
+            <Skeleton variant="text" width="35%" />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="px-4 py-4 text-fh-sm text-fh-fg-muted">{empty}</p>
+        ) : (
+          <ul className="divide-y divide-fh-border">
+            {items.slice(0, 5).map((it) => (
+              <WorkRow key={`${it.repo.owner}/${it.repo.name}#${it.number}`} item={it} kind={kind} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

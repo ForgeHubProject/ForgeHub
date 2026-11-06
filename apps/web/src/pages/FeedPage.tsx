@@ -77,6 +77,26 @@ function ItemBody({ item }: { item: FeedItem }) {
 
 export function FeedPage({ token, user, onLogout }: Props) {
   useDocumentTitle("Feed · ForgeHub");
+  return (
+    <div className="min-h-screen flex flex-col bg-fh-canvas">
+      <Header user={user} onLogout={onLogout} token={token} />
+
+      <div className="flex-1 w-full max-w-[1000px] mx-auto px-4 py-8">
+        <PageHeading
+          title="Feed"
+          icon={<Icon path={PULSE} size={20} />}
+          description="Recent activity across the repositories you watch and star."
+        />
+        <FeedList token={token} />
+      </div>
+
+      <Footer />
+    </div>
+  );
+}
+
+/** The activity list itself; the home page's Feed tab shows it too (#255). */
+export function FeedList({ token }: { token: string }) {
   const [items, setItems] = useState<FeedItem[]>([]);
   // Cursor, not a page number: the feed is a live stream, and an offset would
   // shift under new activity — re-appending entries already on screen.
@@ -115,86 +135,72 @@ export function FeedPage({ token, user, onLogout }: Props) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-fh-canvas">
-      <Header user={user} onLogout={onLogout} token={token} />
-
-      <div className="flex-1 w-full max-w-[1000px] mx-auto px-4 py-8">
-        <PageHeading
-          title="Feed"
-          icon={<Icon path={PULSE} size={20} />}
-          description="Recent activity across the repositories you watch and star."
-        />
-
-        <div className="mt-5">
-          {loading ? (
-            <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-3">
-                  <Skeleton variant="block" width={28} height={28} className="rounded-full" />
-                  <div className="flex-1 space-y-2">
-                    <Skeleton className="h-4 w-3/5" />
-                    <Skeleton className="h-3 w-1/4" />
+    <div className="mt-5">
+      {loading ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md divide-y divide-fh-border">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton variant="block" width={28} height={28} className="rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-3/5" />
+                <Skeleton className="h-3 w-1/4" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : error ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState icon={<Icon path={PULSE} size={32} />} title="Couldn't load the feed" description={error} />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="bg-fh-surface border border-fh-border rounded-md">
+          <EmptyState
+            icon={<Icon path={PULSE} size={32} />}
+            title="Nothing here yet"
+            description="Star or watch repositories and their activity — new issues, pull requests, merges, and releases — will show up here."
+          />
+        </div>
+      ) : (
+        <>
+          <div className="bg-fh-surface border border-fh-border rounded-md overflow-hidden divide-y divide-fh-border">
+            {items.map((item) => {
+              const mark = itemMark(item);
+              return (
+                <div key={item.id} className="flex items-start gap-3 px-4 py-3 hover:bg-fh-surface-muted transition-colors">
+                  <span className={`flex items-center justify-center shrink-0 w-7 h-7 rounded-full bg-fh-surface-muted ${mark.tone}`}>
+                    <Icon path={mark.path} size={15} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-fh-sm text-fh-fg-muted leading-snug break-words">
+                      <Avatar name={item.actor} size={16} className="inline-block align-text-bottom mr-1" />
+                      <Link to={`/${item.actor}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">
+                        {item.actor}
+                      </Link>{" "}
+                      <ItemBody item={item} />
+                    </p>
+                    <p className="mt-0.5 text-fh-xs text-fh-fg-subtle">
+                      <Link
+                        to={`/${item.repo.ownerHandle}/${item.repo.name}`}
+                        className="text-fh-accent-fg hover:underline"
+                      >
+                        {item.repo.ownerHandle}/{item.repo.name}
+                      </Link>{" "}
+                      · <RelativeTime date={item.createdAt} />
+                    </p>
                   </div>
                 </div>
-              ))}
+              );
+            })}
+          </div>
+          {hasMore && (
+            <div className="mt-4 flex justify-center">
+              <Button variant="default" loading={loadingMore} onClick={() => void loadMore()}>
+                Load more
+              </Button>
             </div>
-          ) : error ? (
-            <div className="bg-fh-surface border border-fh-border rounded-md">
-              <EmptyState icon={<Icon path={PULSE} size={32} />} title="Couldn't load the feed" description={error} />
-            </div>
-          ) : items.length === 0 ? (
-            <div className="bg-fh-surface border border-fh-border rounded-md">
-              <EmptyState
-                icon={<Icon path={PULSE} size={32} />}
-                title="Nothing here yet"
-                description="Star or watch repositories and their activity — new issues, pull requests, merges, and releases — will show up here."
-              />
-            </div>
-          ) : (
-            <>
-              <div className="bg-fh-surface border border-fh-border rounded-md overflow-hidden divide-y divide-fh-border">
-                {items.map((item) => {
-                  const mark = itemMark(item);
-                  return (
-                    <div key={item.id} className="flex items-start gap-3 px-4 py-3 hover:bg-fh-surface-muted transition-colors">
-                      <span className={`flex items-center justify-center shrink-0 w-7 h-7 rounded-full bg-fh-surface-muted ${mark.tone}`}>
-                        <Icon path={mark.path} size={15} />
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-fh-sm text-fh-fg-muted leading-snug break-words">
-                          <Avatar name={item.actor} size={16} className="inline-block align-text-bottom mr-1" />
-                          <Link to={`/${item.actor}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">
-                            {item.actor}
-                          </Link>{" "}
-                          <ItemBody item={item} />
-                        </p>
-                        <p className="mt-0.5 text-fh-xs text-fh-fg-subtle">
-                          <Link
-                            to={`/${item.repo.ownerHandle}/${item.repo.name}`}
-                            className="text-fh-accent-fg hover:underline"
-                          >
-                            {item.repo.ownerHandle}/{item.repo.name}
-                          </Link>{" "}
-                          · <RelativeTime date={item.createdAt} />
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {hasMore && (
-                <div className="mt-4 flex justify-center">
-                  <Button variant="default" loading={loadingMore} onClick={() => void loadMore()}>
-                    Load more
-                  </Button>
-                </div>
-              )}
-            </>
           )}
-        </div>
-      </div>
-
-      <Footer />
+        </>
+      )}
     </div>
   );
 }
