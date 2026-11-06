@@ -1,11 +1,23 @@
 import { z } from "zod";
 
+/**
+ * Handles that would shadow one of the site's own pages: `/:handle` is a
+ * profile, so a user named "issues" would hide /issues (#255).
+ */
+export const RESERVED_HANDLES = new Set([
+  "about", "explore", "feed", "import", "issues", "login", "logout", "new", "notifications",
+  "organizations", "orgs", "pulls", "search", "settings", "stars", "topics", "trending",
+]);
+
 /** GitHub-style username: alphanumeric + hyphen, no leading/trailing hyphen, 1–39 chars. */
 export const handleSchema = z
   .string()
   .min(1)
   .max(39)
   .regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/);
+
+/** A handle for a NEW user or organization: also not one of the site's pages. */
+export const newHandleSchema = handleSchema.refine((h) => !RESERVED_HANDLES.has(h.toLowerCase()), "That name is reserved");
 
 /** Repo slug: same rules, typical GitHub repo name length. */
 export const repoNameSchema = z
@@ -17,7 +29,7 @@ export const repoNameSchema = z
 export const registerBodySchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(128),
-  handle: handleSchema,
+  handle: newHandleSchema,
   displayName: z.string().min(1).max(120).optional(),
 });
 
@@ -160,7 +172,7 @@ export const teamAccessRoleSchema = z.enum(["READER", "WRITER"]);
 
 /** POST /orgs — create an org. `handle` shares the user handle space. */
 export const createOrgBodySchema = z.object({
-  handle: handleSchema,
+  handle: newHandleSchema,
   displayName: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).optional(),
 });

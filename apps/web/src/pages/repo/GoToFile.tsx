@@ -106,6 +106,7 @@ export function GoToFile({ token, handle, repoName, gitRef, base }: {
       <div className="flex items-center gap-2 rounded-md border border-fh-border bg-fh-surface px-2 focus-within:border-fh-accent-emphasis">
         <span className="text-fh-fg-subtle"><Icons.SearchIcon size={14} /></span>
         <input
+          data-shortcut="go-to-file"
           ref={inputRef}
           type="search"
           value={query}

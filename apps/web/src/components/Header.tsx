@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { avatarSrc, listNotifications } from "../api";
 import { ForgeLogo } from "./ForgeLogo";
 import type { User } from "../types";
@@ -7,6 +7,8 @@ import { Avatar } from "../ui/Avatar";
 import { DropdownItem, DropdownMenu, DropdownSeparator } from "../ui/DropdownMenu";
 import { useTheme } from "../ui/theme";
 import { BellIcon, ChevronDownIcon, MoonIcon, SearchIcon, SunIcon } from "../ui/icons";
+import { DropdownLabel } from "../ui/DropdownMenu";
+import { repoFromPath } from "../lib/shortcuts";
 
 type Props = {
   user: User;
@@ -27,6 +29,8 @@ export function Header({ user, onLogout, token }: Props) {
   const [searchParams] = useSearchParams();
   const { resolved, toggle } = useTheme();
   const menuBtnRef = useRef<HTMLButtonElement>(null);
+  // Inside a repository, "+" offers its New issue / New pull request (#255).
+  const here = repoFromPath(useLocation().pathname);
 
   useEffect(() => {
     if (!token) return;
@@ -59,19 +63,13 @@ export function Header({ user, onLogout, token }: Props) {
         <ForgeLogo size={28} />
       </Link>
 
-      {/* Owner crumb + feed */}
+      {/* Owner crumb (the feed is a tab on the dashboard, #255) */}
       <nav className="hidden md:flex items-center flex-shrink-0">
         <Link
           to={`/${user.handle}`}
           className="text-fh-sm font-semibold px-2 py-1 rounded-md text-fh-header-text/90 hover:bg-white/10 transition-colors"
         >
           {user.handle}
-        </Link>
-        <Link
-          to="/feed"
-          className="text-fh-sm font-semibold px-2 py-1 rounded-md text-fh-header-text/90 hover:bg-white/10 transition-colors"
-        >
-          Feed
         </Link>
       </nav>
 
@@ -83,10 +81,11 @@ export function Header({ user, onLogout, token }: Props) {
             className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-fh-header-muted"
           />
           <input
+            id="global-search"
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search repositories"
+            placeholder="Type / to search"
             aria-label="Search"
             className="w-full h-8 pl-8 pr-3 text-fh-sm rounded-md border outline-none bg-white/[0.06] border-fh-header-border text-fh-header-text placeholder:text-fh-header-muted transition-colors focus:bg-fh-surface focus:text-fh-fg focus:border-fh-header-accent focus:placeholder:text-fh-fg-placeholder"
           />
@@ -95,6 +94,52 @@ export function Header({ user, onLogout, token }: Props) {
 
       {/* Actions */}
       <div className="flex items-center gap-0.5 ml-auto sm:ml-0">
+        {/* Create something new (#255) */}
+        <DropdownMenu
+          align="end"
+          width={220}
+          trigger={
+            <button
+              type="button"
+              aria-label="Create something new"
+              title="Create new…"
+              className="flex items-center gap-0.5 h-8 px-1.5 rounded-md text-fh-header-text/80 hover:bg-white/10 hover:text-fh-header-text transition-colors cursor-pointer bg-transparent border-none"
+            >
+              <PlusGlyph />
+              <ChevronDownIcon size={12} className="text-fh-header-muted" />
+            </button>
+          }
+        >
+          {here && (
+            <>
+              <DropdownLabel>This repository</DropdownLabel>
+              <DropdownItem onSelect={() => navigate(`/${here.owner}/${here.name}/issues/new`)}>New issue</DropdownItem>
+              <DropdownItem onSelect={() => navigate(`/${here.owner}/${here.name}/pulls/new`)}>New pull request</DropdownItem>
+              <DropdownSeparator />
+            </>
+          )}
+          <DropdownItem onSelect={() => navigate("/?new=repo")}>New repository</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
+        </DropdownMenu>
+
+        {/* Your issues and pull requests, across repositories (#255) */}
+        <Link
+          to="/issues"
+          title="Your issues"
+          aria-label="Your issues"
+          className="hidden sm:flex items-center justify-center w-8 h-8 rounded-md text-fh-header-text/80 hover:bg-white/10 hover:text-fh-header-text transition-colors"
+        >
+          <IssueGlyph />
+        </Link>
+        <Link
+          to="/pulls"
+          title="Your pull requests"
+          aria-label="Your pull requests"
+          className="hidden sm:flex items-center justify-center w-8 h-8 rounded-md text-fh-header-text/80 hover:bg-white/10 hover:text-fh-header-text transition-colors"
+        >
+          <PullGlyph />
+        </Link>
+
         {/* Notifications */}
         <Link
           to="/notifications"
@@ -130,7 +175,9 @@ export function Header({ user, onLogout, token }: Props) {
           </div>
           <DropdownItem onSelect={() => navigate(`/${user.handle}`)}>Your profile</DropdownItem>
           <DropdownItem onSelect={() => navigate("/")}>Your repositories</DropdownItem>
-          <DropdownItem onSelect={() => navigate("/feed")}>Your feed</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/issues")}>Your issues</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/pulls")}>Your pull requests</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/?tab=feed")}>Your feed</DropdownItem>
           <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
           <DropdownItem onSelect={() => navigate("/notifications")}>
             Notifications
@@ -158,5 +205,30 @@ export function Header({ user, onLogout, token }: Props) {
         </DropdownMenu>
       </div>
     </header>
+  );
+}
+
+function PlusGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z" />
+    </svg>
+  );
+}
+
+function IssueGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+      <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+    </svg>
+  );
+}
+
+function PullGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
+    </svg>
   );
 }
