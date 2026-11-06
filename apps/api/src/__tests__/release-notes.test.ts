@@ -93,7 +93,7 @@ describe("POST /releases/generate-notes", () => {
     expect(previousTag).toBe("v0.1.0");
     expect(body).toContain("## What's changed");
     // merged PR detected from the "(#1)" merge subject
-    expect(body).toContain("- Add the feature (!1 by @bob)");
+    expect(body).toContain("- Add the feature (#1 by @bob)");
     // plain commit subjects for non-PR commits
     expect(body).toContain("- fix bug B");
     expect(body).toContain("- implement the thing");

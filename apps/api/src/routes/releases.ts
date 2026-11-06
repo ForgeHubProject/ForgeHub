@@ -295,7 +295,7 @@ export async function releaseRoutes(app: FastifyInstance) {
         if (!seenPR.has(prNum)) {
           seenPR.add(prNum);
           const pr = prByNumber.get(prNum)!;
-          lines.push(`- ${pr.title} (!${prNum} by @${pr.author.handle})`);
+          lines.push(`- ${pr.title} (#${prNum} by @${pr.author.handle})`);
         }
       } else if (c.parents.length < 2) {
         // Skip merge commits that don't reference a PR; keep real commit subjects.

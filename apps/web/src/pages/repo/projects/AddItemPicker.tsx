@@ -155,7 +155,7 @@ export function AddItemPicker({ token, handle, repoName, excludeKeys, onAdd }: P
                 )}
               >
                 <SubjectStateIcon subject={{ type: c.type, number: c.number, title: c.title, state: c.state, labels: [], assignee: null }} size={14} />
-                <span className="shrink-0 font-mono text-fh-xs text-fh-fg-subtle">{subjectRef(c.type, c.number)}</span>
+                <span className="shrink-0 font-mono text-fh-xs text-fh-fg-subtle">{subjectRef(c.number)}</span>
                 <span className="min-w-0 flex-1 truncate text-fh-fg">{c.title}</span>
                 {adding === key && <Spinner size={12} />}
               </button>

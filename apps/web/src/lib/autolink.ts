@@ -1,6 +1,8 @@
 /**
- * Client-side autolinking for conversation markdown: `#N` → issue, `!N` → pull
- * request (GitLab-style, matching the server parser), `@handle` → profile.
+ * Client-side autolinking for conversation markdown, matching the server parser:
+ * `#N` → issue or pull request N (one sequence, #259; the issue page forwards to
+ * the pull request when N is one, as GitHub's does), `!N` → pull request (how
+ * pull requests were written before the shared sequence), `@handle` → profile.
  *
  * `tokenizeRefs` is the pure, boundary-aware core (unit-tested). `linkifyElement`
  * applies it to a rendered DOM subtree, skipping text inside `<code>`, `<pre>` and
@@ -9,7 +11,7 @@
 
 export type RefToken =
   | { type: "text"; value: string }
-  | { type: "issue"; number: number; raw: string }
+  | { type: "number"; number: number; raw: string }
   | { type: "pull"; number: number; raw: string }
   | { type: "mention"; handle: string; raw: string };
 
@@ -29,7 +31,7 @@ export function tokenizeRefs(text: string): RefToken[] {
     const boundary = m[1] ?? "";
     const pre = text.slice(last, idx) + boundary;
     if (pre) out.push({ type: "text", value: pre });
-    if (m[2]) out.push({ type: "issue", number: Number(m[2]), raw: `#${m[2]}` });
+    if (m[2]) out.push({ type: "number", number: Number(m[2]), raw: `#${m[2]}` });
     else if (m[3]) out.push({ type: "pull", number: Number(m[3]), raw: `!${m[3]}` });
     else if (m[4]) out.push({ type: "mention", handle: m[4], raw: `@${m[4]}` });
     last = idx + m[0].length;
@@ -41,7 +43,7 @@ export function tokenizeRefs(text: string): RefToken[] {
 
 function hrefFor(token: RefToken, repo: RepoRef): string | null {
   switch (token.type) {
-    case "issue": return `/${repo.owner}/${repo.name}/issues/${token.number}`;
+    case "number": return `/${repo.owner}/${repo.name}/issues/${token.number}`;
     case "pull": return `/${repo.owner}/${repo.name}/pulls/${token.number}`;
     case "mention": return `/${token.handle}`;
     default: return null;

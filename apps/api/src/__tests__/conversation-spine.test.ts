@@ -194,6 +194,58 @@ describe("syncBodyReferences", () => {
     expect(crossRef.data.isClosingRef).toBe(true);
   });
 
+  // One sequence for issues and pull requests (#259): #N is whichever holds N.
+  it("links #N to the pull request when no issue holds N", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue({ id: "pr-4", number: 4 } as never);
+    await syncBodyReferences({
+      repo: REPO, actorId: "user-1",
+      source: { type: "ISSUE", id: "issue-1" },
+      container: { subjectType: "ISSUE", id: "issue-1", number: 1, title: "Root" },
+      body: "fixed by #4",
+    });
+    const crossRef = vi.mocked(prisma.crossReference.create).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(crossRef.data).toMatchObject({ targetType: "PULL_REQUEST", targetId: "pr-4", targetNumber: 4 });
+  });
+
+  it("does not close a pull request a closing keyword names", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue({ id: "pr-4", number: 4 } as never);
+    await syncBodyReferences({
+      repo: REPO, actorId: "user-1",
+      source: { type: "PULL_REQUEST", id: "pr-1" },
+      container: { subjectType: "PULL_REQUEST", id: "pr-1", number: 5, title: "PR" },
+      body: "closes #4",
+    });
+    const crossRef = vi.mocked(prisma.crossReference.create).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(crossRef.data).toMatchObject({ targetType: "PULL_REQUEST", isClosingRef: false });
+  });
+
+  it("still reads !N, the old way of writing a pull request", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue({ id: "pr-3", number: 3 } as never);
+    await syncBodyReferences({
+      repo: REPO, actorId: "user-1",
+      source: { type: "ISSUE", id: "issue-1" },
+      container: { subjectType: "ISSUE", id: "issue-1", number: 1, title: "Root" },
+      body: "see !3",
+    });
+    expect(prisma.issue.findFirst).not.toHaveBeenCalled();
+    const crossRef = vi.mocked(prisma.crossReference.create).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(crossRef.data).toMatchObject({ targetType: "PULL_REQUEST", targetId: "pr-3" });
+  });
+
+  it("skips #N when it names the issue or pull request being written in", async () => {
+    vi.mocked(prisma.issue.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue({ id: "pr-1", number: 7 } as never);
+    await syncBodyReferences({
+      repo: REPO, actorId: "user-1",
+      source: { type: "PULL_REQUEST", id: "pr-1" },
+      container: { subjectType: "PULL_REQUEST", id: "pr-1", number: 7, title: "PR" },
+      body: "this is #7",
+    });
+    expect(prisma.crossReference.create).not.toHaveBeenCalled();
+  });
+
   it("does not notify the actor for a self-mention", async () => {
     await syncBodyReferences({
       repo: REPO, actorId: "user-1",

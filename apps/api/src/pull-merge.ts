@@ -71,10 +71,10 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
   let result: Awaited<ReturnType<typeof performMerge>>;
   try {
     if (mergeMethod === "squash") {
-      // Single squashed commit authored as the merger: "<title> (!N)" + subjects.
+      // Single squashed commit authored as the merger: "<title> (#N)" + subjects.
       const prCommits = await listMergeBaseCommits(repo.storageKey, pr.toBranch, pr.fromBranch);
       const subjects = prCommits.map((c) => `* ${c.subject}`).join("\n");
-      const subject = input.commitMessage?.trim() || `${pr.title} (!${pr.number})`;
+      const subject = input.commitMessage?.trim() || `${pr.title} (#${pr.number})`;
       const squashMessage = subjects ? `${subject}\n\n${subjects}\n` : `${subject}\n`;
       const author = await resolveActorIdentity(actorId);
       result = await performSquashMerge(repo.storageKey, pr.fromBranch, pr.toBranch, squashMessage, author);

@@ -1018,7 +1018,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
       if (!applied.ok) return reply.status(409).send({ error: applied.error });
 
       const author = await resolveActorIdentity(userId);
-      const message = `Apply suggestion to ${comment.filePath} (!${ctx.pr.number})`;
+      const message = `Apply suggestion to ${comment.filePath} (#${ctx.pr.number})`;
       let commit;
       try {
         commit = await commitFileToBranch(
