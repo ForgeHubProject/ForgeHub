@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { blobFromSplat, refFromSplat, refLabel } from "../pages/repo/refs";
+import { blobFromSplat, editRouteFromSplat, refFromSplat, refLabel } from "../pages/repo/refs";
 import type { BranchInfo } from "../types";
 
 const branch = (name: string) => ({ name, sha: "", subject: "", date: "", isDefault: false }) as BranchInfo;
@@ -74,5 +74,21 @@ describe("refLabel", () => {
   it("shortens a full commit hash and leaves names alone", () => {
     expect(refLabel(sha)).toBe("1b94af7");
     expect(refLabel("feature/desk-shelf")).toBe("feature/desk-shelf");
+  });
+});
+
+describe("editRouteFromSplat (#254)", () => {
+  it("reads the mode, a slashed branch, and the file or folder", () => {
+    expect(editRouteFromSplat("edit/feature/desk-shelf/docs/a.md", branches)).toEqual({ mode: "edit", ref: "feature/desk-shelf", path: "docs/a.md" });
+    expect(editRouteFromSplat("new/main", branches)).toEqual({ mode: "new", ref: "main", path: "" });
+    expect(editRouteFromSplat("upload/main/assets", branches)).toEqual({ mode: "upload", ref: "main", path: "assets" });
+    expect(editRouteFromSplat("delete/main/old.txt", branches)).toEqual({ mode: "delete", ref: "main", path: "old.txt" });
+  });
+
+  it("needs a branch, and a file for edit and delete", () => {
+    expect(editRouteFromSplat("edit/0123456789abcdef0123456789abcdef01234567/a.md", branches)).toBeNull();
+    expect(editRouteFromSplat("edit/main", branches)).toBeNull();
+    expect(editRouteFromSplat("delete/main", branches)).toBeNull();
+    expect(editRouteFromSplat("blob/main/a.md", branches)).toBeNull();
   });
 });
