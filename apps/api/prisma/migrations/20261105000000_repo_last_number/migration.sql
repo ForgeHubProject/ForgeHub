@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Repo" ADD COLUMN "lastNumber" INTEGER NOT NULL DEFAULT 0;

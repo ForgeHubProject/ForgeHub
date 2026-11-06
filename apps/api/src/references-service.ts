@@ -61,32 +61,47 @@ type DesiredRef = {
 export async function syncBodyReferences(p: SyncParams): Promise<void> {
   const parsed = parseReferences(p.body);
 
-  // ── Resolve #N → issue and !N → pull, into the desired reference set ──────────
+  // ── Resolve #N → issue or pull, !N → pull, into the desired reference set ─────
   const desired = new Map<string, DesiredRef>();
   const key = (t: ConversationSubjectType, id: string) => `${t}#${id}`;
 
-  for (const number of parsed.issues) {
-    if (p.container.subjectType === "ISSUE" && number === p.container.number) continue;
+  for (const number of parsed.numbers) {
+    // One sequence for both (#259). Repos numbered before it can hold an issue and
+    // a pull request with the same number; `#N` meant the issue then, and still does.
     const issue = await prisma.issue.findFirst({
       where: { repoId: p.repo.id, number },
       select: { id: true, number: true },
     });
-    if (!issue) continue;
-    desired.set(key("ISSUE", issue.id), {
-      targetType: "ISSUE",
-      targetId: issue.id,
-      targetNumber: issue.number,
-      isClosingRef: parsed.closesIssues.includes(number),
-    });
-  }
-
-  for (const number of parsed.pulls) {
-    if (p.container.subjectType === "PULL_REQUEST" && number === p.container.number) continue;
+    if (issue) {
+      if (issue.id === p.container.id) continue;
+      desired.set(key("ISSUE", issue.id), {
+        targetType: "ISSUE",
+        targetId: issue.id,
+        targetNumber: issue.number,
+        isClosingRef: parsed.closing.includes(number),
+      });
+      continue;
+    }
     const pull = await prisma.pullRequest.findFirst({
       where: { repoId: p.repo.id, number },
       select: { id: true, number: true },
     });
-    if (!pull) continue;
+    if (!pull || pull.id === p.container.id) continue;
+    // A closing keyword closes issues only; on a pull request it's a plain reference.
+    desired.set(key("PULL_REQUEST", pull.id), {
+      targetType: "PULL_REQUEST",
+      targetId: pull.id,
+      targetNumber: pull.number,
+      isClosingRef: false,
+    });
+  }
+
+  for (const number of parsed.pulls) {
+    const pull = await prisma.pullRequest.findFirst({
+      where: { repoId: p.repo.id, number },
+      select: { id: true, number: true },
+    });
+    if (!pull || pull.id === p.container.id) continue;
     desired.set(key("PULL_REQUEST", pull.id), {
       targetType: "PULL_REQUEST",
       targetId: pull.id,

@@ -13,7 +13,7 @@ describe("tokenizeRefs", () => {
   it("splits issue, pull and mention references with surrounding text", () => {
     const tokens = tokenizeRefs("see #12, then !7 and cc @alice done");
     expect(kinds(tokens)).toEqual([
-      "t:see ", "issue:#12", "t:, then ", "pull:!7", "t: and cc ", "mention:@alice", "t: done",
+      "t:see ", "number:#12", "t:, then ", "pull:!7", "t: and cc ", "mention:@alice", "t: done",
     ]);
   });
 
@@ -34,12 +34,12 @@ describe("tokenizeRefs", () => {
   });
 
   it("handles a reference at the very start", () => {
-    expect(kinds(tokenizeRefs("#1 opens"))).toEqual(["issue:#1", "t: opens"]);
+    expect(kinds(tokenizeRefs("#1 opens"))).toEqual(["number:#1", "t: opens"]);
   });
 
   it("parses consecutive references separated by a space", () => {
     expect(kinds(tokenizeRefs("#5 !6 @carol"))).toEqual([
-      "issue:#5", "t: ", "pull:!6", "t: ", "mention:@carol",
+      "number:#5", "t: ", "pull:!6", "t: ", "mention:@carol",
     ]);
   });
 });
