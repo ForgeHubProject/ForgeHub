@@ -515,6 +515,12 @@ export type PullRequest = {
   mergedAt: string | null;
   mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;
+  /** Sidebar fields (#252) — optional so older payloads still parse. */
+  assignee?: string | null;
+  labels?: Label[];
+  milestone?: MilestoneRef | null;
+  /** Issues this pull request closes when merged (its `fixes #N`); detail payload only. */
+  closingIssues?: Array<{ number: number; title: string; state: "open" | "closed" }>;
   createdAt: string;
   updatedAt: string;
   // Emoji reactions (#90) — optional so older payloads still parse.

@@ -33,6 +33,15 @@ vi.mock("../prisma.js", () => ({
       findFirst: vi.fn(),
       findUnique: vi.fn(),
     },
+    // Labels and the Development section (#252) — default to "none".
+    label: { findFirst: vi.fn() },
+    pullRequestLabel: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
+    },
+    crossReference: { findMany: vi.fn().mockResolvedValue([]) },
+    issue: { findMany: vi.fn().mockResolvedValue([]) },
     // Review summary (merge gate + PR detail) reads these; default to "no reviews".
     pullRequestReview: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -164,6 +173,7 @@ vi.mock("bcryptjs", () => ({
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { notifyUser } from "../notifications-service.js";
+import { recordEvent } from "../timeline-service.js";
 import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
@@ -1952,5 +1962,158 @@ describe("requested reviewers (issue #82)", () => {
       expect.objectContaining({ handle: "reviewer", state: "requested" }),
       expect.objectContaining({ handle: "done", state: "reviewed" }),
     ]);
+  });
+});
+
+describe("pull request sidebar and header (#252)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let authorToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+    authorToken = await authHeader(app, AUTHOR_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(() => {
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequest.update).mockReset().mockResolvedValue(makePR() as never);
+    vi.mocked(prisma.pullRequestLabel.findFirst).mockResolvedValue(null as never);
+    vi.mocked(prisma.pullRequestLabel.create).mockClear();
+    vi.mocked(prisma.pullRequestLabel.delete).mockClear();
+  });
+
+  it("the author renames their pull request, with a title_changed event", async () => {
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ title: "Better title" }) as never);
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: authorToken }, payload: { title: "  Better title " },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().title).toBe("Better title");
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ title: "Better title" }) }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "title_changed", data: { from: "Add feature", to: "Better title" } }),
+    );
+  });
+
+  it("refuses an empty title, and a stranger's edit", async () => {
+    const empty = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: authorToken }, payload: { title: "   " },
+    });
+    expect(empty.statusCode).toBe(400);
+    const stranger = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: await authHeader(app, "stranger") }, payload: { title: "Mine now" },
+    });
+    expect(stranger.statusCode).toBe(403);
+  });
+
+  it("a writer assigns someone who can read the repo", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({ id: OWNER_ID } as never);
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(
+      makePR({ assigneeId: OWNER_ID, assignee: { handle: "alice" } }) as never,
+    );
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: ownerToken }, payload: { assigneeId: OWNER_ID },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().assignee).toBe("alice");
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(expect.objectContaining({ kind: "assigned", data: { assignee: "alice" } }));
+  });
+
+  it("only a writer may assign", async () => {
+    const res = await app.inject({
+      method: "PATCH", url: "/repos/alice/my-repo/pulls/1",
+      headers: { authorization: authorToken }, payload: { assigneeId: OWNER_ID },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("adds a label once, with a labeled event", async () => {
+    vi.mocked(prisma.label.findFirst).mockResolvedValue({ id: "l1", name: "bug", color: "d73a4a" } as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/labels",
+      headers: { authorization: ownerToken }, payload: { labelId: "l1" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(prisma.pullRequestLabel.create)).toHaveBeenCalledWith({ data: { pullRequestId: "pr-1", labelId: "l1" } });
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(expect.objectContaining({ kind: "labeled", subjectType: "PULL_REQUEST" }));
+
+    // Already applied: no second row, no second event.
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(prisma.pullRequestLabel.findFirst).mockResolvedValue({ pullRequestId: "pr-1", labelId: "l1" } as never);
+    const again = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/labels",
+      headers: { authorization: ownerToken }, payload: { labelId: "l1" },
+    });
+    expect(again.statusCode).toBe(201);
+    expect(vi.mocked(prisma.pullRequestLabel.create)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+  });
+
+  it("removes a label, and 404s one that isn't on the pull request", async () => {
+    const missing = await app.inject({
+      method: "DELETE", url: "/repos/alice/my-repo/pulls/1/labels/l1", headers: { authorization: ownerToken },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    vi.mocked(prisma.pullRequestLabel.findFirst).mockResolvedValue({ pullRequestId: "pr-1", labelId: "l1" } as never);
+    vi.mocked(prisma.label.findFirst).mockResolvedValue({ id: "l1", name: "bug", color: "d73a4a" } as never);
+    const res = await app.inject({
+      method: "DELETE", url: "/repos/alice/my-repo/pulls/1/labels/l1", headers: { authorization: ownerToken },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(vi.mocked(prisma.pullRequestLabel.delete)).toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(expect.objectContaining({ kind: "unlabeled" }));
+  });
+
+  it("the author converts an open pull request back to a draft, disarming auto-merge", async () => {
+    vi.mocked(prisma.pullRequest.update).mockResolvedValue(makePR({ isDraft: true }) as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/draft", headers: { authorization: authorToken },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().isDraft).toBe(true);
+    expect(vi.mocked(prisma.pullRequest.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { isDraft: true, autoMergeMethod: null, autoMergeById: null } }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(expect.objectContaining({ kind: "converted_to_draft" }));
+  });
+
+  it("won't convert a draft, a closed pull request, or for a stranger", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValueOnce(makePR({ isDraft: true }) as never);
+    const draft = await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/draft", headers: { authorization: authorToken } });
+    expect(draft.statusCode).toBe(409);
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValueOnce(makePR({ state: "CLOSED" }) as never);
+    const closed = await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/draft", headers: { authorization: authorToken } });
+    expect(closed.statusCode).toBe(409);
+    const stranger = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/pulls/1/draft", headers: { authorization: await authHeader(app, "stranger") },
+    });
+    expect(stranger.statusCode).toBe(403);
+  });
+
+  it("the detail payload carries assignee, labels and the issues it closes", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(makePR({
+      assignee: { handle: "alice" },
+      labels: [{ label: { id: "l1", name: "bug", color: "d73a4a" } }],
+    }) as never);
+    vi.mocked(prisma.crossReference.findMany).mockResolvedValueOnce([{ targetId: "issue-7" }] as never);
+    vi.mocked(prisma.issue.findMany).mockResolvedValueOnce([{ number: 7, title: "Crash on save", state: "OPEN" }] as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1", headers: { authorization: ownerToken } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.assignee).toBe("alice");
+    expect(body.labels).toEqual([{ id: "l1", name: "bug", color: "d73a4a" }]);
+    expect(body.closingIssues).toEqual([{ number: 7, title: "Crash on save", state: "open" }]);
   });
 });
