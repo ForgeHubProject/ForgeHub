@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
 import { escapeHtml, highlightCode } from "../lib/highlight";
 import { linkifyHtml, type RepoRef } from "../lib/autolink";
+import { createHeadingIds } from "../lib/headings";
 
 const renderer = new Renderer();
 
@@ -15,6 +16,13 @@ renderer.code = function ({ text, lang }) {
 
 renderer.codespan = function ({ text }) {
   return `<code>${text}</code>`;
+};
+
+// Headings get GitHub's anchors (#256), which the README outline links to.
+// One id sequence per document: `parse` below resets it before each render.
+let headingId = createHeadingIds();
+renderer.heading = function ({ tokens, depth, text }) {
+  return `<h${depth} id="${headingId(text)}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
 };
 
 marked.use({ renderer, gfm: true, breaks: false });
@@ -34,6 +42,7 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
   const navigate = useNavigate();
 
   const html = useMemo(() => {
+    headingId = createHeadingIds();
     const raw = marked.parse(content) as string;
     const clean = DOMPurify.sanitize(raw, {
       ADD_ATTR: ["class"],

@@ -894,35 +894,52 @@ async function pathFilteredCommitLines(
   skip: number,
   perPage: number,
   format: string,
+  filters: string[] = [],
 ): Promise<string[]> {
   const cwd = bareRepoPathFromKey(storageKey);
   const { stdout } = await execFile(
     "git",
-    ["log", ref, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
+    ["log", ref, ...filters, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
     { cwd, maxBuffer: MAX, timeout: pathHistoryTimeoutMs(), killSignal: "SIGKILL" },
   );
   return stdout.trim().split("\n").filter(Boolean);
 }
 
+/**
+ * `git log` arguments for the Commits page's filters (#256): an author (a
+ * name or email, matched as text, not a regex) and a date range (YYYY-MM-DD,
+ * inclusive). Anything not shaped like that is dropped rather than passed on.
+ */
+export function commitFilterArgs(f: { author?: string; since?: string; until?: string }): string[] {
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  const args: string[] = [];
+  const author = f.author?.trim();
+  if (author && author.length <= 200 && !author.includes("\n")) args.push("--fixed-strings", "--regexp-ignore-case", `--author=${author}`);
+  if (f.since && day.test(f.since)) args.push(`--since=${f.since} 00:00:00`);
+  if (f.until && day.test(f.until)) args.push(`--until=${f.until} 23:59:59`);
+  return args;
+}
+
 export async function listCommits(
   storageKey: string,
   ref: string,
-  options: { page?: number; perPage?: number; path?: string } = {},
+  options: { page?: number; perPage?: number; path?: string; author?: string; since?: string; until?: string } = {},
 ): Promise<CommitInfo[]> {
   const page = Math.max(1, options.page ?? 1);
   const perPage = Math.min(100, Math.max(1, options.perPage ?? 20));
   const skip = (page - 1) * perPage;
+  const filters = commitFilterArgs(options);
   // \x1f (unit separator) won't appear in git metadata fields
   const format = `%H\x1f%s\x1f%an\x1f%ae\x1f%aI\x1f%P${SIG_FORMAT}`;
   try {
     let lines: string[];
     if (options.path) {
-      lines = await pathFilteredCommitLines(storageKey, ref, options.path, skip, perPage, format);
+      lines = await pathFilteredCommitLines(storageKey, ref, options.path, skip, perPage, format, filters);
     } else {
       // No pathspec: `git log` already stops after skip + perPage commits, so
       // the page costs what it returns and needs no bound.
       const out = await git(storageKey, [
-        "log", ref, `--skip=${skip}`, `-n`, String(perPage), `--format=${format}`,
+        "log", ref, ...filters, `--skip=${skip}`, `-n`, String(perPage), `--format=${format}`,
       ]);
       lines = out.split("\n").filter(Boolean);
     }
