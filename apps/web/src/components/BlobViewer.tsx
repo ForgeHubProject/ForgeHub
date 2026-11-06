@@ -4,7 +4,7 @@ import { fetchRawBlob, getBlame, getBlob, getBlobMeta, resolveRef, type BlobMeta
 import { formatBytes, lineStats } from "../lib/fileFacts";
 import { historyUrl } from "../pages/repo/LatestCommitBar";
 import { convertTargets, downloadConverted, loadConvertFormats } from "../lib/convert";
-import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, Skeleton, Tooltip, cx, useToast } from "../ui";
+import { Breadcrumbs, DropdownItem, DropdownLabel, DropdownMenu, DropdownSeparator, Skeleton, Tooltip, cx, useToast } from "../ui";
 import type { Crumb } from "../ui";
 import type { BlameHunk } from "../types";
 import { useSemanticFormatsReady } from "../lib/fhrFormats";
@@ -28,7 +28,12 @@ type Props = {
   repoBase: string;
   /** Drawn between the breadcrumb and the file (the file page's latest-commit bar, #224). */
   beforeFile?: React.ReactNode;
+  /** The viewer may change files and `ref` is a branch: edit, delete, upload a new version (#254). */
+  canEdit?: boolean;
 };
+
+/** Text files up to this size open in the web editor (#254); larger ones are pushed. */
+const EDITABLE_BYTES = 2 * 1024 * 1024;
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 
@@ -117,7 +122,7 @@ function HeaderAction({ onClick, icon, children, href, active }: {
   );
 }
 
-export function BlobViewer({ token, handle, repoName, ref, path, repoBase, beforeFile }: Props) {
+export function BlobViewer({ token, handle, repoName, ref, path, repoBase, beforeFile, canEdit }: Props) {
   const { toast } = useToast();
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -435,6 +440,18 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
             </span>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {canEdit && meta?.binary === false && meta.size <= EDITABLE_BYTES && (
+              <Tooltip label="Edit this file">
+                <button
+                  type="button"
+                  aria-label="Edit this file"
+                  onClick={() => navigate(`${repoBase}/edit/${ref}/${path}`)}
+                  className="inline-flex h-6 items-center rounded-md border border-fh-border bg-fh-surface px-2 text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg cursor-pointer"
+                >
+                  <PencilGlyph />
+                </button>
+              </Tooltip>
+            )}
             <div role="group" aria-label="File" className="inline-flex overflow-hidden rounded-md border border-fh-border">
               {[
                 { label: "Raw", icon: <CodeGlyph />, onClick: () => void openRaw(), show: true },
@@ -494,6 +511,19 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
               {!semantic && !binaryBody && (
                 <DropdownItem onSelect={toggleBlame}>{blameOn ? "View code" : "View blame"}</DropdownItem>
               )}
+              {canEdit && (
+                <>
+                  <DropdownSeparator />
+                  {meta?.binary && (
+                    <DropdownItem onSelect={() => navigate(`${repoBase}/upload/${ref}${path.includes("/") ? `/${path.slice(0, path.lastIndexOf("/"))}` : ""}`)}>
+                      Upload a new version
+                    </DropdownItem>
+                  )}
+                  <DropdownItem onSelect={() => navigate(`${repoBase}/delete/${ref}/${path}`)}>
+                    <span className="text-fh-danger-fg">Delete file</span>
+                  </DropdownItem>
+                </>
+              )}
             </DropdownMenu>
           </div>
         </div>
@@ -527,5 +557,13 @@ export function BlobViewer({ token, handle, repoName, ref, path, repoBase, befor
         )}
       </div>
     </div>
+  );
+}
+
+function PencilGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z" />
+    </svg>
   );
 }
