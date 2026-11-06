@@ -162,6 +162,7 @@ export function CommentableTextDiff({
                                 suggestionSeed={anchor.side === "incoming" ? line.content : null}
                                 onSubmit={(body, mode, suggestion) => submitCompose(anchor, body, mode, suggestion)}
                                 onCancel={() => setComposeKey(null)}
+                                ctx={review.reactionCtx}
                               />
                             )}
                           </div>

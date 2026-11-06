@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Avatar, Badge, Button, Dialog, DropdownMenu, DropdownItem, DropdownSeparator,
-  EmptyState, RelativeTime, Skeleton, Textarea, TextInput, useToast,
+  EmptyState, RelativeTime, Skeleton, TextInput, useToast,
 } from "../../../ui";
 import {
   addIssueLabel, ApiError, createIssueCommentWithActions, getIssue, getPull, listIssueComments, listIssueTimeline,
   listLabels, listMilestones, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember,
   setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
 } from "../../../api";
+import { MarkdownEditor } from "../../../components/MarkdownEditor";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
@@ -126,9 +127,9 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
       .catch(() => { /* keep prior events on failure */ });
   }
 
-  async function submitComment(e: React.FormEvent) {
-    e.preventDefault();
-    if (!commentBody.trim()) return;
+  async function submitComment(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!commentBody.trim() || submitting) return;
     setSubmitting(true);
     try {
       const res = await createIssueCommentWithActions(token, handle, repoName, number, commentBody.trim());
@@ -474,25 +475,24 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
               </div>
             </div>
           ) : (
-            <form onSubmit={submitComment} className="border border-fh-border rounded-md overflow-hidden">
-              <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border text-fh-sm">
-                <Avatar name={user.displayName ?? user.handle} size={20} />
-                <span className="font-semibold text-fh-fg">Add a comment</span>
-              </div>
-              <div className="p-3 bg-fh-surface">
+            <form onSubmit={submitComment} className="flex gap-3 pt-4 border-t border-fh-border">
+              <Avatar name={user.displayName ?? user.handle} size={32} className="hidden sm:inline-flex mt-7" />
+              <div className="flex-1 min-w-0">
+                <p className="mb-2 text-fh-base font-semibold text-fh-fg">Add a comment</p>
                 {isLocked && (
                   <div className="mb-2 flex items-center gap-1.5 text-fh-xs text-fh-warning-fg">
                     <LockIcon size={12} />
                     This conversation is locked — only collaborators can comment.
                   </div>
                 )}
-                <Textarea
+                <MarkdownEditor
                   rows={5}
-                  placeholder="Leave a comment"
                   value={commentBody}
-                  onChange={(e) => setCommentBody(e.target.value)}
+                  onValueChange={setCommentBody}
+                  onSubmit={() => void submitComment()}
+                  token={token}
+                  repo={repoRef}
                 />
-                <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">Styling with Markdown is supported.</p>
                 {error && <p className="mt-2 text-fh-sm text-fh-danger-fg">{error}</p>}
                 <div className="flex items-center justify-end gap-2 mt-3">
                   {canEdit && (
@@ -527,6 +527,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             selectedHandle={issue.assignee}
             onSelect={setAssignee}
             canEdit={canEdit}
+            selfHandle={user.handle}
           />
           <SidebarMilestone
             milestones={milestones}

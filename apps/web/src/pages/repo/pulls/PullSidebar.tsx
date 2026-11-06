@@ -137,7 +137,13 @@ export function PullSidebar({
         </p>
       )}
 
-      <SidebarAssignee members={members} selectedHandle={pr.assignee ?? null} onSelect={assign} canEdit={canWrite} />
+      <SidebarAssignee
+        members={members}
+        selectedHandle={pr.assignee ?? null}
+        onSelect={assign}
+        canEdit={canWrite}
+        selfHandle={user.handle}
+      />
       <SidebarLabels allLabels={allLabels} selected={pr.labels ?? []} onToggle={toggleLabel} canEdit={canWrite} />
       <SidebarMilestone
         milestones={milestones}

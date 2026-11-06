@@ -3,11 +3,12 @@ import {
   createRelease, deleteRelease, listReleases,
   uploadReleaseAsset, deleteReleaseAsset, downloadReleaseAsset, generateReleaseNotes,
 } from "../../api";
+import { MarkdownEditor } from "../../components/MarkdownEditor";
 import { MarkdownRenderer } from "../../components/MarkdownRenderer";
 import type { Release, ReleaseAsset, User } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, DropdownMenu, DropdownItem,
-  EmptyState, Field, Skeleton, TextInput, Textarea, RelativeTime, useToast,
+  EmptyState, Field, Skeleton, TextInput, RelativeTime, useToast,
 } from "../../ui";
 import { useRepoPermission } from "./permission";
 
@@ -284,9 +285,17 @@ function CreateReleaseForm({
             Generate release notes
           </Button>
         </div>
-        <Textarea id="release-notes-body" value={body} onChange={(e) => setBody(e.target.value)} rows={6}
-          placeholder="Describe what changed in this release…" className="font-mono text-fh-sm" />
-        <p className="text-fh-sm text-fh-fg-subtle">Markdown supported. Generated notes are editable before you publish.</p>
+        <MarkdownEditor
+          id="release-notes-body"
+          ariaLabel="Release notes"
+          value={body}
+          onValueChange={setBody}
+          rows={8}
+          placeholder="Describe what changed in this release…"
+          token={token}
+          repo={{ owner: handle, name: repoName }}
+        />
+        <p className="text-fh-sm text-fh-fg-subtle">Generated notes are editable before you publish.</p>
       </div>
 
       {/* Attach binaries */}

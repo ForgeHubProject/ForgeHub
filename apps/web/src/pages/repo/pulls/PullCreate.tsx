@@ -3,7 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { createPull, listRepoTemplates } from "../../../api";
 import { canReplaceBody } from "../templatesModel";
 import type { BranchInfo } from "../../../types";
-import { Button, Field, Select, TextInput, Textarea } from "../../../ui";
+import { Button, Field, Select, TextInput } from "../../../ui";
+import { MarkdownEditor } from "../../../components/MarkdownEditor";
 import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, GitPullRequestIcon } from "./prShared";
 
 export function PullCreate({
@@ -156,17 +157,17 @@ export function PullCreate({
             />
           )}
         </Field>
-        <Field label="Description" hint="Optional. Markdown is supported.">
-          {(id) => (
-            <Textarea
-              id={id}
-              rows={6}
-              placeholder="Describe your changes…"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          )}
-        </Field>
+        <div>
+          <p className="mb-1.5 text-fh-sm font-semibold text-fh-fg">Description</p>
+          <MarkdownEditor
+            rows={8}
+            placeholder="Describe your changes…"
+            value={description}
+            onValueChange={setDescription}
+            token={token}
+            repo={{ owner: handle, name: repoName }}
+          />
+        </div>
         {/* Draft toggle (issue #82): open as not-ready — merging blocked until "Ready for review". */}
         <label className="flex items-start gap-2 text-fh-sm text-fh-fg cursor-pointer">
           <input
