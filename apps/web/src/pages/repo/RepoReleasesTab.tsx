@@ -11,12 +11,15 @@ import {
   EmptyState, Field, Skeleton, TextInput, RelativeTime, useToast,
 } from "../../ui";
 import { useRepoPermission } from "./permission";
+import { ReleasesTagsSwitch, RepoTagsView } from "./RepoTagsView";
 
 type Props = {
   token: string;
   handle: string;
   repoName: string;
   user: User;
+  /** `releases` or `tags` (#256): the two lists share the tab. */
+  splat?: string;
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -552,7 +555,12 @@ function ReleaseRow({
   );
 }
 
-export function RepoReleasesTab({ token, handle, repoName, user }: Props) {
+export function RepoReleasesTab({ splat, ...props }: Props) {
+  if (splat?.startsWith("tags")) return <RepoTagsView token={props.token} handle={props.handle} repoName={props.repoName} />;
+  return <ReleasesList {...props} />;
+}
+
+function ReleasesList({ token, handle, repoName, user }: Props) {
   const [releases, setReleases] = useState<Release[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -616,14 +624,7 @@ export function RepoReleasesTab({ token, handle, repoName, user }: Props) {
     <div>
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mb-6">
-        <h2 className="flex items-center gap-2 text-fh-lg font-semibold text-fh-fg">
-          Releases
-          {!loading && releases.length > 0 && (
-            <span className="inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full text-fh-xs font-semibold bg-fh-neutral-muted text-fh-fg-muted">
-              {releases.length}
-            </span>
-          )}
-        </h2>
+        <ReleasesTagsSwitch base={`/${handle}/${repoName}`} active="releases" counts={{ releases: loading ? undefined : releases.length }} />
         {canManage && !showCreate && (
           <Button variant="primary" leadingIcon={<TagIcon size={14} />} onClick={() => setShowCreate(true)}>
             Draft a new release

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE, downloadArchive, httpsCloneUrl, getCheckSummary, getTreeCommits, listCommits, listRepoPaths, listTree, sshCloneUrl } from "../../api";
+import { API_BASE, downloadArchive, httpsCloneUrl, getCheckSummary, getTreeCommits, listCommits, listRepoPaths, listTags, listTree, sshCloneUrl } from "../../api";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import type { CheckSummary } from "../../types";
 import { BlobViewer } from "../../components/BlobViewer";
@@ -504,6 +504,11 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
 function TreeView({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, base, social, canEditSettings }: Props & { base: string }) {
   const navigate = useNavigate();
   const { canWrite } = useRepoPermission();
+  const [tagCount, setTagCount] = useState<number | null>(null);
+  const readmeBody = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listTags(token, handle, repoName).then((d) => setTagCount(d.tags.length)).catch(() => setTagCount(null));
+  }, [token, handle, repoName]);
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
@@ -604,6 +609,22 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap mb-4">
         <BranchSwitcher branches={branches} currentRef={currentRef} onRefChange={onRefChange} onCreateBranch={onCreateBranch} base={base} />
+
+        {/* GitHub's branch and tag counts beside the picker, on the repo's root (#256) */}
+        {pathParts.length === 0 && branches.length > 0 && (
+          <div className="hidden items-center gap-3 text-fh-sm sm:flex">
+            <Link to={`${base}/branches`} className="inline-flex items-center gap-1 text-fh-fg-muted no-underline hover:text-fh-accent-fg">
+              <BranchCountGlyph />
+              <span className="font-semibold text-fh-fg">{branches.length}</span> {branches.length === 1 ? "branch" : "branches"}
+            </Link>
+            {tagCount !== null && (
+              <Link to={`${base}/tags`} className="inline-flex items-center gap-1 text-fh-fg-muted no-underline hover:text-fh-accent-fg">
+                <TagCountGlyph />
+                <span className="font-semibold text-fh-fg">{tagCount}</span> {tagCount === 1 ? "tag" : "tags"}
+              </Link>
+            )}
+          </div>
+        )}
 
         {/* Breadcrumb path navigation */}
         {pathParts.length > 0 && (
@@ -791,8 +812,9 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
           <div className="flex items-center gap-2 px-4 py-2.5 bg-fh-canvas border-b border-fh-border">
             <BookIcon />
             <span className="text-fh-base font-semibold text-fh-fg">{readme.path}</span>
+            <ReadmeOutline body={readmeBody} content={readme.content} />
           </div>
-          <div className="px-6 py-6 md:px-8">
+          <div ref={readmeBody} className="px-6 py-6 md:px-8">
             <MarkdownRenderer content={readme.content} />
           </div>
         </div>
@@ -806,6 +828,66 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
           <ContributorsSection token={token} handle={handle} repoName={repoName} refName={currentRef} />
         </aside>
       )}
+    </div>
+  );
+}
+
+function BranchCountGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
+    </svg>
+  );
+}
+
+function TagCountGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.752 1.752 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z" />
+    </svg>
+  );
+}
+
+/**
+ * GitHub's README outline (#256): the README's headings, from the rendered
+ * page, in a menu that jumps to each.
+ */
+function ReadmeOutline({ body, content }: { body: React.RefObject<HTMLDivElement | null>; content: string }) {
+  const [items, setItems] = useState<Array<{ id: string; text: string; depth: number }>>([]);
+  // Read the headings once the README below has rendered (effects run after it).
+  useEffect(() => {
+    const hs = Array.from(body.current?.querySelectorAll<HTMLElement>("h1, h2, h3") ?? []);
+    setItems(hs.filter((h) => h.id).map((h) => ({ id: h.id, text: h.textContent ?? "", depth: Number(h.tagName[1]) })));
+  }, [body, content]);
+  return (
+    <div className="ml-auto">
+      <DropdownMenu
+        align="end"
+        width={280}
+        trigger={
+          <button type="button" aria-label="Outline" title="Outline" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M5.75 2.5h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1 0-1.5Zm0 5h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1 0-1.5Zm0 5h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1 0-1.5ZM2 14a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm1-6a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM2 4a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" />
+            </svg>
+          </button>
+        }
+      >
+        {items.length === 0 ? (
+          <p className="px-3 py-2 text-fh-sm text-fh-fg-muted">No headings</p>
+        ) : (
+          items.map((it) => (
+            <DropdownItem
+              key={it.id}
+              onSelect={() => {
+                document.getElementById(it.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                history.replaceState(null, "", `#${it.id}`);
+              }}
+            >
+              <span style={{ paddingLeft: `${(it.depth - 1) * 12}px` }} className="truncate">{it.text}</span>
+            </DropdownItem>
+          ))
+        )}
+      </DropdownMenu>
     </div>
   );
 }

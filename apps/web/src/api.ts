@@ -590,6 +590,14 @@ export async function deleteBranchProtection(
   });
 }
 
+/** A git tag: its name, the commit it points at (short), and that commit's subject and date. */
+export type TagInfo = { name: string; sha: string; subject: string; date: string };
+
+/** The repository's tags, newest first (#256). */
+export async function listTags(token: string | null, handle: string, repoName: string): Promise<{ tags: TagInfo[] }> {
+  return req(`/repos/${handle}/${repoName}/tags`, { token: token ?? undefined });
+}
+
 // ─── protected tags (issue #117) ────────────────────────────────────────────────
 
 export async function listProtectedTags(
@@ -947,11 +955,14 @@ export async function listCommits(
   handle: string,
   repoName: string,
   ref?: string,
-  opts: { path?: string; page?: number; perPage?: number } = {},
+  opts: { path?: string; page?: number; perPage?: number; author?: string; since?: string; until?: string } = {},
 ): Promise<{ commits: CommitInfo[]; branch: string; path: string | null; page: number; perPage: number }> {
   const qs = new URLSearchParams();
   if (ref) qs.set("branch", ref);
   if (opts.path) qs.set("path", opts.path);
+  if (opts.author) qs.set("author", opts.author);
+  if (opts.since) qs.set("since", opts.since);
+  if (opts.until) qs.set("until", opts.until);
   if (opts.page) qs.set("page", String(opts.page));
   if (opts.perPage) qs.set("per_page", String(opts.perPage));
   const q = qs.toString() ? `?${qs}` : "";
