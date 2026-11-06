@@ -6,6 +6,7 @@
  */
 import { useState } from "react";
 import { Avatar, Badge, Button, RelativeTime, Textarea, cx } from "../../../ui";
+import { MarkdownEditor } from "../../../components/MarkdownEditor";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
 import type { RepoRef } from "../../../lib/autolink";
@@ -96,6 +97,7 @@ export function InlineComposer({
   suggestionSeed,
   onSubmit,
   onCancel,
+  ctx,
 }: {
   currentUser: string;
   hasPendingReview: boolean;
@@ -106,6 +108,8 @@ export function InlineComposer({
   suggestionSeed?: string | null;
   onSubmit: (body: string, mode: ComposeMode, suggestion?: string) => void;
   onCancel?: () => void;
+  /** The repo the comment box's preview and autocomplete read (#253). */
+  ctx?: ReactionCtx;
 }) {
   const [body, setBody] = useState("");
   const [suggesting, setSuggesting] = useState(false);
@@ -152,12 +156,15 @@ export function InlineComposer({
             />
           </div>
         )}
-        <Textarea
+        <MarkdownEditor
           rows={3}
           autoFocus={autoFocus}
           placeholder={placeholder}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onValueChange={setBody}
+          onSubmit={trimmed ? () => onSubmit(trimmed, hasPendingReview ? "review" : "single", payload) : undefined}
+          token={ctx?.token}
+          repo={ctx ? { owner: ctx.handle, name: ctx.repoName } : undefined}
         />
         <div className="mt-2 flex items-center justify-end gap-2 flex-wrap">
           {onCancel && (
@@ -418,6 +425,7 @@ export function ReviewThread({
           <ReplyBox
             currentUser={currentUser}
             busy={busy}
+            ctx={reactionCtx}
             onCancel={() => setReplying(false)}
             onSubmit={(body) => { onReply(root.id, body); setReplying(false); }}
           />
@@ -432,11 +440,13 @@ function ReplyBox({
   busy,
   onSubmit,
   onCancel,
+  ctx,
 }: {
   currentUser: string;
   busy?: boolean;
   onSubmit: (body: string) => void;
   onCancel: () => void;
+  ctx?: ReactionCtx;
 }) {
   const [body, setBody] = useState("");
   const trimmed = body.trim();
@@ -447,7 +457,16 @@ function ReplyBox({
         <span className="font-semibold text-fh-fg">{currentUser}</span>
       </div>
       <div className="p-2">
-        <Textarea rows={2} autoFocus placeholder="Reply…" value={body} onChange={(e) => setBody(e.target.value)} />
+        <MarkdownEditor
+          rows={2}
+          autoFocus
+          placeholder="Reply…"
+          value={body}
+          onValueChange={setBody}
+          onSubmit={trimmed ? () => onSubmit(trimmed) : undefined}
+          token={ctx?.token}
+          repo={ctx ? { owner: ctx.handle, name: ctx.repoName } : undefined}
+        />
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button type="button" variant="default" size="sm" disabled={busy} onClick={onCancel}>Cancel</Button>
           <Button type="button" variant="primary" size="sm" loading={busy} disabled={!trimmed} onClick={() => onSubmit(trimmed)}>
@@ -491,6 +510,7 @@ export function ReviewSubmitPanel({
   busy,
   onSubmit,
   onDiscard,
+  ctx,
 }: {
   currentUser: string;
   isAuthor: boolean;
@@ -499,6 +519,8 @@ export function ReviewSubmitPanel({
   busy: boolean;
   onSubmit: (state: Verdict, body: string) => void;
   onDiscard: () => void;
+  /** The repo the summary box's preview and autocomplete read (#253). */
+  ctx?: ReactionCtx;
 }) {
   const [body, setBody] = useState("");
   const [choice, setChoice] = useState<Verdict>("commented");
@@ -540,11 +562,13 @@ export function ReviewSubmitPanel({
         )}
       </div>
       <div className="p-3 space-y-3">
-        <Textarea
+        <MarkdownEditor
           rows={3}
           placeholder="Leave a summary comment (optional)"
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onValueChange={setBody}
+          token={ctx?.token}
+          repo={ctx ? { owner: ctx.handle, name: ctx.repoName } : undefined}
         />
         <div className="flex flex-col gap-1.5">
           {options.map((o) => (

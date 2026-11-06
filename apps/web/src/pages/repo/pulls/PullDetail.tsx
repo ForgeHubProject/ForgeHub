@@ -5,6 +5,7 @@ import {
   listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
   listReviews, listWorkflowRuns, replyToReviewThread, setPRFileViewed, setReviewThreadResolved, submitReview, updatePull,
 } from "../../../api";
+import { MarkdownEditor } from "../../../components/MarkdownEditor";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
@@ -12,7 +13,7 @@ import type {
   CommitInfo, IssueComment, PRFileEntry, PullRequest, Review, ReviewComment,
   ReviewCommentPosition, TimelineEvent, User,
 } from "../../../types";
-import { Avatar, Button, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, Textarea, TextInput } from "../../../ui";
+import { Avatar, Button, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput } from "../../../ui";
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
 import { Popover } from "../issues/pickers";
@@ -140,9 +141,9 @@ export function PullDetail({
       .catch(() => { /* keep prior events on failure */ });
   }
 
-  async function submitComment(e: React.FormEvent) {
-    e.preventDefault();
-    if (!commentBody.trim()) return;
+  async function submitComment(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!commentBody.trim() || submitting) return;
     setSubmitting(true);
     try {
       const c = await createPullComment(token, handle, repoName, number, commentBody.trim());
@@ -546,19 +547,17 @@ export function PullDetail({
             <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || canAdmin} canClose={isAuthor || canAdmin} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
 
             {/* Comment composer, last, as on GitHub */}
-            <form onSubmit={submitComment} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
-              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
-                <Avatar name={user.displayName ?? user.handle} size={22} />
-                <span className="font-semibold text-fh-fg">Add a comment</span>
-              </div>
-              <div className="p-3">
-                <Textarea
-                  rows={4}
-                  placeholder="Leave a comment"
+            <form onSubmit={submitComment} className="flex gap-3 pt-4 border-t border-fh-border">
+              <Avatar name={user.displayName ?? user.handle} size={32} className="hidden sm:inline-flex mt-7" />
+              <div className="flex-1 min-w-0">
+                <p className="mb-2 text-fh-base font-semibold text-fh-fg">Add a comment</p>
+                <MarkdownEditor
                   value={commentBody}
-                  onChange={(e) => setCommentBody(e.target.value)}
+                  onValueChange={setCommentBody}
+                  onSubmit={() => void submitComment()}
+                  token={token}
+                  repo={repoRef}
                 />
-                <p className="mt-1.5 text-fh-xs text-fh-fg-subtle">Styling with Markdown is supported.</p>
                 <div className="flex items-center justify-end mt-3">
                   <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
                     Comment
@@ -699,6 +698,7 @@ export function PullDetail({
                       busy={reviewBusy}
                       onSubmit={onSubmitReview}
                       onDiscard={onDiscardReview}
+                      ctx={{ token, handle, repoName }}
                     />
                   </Popover>
                 )}
