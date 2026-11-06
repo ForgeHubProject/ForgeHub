@@ -20,6 +20,8 @@ export type TimelineEventKind =
   | "reviewed"
   // Draft PRs + requested reviewers (#82)
   | "ready_for_review"
+  // Back to draft (#252)
+  | "converted_to_draft"
   | "review_requested"
   | "referenced"
   | "head_pushed"
