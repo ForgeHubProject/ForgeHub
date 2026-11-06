@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { createPull, listRepoTemplates } from "../../../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { createPull, listBranches, listRepoTemplates } from "../../../api";
 import { canReplaceBody } from "../templatesModel";
 import type { BranchInfo } from "../../../types";
 import { Button, Field, Select, TextInput } from "../../../ui";
@@ -24,12 +24,22 @@ export function PullCreate({
 }) {
   const navigate = useNavigate();
   const base = `/${handle}/${repoName}`;
+  // `?from=&to=&title=`: a proposal from the web editor (#254) lands here filled in.
+  const [params] = useSearchParams();
+  const fromParam = params.get("from");
+
+  // The page's branch list predates a branch the editor just made; fetch a fresh one then.
+  const [branchList, setBranchList] = useState(branches);
+  useEffect(() => {
+    if (!fromParam || branches.some((b) => b.name === fromParam)) return;
+    listBranches(token, handle, repoName).then((d) => setBranchList(d.branches)).catch(() => {});
+  }, [fromParam, branches, token, handle, repoName]);
 
   const initialFrom =
-    currentRef !== defaultBranch ? currentRef : branches.find((b) => !b.isDefault)?.name ?? currentRef;
+    fromParam ?? (currentRef !== defaultBranch ? currentRef : branches.find((b) => !b.isDefault)?.name ?? currentRef);
   const [fromBranch, setFromBranch] = useState(initialFrom);
-  const [toBranch, setToBranch] = useState(defaultBranch);
-  const [title, setTitle] = useState("");
+  const [toBranch, setToBranch] = useState(params.get("to") ?? defaultBranch);
+  const [title, setTitle] = useState(params.get("title") ?? "");
   const [description, setDescription] = useState("");
   const [draft, setDraft] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -101,7 +111,7 @@ export function PullCreate({
           <Field label="Base branch" hint="Where changes will merge into" className="flex-1">
             {(id) => (
               <Select id={id} value={toBranch} onChange={(e) => setToBranch(e.target.value)}>
-                {branches.map((b) => (
+                {branchList.map((b) => (
                   <option key={b.name} value={b.name}>
                     {b.name}
                     {b.isDefault ? " (default)" : ""}
@@ -116,7 +126,7 @@ export function PullCreate({
           <Field label="Compare branch" hint="The branch with your changes" className="flex-1">
             {(id) => (
               <Select id={id} value={fromBranch} onChange={(e) => setFromBranch(e.target.value)}>
-                {branches.map((b) => (
+                {branchList.map((b) => (
                   <option key={b.name} value={b.name}>
                     {b.name}
                   </option>

@@ -1042,6 +1042,33 @@ export async function getBlob(
   return req(`/repos/${handle}/${repoName}/blob?${qs}`, { token: token ?? undefined });
 }
 
+/** One change in a web commit (#254): write `content`, delete, or move `from` (optionally with new content). */
+export type ContentChange =
+  | { path: string; content: string; encoding?: "utf8" | "base64" }
+  | { path: string; delete: true }
+  | { path: string; from: string; content?: string; encoding?: "utf8" | "base64" };
+
+/**
+ * Commit changes from the browser (#254), to `branch` or to a new branch made
+ * from it. `expectedSha` is the tip the editor started from; a moved branch is
+ * refused (409, reason "moved") rather than overwritten.
+ */
+export async function commitContents(
+  token: string,
+  handle: string,
+  repoName: string,
+  body: {
+    branch: string;
+    newBranch?: string;
+    expectedSha?: string;
+    message: string;
+    description?: string;
+    changes: ContentChange[];
+  },
+): Promise<{ sha: string; branch: string; parent: string | null }> {
+  return req(`/repos/${handle}/${repoName}/contents`, { method: "POST", token, body: JSON.stringify(body) });
+}
+
 export async function getReadme(
   token: string | null,
   handle: string,

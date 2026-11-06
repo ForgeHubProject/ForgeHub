@@ -23,7 +23,9 @@ import {
 } from "../../ui";
 import type { BranchInfo, CommitInfo, Repo, RepoSocial, TreeCommits, TreeEntry } from "../../types";
 import { CompositionBar } from "./CompositionBar";
-import { blobFromSplat, refLabel } from "./refs";
+import { blobFromSplat, editRouteFromSplat, refLabel } from "./refs";
+import { FileEditor } from "./FileEditor";
+import { useRepoPermission } from "./permission";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 import { FileIcon, FolderIcon } from "./fileIcons";
 import { useStoredFlag } from "../../lib/storedFlag";
@@ -47,6 +49,8 @@ type Props = {
   social?: RepoSocial | null;
   /** Shows About's edit link — the same people who see the Settings tab. */
   canEditSettings?: boolean;
+  /** The signed-in user, for the web editor's `<user>-patch-N` branch names (#254). */
+  userHandle?: string;
 };
 
 // ── local icons (Octicon-style, currentColor) ────────────────────────────────
@@ -356,7 +360,7 @@ const FILE_PAGE_TREE_KEY = "fh.file.fileTree";
  * the rest. The pane hides, remembered per browser; its controls then sit
  * above the file. It stacks above the file on narrow screens.
  */
-function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCreateBranch }: {
+function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCreateBranch, canEdit }: {
   token: string;
   handle: string;
   repoName: string;
@@ -365,6 +369,8 @@ function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCre
   path: string;
   branches: BranchInfo[];
   onCreateBranch: (name: string, from: string) => Promise<void>;
+  /** The viewer may change files, and the ref is a branch (#254). */
+  canEdit: boolean;
 }) {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -422,6 +428,7 @@ function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCre
           ref={gitRef}
           path={path}
           repoBase={base}
+          canEdit={canEdit}
           beforeFile={<LatestCommitBar token={token} handle={handle} repoName={repoName} gitRef={gitRef} path={path} base={base} />}
         />
       </div>
@@ -429,8 +436,31 @@ function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCre
   );
 }
 
-export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, social, canEditSettings }: Props) {
+export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, social, canEditSettings, userHandle }: Props) {
   const base = `/${handle}/${repoName}`;
+  const { canWrite } = useRepoPermission();
+
+  // Editing on the web (#254): edit/, new/, upload/ and delete/ under a branch.
+  const editRoute = editRouteFromSplat(splat, branches);
+  if (editRoute) {
+    if (!canWrite) {
+      return <p className="rounded-md border border-fh-border bg-fh-surface p-8 text-center text-fh-sm text-fh-fg-muted">You need write access to change files in this repository.</p>;
+    }
+    return (
+      <FileEditor
+        key={splat}
+        token={token}
+        handle={handle}
+        repoName={repoName}
+        base={base}
+        mode={editRoute.mode}
+        gitRef={editRoute.ref}
+        path={editRoute.path}
+        branches={branches}
+        userHandle={userHandle ?? handle}
+      />
+    );
+  }
 
   // Detect blob mode — split ref/path against the branch list, not currentRef,
   // which still holds the default branch on the first render of a slashed one.
@@ -447,6 +477,7 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
         path={blob.path}
         branches={branches}
         onCreateBranch={onCreateBranch}
+        canEdit={canWrite && branches.some((b) => b.name === blob.ref)}
       />
     );
   }
@@ -472,6 +503,7 @@ export function RepoCodeTab({ token, handle, repoName, repo, branches, defaultBr
 
 function TreeView({ token, handle, repoName, repo, branches, defaultBranch, currentRef, onRefChange, onCreateBranch, splat, base, social, canEditSettings }: Props & { base: string }) {
   const navigate = useNavigate();
+  const { canWrite } = useRepoPermission();
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [readme, setReadme] = useState<{ path: string; content: string } | null>(null);
   const [latestCommit, setLatestCommit] = useState<CommitInfo | null>(null);
@@ -604,6 +636,19 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
         <Button variant="default" size="sm" leadingIcon={<CompareGlyph />} onClick={() => navigate(`${base}/compare`)}>
           Compare
         </Button>
+        {canWrite && branches.some((b) => b.name === currentRef) && (
+          <DropdownMenu
+            align="end"
+            trigger={<Button variant="default" size="sm">Add file</Button>}
+          >
+            <DropdownItem onSelect={() => navigate(`${base}/new/${currentRef}${pathParts.length ? `/${pathParts.join("/")}` : ""}`)}>
+              Create new file
+            </DropdownItem>
+            <DropdownItem onSelect={() => navigate(`${base}/upload/${currentRef}${pathParts.length ? `/${pathParts.join("/")}` : ""}`)}>
+              Upload files
+            </DropdownItem>
+          </DropdownMenu>
+        )}
         <CloneDropdown token={token} handle={handle} repoName={repoName} visibility={repo.visibility} currentRef={currentRef} sshPort={repo.sshPort} sshHost={repo.sshHost} />
       </div>
 

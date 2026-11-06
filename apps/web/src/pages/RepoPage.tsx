@@ -588,6 +588,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             splat={splat}
             social={social}
             canEditSettings={canAdmin}
+            userHandle={user.handle}
           />
         )}
         {activeTab === "actions" && (
