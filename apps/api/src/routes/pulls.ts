@@ -165,6 +165,7 @@ export async function pullRoutes(app: FastifyInstance) {
       include: {
         author: { select: { handle: true, displayName: true } },
         milestone: { select: { id: true, number: true, title: true, state: true } },
+        ...assigneeAndLabels,
       },
     });
 
@@ -183,6 +184,7 @@ export async function pullRoutes(app: FastifyInstance) {
         isDraft: p.isDraft,
         mergedAt: p.mergedAt?.toISOString() ?? null,
         author: p.author.handle,
+        ...formatAssigneeAndLabels(p),
         milestone: p.milestone
           ? { id: p.milestone.id, number: p.milestone.number, title: p.milestone.title, state: p.milestone.state.toLowerCase() }
           : null,
@@ -297,6 +299,7 @@ export async function pullRoutes(app: FastifyInstance) {
       include: {
         author: { select: { handle: true, displayName: true } },
         milestone: { select: { id: true, number: true, title: true, state: true } },
+        ...assigneeAndLabels,
       },
     });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
@@ -348,9 +351,12 @@ export async function pullRoutes(app: FastifyInstance) {
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
+      ...formatAssigneeAndLabels(pr),
       milestone: pr.milestone
         ? { id: pr.milestone.id, number: pr.milestone.number, title: pr.milestone.title, state: pr.milestone.state.toLowerCase() }
         : null,
+      // The sidebar's Development section (#252): issues this PR closes when merged.
+      closingIssues: await closingIssuesOf(pr.id),
       createdAt: pr.createdAt.toISOString(),
       updatedAt: pr.updatedAt.toISOString(),
       // Emoji reactions on the PR body (#90): grouped counts + viewer state.
@@ -388,6 +394,39 @@ export async function pullRoutes(app: FastifyInstance) {
     // gates, so clearing it can be the last thing standing between an armed PR
     // and its merge. Best-effort, like the review-submit / CI-completion hooks.
     void maybeAutoMergePr(pr.id, request.log).catch((err) => request.log.error({ err }, "auto-merge after ready for review"));
+
+    return { id: updated.id, number: updated.number, state: updated.state.toLowerCase(), isDraft: updated.isDraft };
+  });
+
+  // POST /repos/:handle/:name/pulls/:number/draft — back to draft (#252), the
+  // reverse of /ready: the author or an admin, on an open pull request.
+  app.post("/repos/:handle/:name/pulls/:number/draft", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    if (pr.authorId !== userId && !canAdmin(repo, userId))
+      return reply.status(403).send({ error: "Only the author or a repository admin can convert this PR to a draft" });
+    if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    if (pr.isDraft) return reply.status(409).send({ error: "Pull request is already a draft" });
+
+    // A draft can't merge, so an armed auto-merge would only wait; disarm it, as closing does.
+    const updated = await prisma.pullRequest.update({
+      where: { id: pr.id },
+      data: { isDraft: true, autoMergeMethod: null, autoMergeById: null },
+    });
+
+    await recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind: "converted_to_draft", actorId: userId })
+      .catch((err) => request.log.error({ err }, "recordEvent converted_to_draft"));
+    void emitRepoEvent({
+      repoId: repo.id, event: "pull_request", action: "converted_to_draft", senderId: userId,
+      subject: { number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, state: "open", isDraft: true },
+    });
 
     return { id: updated.id, number: updated.number, state: updated.state.toLowerCase(), isDraft: updated.isDraft };
   });
@@ -1000,11 +1039,37 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
-    const { state, milestoneId } = request.body as { state?: string; milestoneId?: string | null };
+    const { state, milestoneId, title, description, assigneeId } = request.body as {
+      state?: string;
+      milestoneId?: string | null;
+      title?: string;
+      description?: string | null;
+      assigneeId?: string | null;
+    };
 
     // At least one recognized field is required.
-    if (state === undefined && milestoneId === undefined) {
+    if ([state, milestoneId, title, description, assigneeId].every((v) => v === undefined)) {
       return reply.status(400).send({ error: "state must be 'open' or 'closed'" });
+    }
+
+    // ── Title and description (#252): the author or a writer, as on an issue ───────
+    if (title !== undefined || description !== undefined) {
+      if (pr.authorId !== userId && !canWrite(repo, userId))
+        return reply.status(403).send({ error: "Only the author or a writer can edit this pull request" });
+      if (title !== undefined && !title.trim()) return reply.status(400).send({ error: "title must not be empty" });
+    }
+
+    // ── Assignee (#252): writer-gated like the milestone; must be able to read the repo ─
+    let nextAssigneeId: string | null | undefined;
+    if (assigneeId !== undefined) {
+      if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access is required to assign" });
+      if (assigneeId) {
+        const user = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true } });
+        if (!user || !canRead(repo, user.id)) return reply.status(404).send({ error: "Assignee not found" });
+        nextAssigneeId = user.id;
+      } else {
+        nextAssigneeId = null;
+      }
     }
 
     // ── State change: the author or an admin ──────────────────────────────────────
@@ -1045,9 +1110,33 @@ export async function pullRoutes(app: FastifyInstance) {
         // resurrect a stale intent and merge behind everyone's back.
         ...(state === "closed" ? { autoMergeMethod: null, autoMergeById: null } : {}),
         ...(nextMilestoneId !== undefined ? { milestoneId: nextMilestoneId } : {}),
+        ...(title !== undefined ? { title: title.trim() } : {}),
+        ...(description !== undefined ? { description: description?.trim() || null } : {}),
+        ...(nextAssigneeId !== undefined ? { assigneeId: nextAssigneeId } : {}),
       },
-      include: { milestone: { select: { id: true, number: true, title: true, state: true } } },
+      include: { milestone: { select: { id: true, number: true, title: true, state: true } }, ...assigneeAndLabels },
     });
+
+    const emit = (kind: Parameters<typeof recordEvent>[0]["kind"], data?: Record<string, unknown>) =>
+      recordEvent({ repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number, kind, actorId: userId, data })
+        .catch((err) => request.log.error({ err }, `recordEvent ${kind} (pull)`));
+    if (title !== undefined && updated.title !== pr.title) await emit("title_changed", { from: pr.title, to: updated.title });
+    if (nextAssigneeId !== undefined && updated.assigneeId !== pr.assigneeId) {
+      if (updated.assignee) {
+        await emit("assigned", { assignee: updated.assignee.handle });
+      } else if (pr.assigneeId) {
+        const prev = await prisma.user.findUnique({ where: { id: pr.assigneeId }, select: { handle: true } });
+        await emit("unassigned", { assignee: prev?.handle });
+      }
+    }
+    if (description !== undefined && updated.description !== pr.description) {
+      await syncBodyReferences({
+        repo, actorId: userId,
+        source: { type: "PULL_REQUEST", id: pr.id },
+        container: { subjectType: "PULL_REQUEST", id: pr.id, number: pr.number, title: updated.title },
+        body: updated.description,
+      }).catch((err) => request.log.error({ err }, "syncBodyReferences (pull edit)"));
+    }
 
     if (state !== undefined && updated.state !== pr.state) {
       await recordEvent({
@@ -1079,10 +1168,99 @@ export async function pullRoutes(app: FastifyInstance) {
     return {
       id: updated.id,
       number: updated.number,
+      title: updated.title,
+      description: updated.description,
       state: updated.state.toLowerCase(),
+      ...formatAssigneeAndLabels(updated),
       milestone: updated.milestone
         ? { id: updated.milestone.id, number: updated.milestone.number, title: updated.milestone.title, state: updated.milestone.state.toLowerCase() }
         : null,
     };
   });
+
+  // ── Labels (#252): the issue's endpoints, for pull requests ────────────────────
+
+  // POST /repos/:handle/:name/pulls/:number/labels  { labelId }
+  app.post("/repos/:handle/:name/pulls/:number/labels", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const { labelId } = request.body as { labelId?: string };
+    if (!labelId) return reply.status(400).send({ error: "labelId is required" });
+    const label = await prisma.label.findFirst({ where: { id: labelId, repoId: repo.id } });
+    if (!label) return reply.status(404).send({ error: "Label not found" });
+
+    const applied = await prisma.pullRequestLabel.findFirst({ where: { pullRequestId: pr.id, labelId: label.id } });
+    if (!applied) {
+      await prisma.pullRequestLabel.create({ data: { pullRequestId: pr.id, labelId: label.id } });
+      await recordEvent({
+        repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+        kind: "labeled", actorId: userId, data: { label: { name: label.name, color: label.color } },
+      }).catch((err) => request.log.error({ err }, "recordEvent labeled (pull)"));
+    }
+    return reply.status(201).send({ pullRequestId: pr.id, labelId: label.id });
+  });
+
+  // DELETE /repos/:handle/:name/pulls/:number/labels/:labelId
+  app.delete("/repos/:handle/:name/pulls/:number/labels/:labelId", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number, labelId } = request.params as { handle: string; name: string; number: string; labelId: string };
+    const userId = request.user.sub;
+
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+
+    const applied = await prisma.pullRequestLabel.findFirst({ where: { pullRequestId: pr.id, labelId } });
+    if (!applied) return reply.status(404).send({ error: "Label not applied to this pull request" });
+    const label = await prisma.label.findFirst({ where: { id: labelId, repoId: repo.id } });
+    await prisma.pullRequestLabel.delete({ where: { pullRequestId_labelId: { pullRequestId: pr.id, labelId } } });
+
+    await recordEvent({
+      repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+      kind: "unlabeled", actorId: userId, data: { label: label ? { name: label.name, color: label.color } : undefined },
+    }).catch((err) => request.log.error({ err }, "recordEvent unlabeled (pull)"));
+    return reply.status(204).send();
+  });
+}
+
+/** The relations `formatAssigneeAndLabels` reads, for a pull request query's `include`. */
+const assigneeAndLabels = {
+  assignee: { select: { handle: true } },
+  labels: { include: { label: { select: { id: true, name: true, color: true } } } },
+} as const;
+
+/** A pull request's assignee and labels, shaped as an issue's are. */
+function formatAssigneeAndLabels(pr: {
+  assignee?: { handle: string } | null;
+  labels?: Array<{ label: { id: string; name: string; color: string } }>;
+}) {
+  return {
+    assignee: pr.assignee?.handle ?? null,
+    labels: (pr.labels ?? []).map((l) => ({ id: l.label.id, name: l.label.name, color: l.label.color })),
+  };
+}
+
+/** The issues a pull request closes when it merges: its closing references (`fixes #N`). */
+async function closingIssuesOf(prId: string) {
+  const refs = await prisma.crossReference.findMany({
+    where: { sourceType: "PULL_REQUEST", sourceId: prId, isClosingRef: true, targetType: "ISSUE" },
+    select: { targetId: true },
+  });
+  if (refs.length === 0) return [];
+  const issues = await prisma.issue.findMany({
+    where: { id: { in: refs.map((r) => r.targetId) } },
+    select: { number: true, title: true, state: true },
+    orderBy: { number: "asc" },
+  });
+  return issues.map((i) => ({ number: i.number, title: i.title, state: i.state.toLowerCase() }));
 }

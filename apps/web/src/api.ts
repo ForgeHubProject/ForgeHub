@@ -664,6 +664,38 @@ export async function markPullReady(
   });
 }
 
+/** Back to draft (#252): the reverse of markPullReady. Author-or-admin, open PRs only. */
+export async function convertPullToDraft(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+): Promise<{ id: string; number: number; state: string; isDraft: boolean }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/draft`, { method: "POST", token });
+}
+
+/**
+ * Edit a pull request's title, description, assignee or milestone (#252). The
+ * answer carries the edited fields; merge them into the loaded copy.
+ */
+export async function updatePull(
+  token: string,
+  handle: string,
+  repoName: string,
+  number: number,
+  patch: { title?: string; description?: string | null; assigneeId?: string | null; milestoneId?: string | null },
+): Promise<Pick<PullRequest, "title" | "description" | "assignee" | "labels" | "milestone">> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+export async function addPullLabel(token: string, handle: string, repoName: string, number: number, labelId: string): Promise<void> {
+  await req(`/repos/${handle}/${repoName}/pulls/${number}/labels`, { method: "POST", token, body: JSON.stringify({ labelId }) });
+}
+
+export async function removePullLabel(token: string, handle: string, repoName: string, number: number, labelId: string): Promise<void> {
+  await req(`/repos/${handle}/${repoName}/pulls/${number}/labels/${labelId}`, { method: "DELETE", token });
+}
+
 /**
  * Request (or re-request) reviews from repo members (issue #82). Re-requesting
  * someone who already reviewed flips them back to "requested" and re-notifies.

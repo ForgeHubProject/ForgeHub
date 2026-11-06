@@ -40,6 +40,7 @@ model User {
   pullRequests   PullRequest[]
   authoredIssues   Issue[]                    @relation("IssueAuthor")
   assignedIssues   Issue[]                    @relation("IssueAssignee")
+  assignedPulls    PullRequest[]              @relation("PullRequestAssignee")
   issueComments    IssueComment[]             @relation("IssueCommentAuthor")
   prComments       PullRequestComment[]       @relation("PRCommentAuthor")
   prReviews        PullRequestReview[]        @relation("PRReviewAuthor")
@@ -293,12 +294,17 @@ model PullRequest {
   // Milestone association (issue #83). Nullable; SetNull on milestone delete so
   // removing a milestone never deletes the PR. Writer-gated via the PATCH route.
   milestoneId String?
+  // Assignee and labels (issue #252), as an issue has them: one assignee, labels
+  // from the repo's set. SetNull so deleting the user never deletes the PR.
+  assigneeId  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   repo             Repo                         @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author           User                         @relation(fields: [authorId], references: [id])
+  assignee         User?                        @relation("PullRequestAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   milestone        Milestone?                   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  labels           PullRequestLabel[]
   comments         PullRequestComment[]
   reviews          PullRequestReview[]
   reviewComments   PullRequestReviewComment[]
@@ -452,10 +458,21 @@ model Label {
   description String?
   createdAt   DateTime    @default(now())
 
-  repo   Repo        @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  issues IssueLabel[]
+  repo         Repo               @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  issues       IssueLabel[]
+  pullRequests PullRequestLabel[]
 
   @@unique([repoId, name])
+}
+
+model PullRequestLabel {
+  pullRequestId String
+  labelId       String
+
+  pullRequest PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  label       Label       @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([pullRequestId, labelId])
 }
 
 model Issue {
