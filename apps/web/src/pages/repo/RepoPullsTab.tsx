@@ -1,10 +1,10 @@
 import type { BranchInfo, User } from "../../types";
 import { PullCreate } from "./pulls/PullCreate";
-import { PullDetail } from "./pulls/PullDetail";
+import { PullDetail, type TabKey } from "./pulls/PullDetail";
 import { PullsList } from "./pulls/PullsList";
 
-/** `pulls/:number`, or `pulls/:number/files` for its Files changed tab. */
-export const PULL_DETAIL = /^pulls\/(\d+)(\/files)?$/;
+/** `pulls/:number`, or with `/commits`, `/checks` or `/files` for those tabs (#252). */
+export const PULL_DETAIL = /^pulls\/(\d+)(?:\/(commits|checks|files))?$/;
 
 type Props = {
   token: string;
@@ -21,8 +21,8 @@ type Props = {
  * Router for the repository's pull-requests experience:
  *   pulls            → list (filter by state, open a new PR)
  *   pulls/new        → compose (compare branches, title/description)
- *   pulls/:number    → detail (conversation, commits, merge box)
- *   pulls/:number/files → the same, on its Files changed tab
+ *   pulls/:number    → detail, on its Conversation tab
+ *   pulls/:number/commits|checks|files → the same, on that tab
  *
  * Presentational pieces live in ./pulls/*. This tab restyles the chrome only —
  * the file-diff viewer registry (semantic FHR diffs) and the merge / merge-
@@ -38,7 +38,7 @@ export function RepoPullsTab({ token, handle, repoName, user, branches, defaultB
         handle={handle}
         repoName={repoName}
         number={Number(match[1])}
-        tab={match[2] ? "files" : "commits"}
+        tab={(match[2] as TabKey | undefined) ?? "conversation"}
         user={user}
       />
     );
