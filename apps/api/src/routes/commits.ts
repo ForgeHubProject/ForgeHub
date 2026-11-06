@@ -22,7 +22,8 @@ export async function commitRoutes(app: FastifyInstance) {
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
     if (!repo.storageKey) return reply.send({ commits: [], branch: "main", path: null, page: 1, perPage: 20 });
 
-    const { branch: branchQ, ref: refQ, path: pathQ, page: pageQ, per_page: perPageQ } = request.query as Record<string, string | undefined>;
+    const { branch: branchQ, ref: refQ, path: pathQ, page: pageQ, per_page: perPageQ, author, since, until } =
+      request.query as Record<string, string | undefined>;
     const ref = branchQ ?? refQ ?? await defaultBranch(repo.storageKey);
     const page = Math.max(1, parseInt(pageQ ?? "1", 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(perPageQ ?? "20", 10) || 20));
@@ -31,7 +32,8 @@ export async function commitRoutes(app: FastifyInstance) {
     // same thing on every route here. An absent or empty `?path=` is no filter.
     const path = pathQ || undefined;
 
-    const commits = await listCommits(repo.storageKey, ref, { page, perPage, path });
+    // Filters (#256): `?author=` (name or email) and `?since=` / `?until=` (YYYY-MM-DD).
+    const commits = await listCommits(repo.storageKey, ref, { page, perPage, path, author, since, until });
     return { commits, branch: ref, path: path ?? null, page, perPage };
   });
 

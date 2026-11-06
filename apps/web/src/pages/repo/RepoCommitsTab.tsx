@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { getCommit, getCommitDiff, getCommitStatuses, listCommits } from "../../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { getCommit, getCommitDiff, getCommitStatuses, getContributors, listCommits } from "../../api";
 import type { CheckSummary, CommitDetail, CommitInfo, FileDiff } from "../../types";
 import { CheckStatusIcon, checkState } from "./ci/ciShared";
 import { PRFileTree } from "./pulls/PRFileTree";
@@ -496,7 +496,11 @@ function CommitRow({ commit, base, status }: { commit: CommitInfo; base: string;
 function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & { base: string }) {
   // A file's or folder's history is this list with `?path=` (#224).
   const [search] = useSearchParams();
-  const { ref, path, page } = commitListQuery(search, defaultBranch);
+  const navigate = useNavigate();
+  const query = commitListQuery(search, defaultBranch);
+  const { ref, path, page, author, since, until } = query;
+  const filtered = !!(author || since || until);
+  const [authors, setAuthors] = useState<string[]>([]);
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [statuses, setStatuses] = useState<Record<string, CheckSummary>>({});
   const [loading, setLoading] = useState(true);
@@ -506,7 +510,7 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
     setLoading(true);
     setError(null);
     setStatuses({});
-    listCommits(token, handle, repoName, ref, { path: path ?? undefined, page, perPage: COMMITS_PER_PAGE })
+    listCommits(token, handle, repoName, ref, { path: path ?? undefined, page, perPage: COMMITS_PER_PAGE, author, since, until })
       .then((d) => {
         setCommits(d.commits);
         // Batch-fetch CI status for the visible shas (best-effort; empty when no CI).
@@ -516,7 +520,57 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
-  }, [token, handle, repoName, ref, path, page]);
+  }, [token, handle, repoName, ref, path, page, author, since, until]);
+
+  // The author filter's choices: who has committed on this ref (#256).
+  useEffect(() => {
+    getContributors(token, handle, repoName, ref)
+      .then((d) => setAuthors(d.contributors.map((c) => c.name)))
+      .catch(() => setAuthors([]));
+  }, [token, handle, repoName, ref]);
+
+  /** GitHub's filter bar: an author and a date range, kept in the URL. */
+  const filterBar = (
+    <div className="mb-4 flex flex-wrap items-center gap-2 text-fh-sm">
+      <select
+        aria-label="Filter by author"
+        value={author ?? ""}
+        onChange={(e) => navigate(commitListUrl(base, { ...query, author: e.target.value || undefined, page: 1 }, defaultBranch))}
+        className="h-8 rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg"
+      >
+        <option value="">All users</option>
+        {[...new Set([...(author ? [author] : []), ...authors])].map((a) => <option key={a} value={a}>{a}</option>)}
+      </select>
+      <label className="inline-flex items-center gap-1.5 text-fh-fg-muted">
+        Since
+        <input
+          type="date"
+          aria-label="Since"
+          value={since ?? ""}
+          onChange={(e) => navigate(commitListUrl(base, { ...query, since: e.target.value || undefined, page: 1 }, defaultBranch))}
+          className="h-8 rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg"
+        />
+      </label>
+      <label className="inline-flex items-center gap-1.5 text-fh-fg-muted">
+        Until
+        <input
+          type="date"
+          aria-label="Until"
+          value={until ?? ""}
+          onChange={(e) => navigate(commitListUrl(base, { ...query, until: e.target.value || undefined, page: 1 }, defaultBranch))}
+          className="h-8 rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg"
+        />
+      </label>
+      {filtered && (
+        <Link
+          to={commitListUrl(base, { ref, path, page: 1 }, defaultBranch)}
+          className="text-fh-xs text-fh-accent-fg no-underline hover:underline"
+        >
+          Clear filters
+        </Link>
+      )}
+    </div>
+  );
 
   if (loading) {
     return (
@@ -556,12 +610,15 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
 
   if (commits.length === 0) {
     return (
-      <div className="rounded-md border border-fh-border bg-fh-surface">
-        <EmptyState
-          icon={<CommitNodeIcon size={28} />}
-          title={page > 1 ? "No older commits" : path ? `No commits change ${path}` : "No commits yet"}
-          description={page > 1 || path ? `On ${ref}.` : "Push your first commit to see the history here."}
-        />
+      <div>
+        {filterBar}
+        <div className="rounded-md border border-fh-border bg-fh-surface">
+          <EmptyState
+            icon={<CommitNodeIcon size={28} />}
+            title={filtered ? "No commits match these filters" : page > 1 ? "No older commits" : path ? `No commits change ${path}` : "No commits yet"}
+            description={filtered || page > 1 || path ? `On ${ref}.` : "Push your first commit to see the history here."}
+          />
+        </div>
       </div>
     );
   }
@@ -594,6 +651,8 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
         )}
       </div>
 
+      {filterBar}
+
       <ol className="relative space-y-6 before:absolute before:bottom-3 before:left-[9px] before:top-3 before:w-px before:bg-fh-border">
         {groups.map(({ date, commits: dayCommits }) => (
           <li key={date}>
@@ -616,14 +675,14 @@ function CommitsList({ token, handle, repoName, defaultBranch, base }: Props & {
       {(page > 1 || commits.length === COMMITS_PER_PAGE) && (
         <nav aria-label="Commit pages" className="mt-6 flex justify-center gap-2">
           {page > 1 ? (
-            <Link to={commitListUrl(base, { ref, path, page: page - 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
+            <Link to={commitListUrl(base, { ...query, page: page - 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
               Newer
             </Link>
           ) : (
             <span className="rounded-md border border-fh-border px-3 py-1.5 text-fh-sm text-fh-fg-subtle">Newer</span>
           )}
           {commits.length === COMMITS_PER_PAGE ? (
-            <Link to={commitListUrl(base, { ref, path, page: page + 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
+            <Link to={commitListUrl(base, { ...query, page: page + 1 }, defaultBranch)} className="rounded-md border border-fh-border bg-fh-surface px-3 py-1.5 text-fh-sm font-medium text-fh-accent-fg no-underline hover:bg-fh-surface-muted">
               Older
             </Link>
           ) : (
