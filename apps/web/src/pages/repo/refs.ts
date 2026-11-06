@@ -17,7 +17,7 @@ export function refLabel(ref: string): string {
  * named like a hash is matched as the branch. Anything else is null.
  */
 export function refFromSplat(splat: string, branches: BranchInfo[]): string | null {
-  const mode = /^(tree|blob)\//.exec(splat);
+  const mode = /^(tree|blob|edit|new|upload|delete)\//.exec(splat);
   if (!mode) return null;
   const rest = splat.slice(mode[0].length);
   const sorted = [...branches].sort((a, b) => b.name.length - a.name.length);
@@ -39,4 +39,23 @@ export function blobFromSplat(splat: string, branches: BranchInfo[]): { ref: str
   const ref = refFromSplat(splat, branches) ?? rest.split("/")[0] ?? "";
   const path = rest.slice(ref.length + 1);
   return ref && path ? { ref, path } : null;
+}
+
+/** The web-editing pages (#254): edit or delete a file, add one, or upload to a folder. */
+export type EditMode = "edit" | "new" | "upload" | "delete";
+
+/**
+ * `edit/<branch>/<file>`, `delete/<branch>/<file>`, `new/<branch>[/<folder>]`,
+ * `upload/<branch>[/<folder>]`: the mode, the branch, and the file or folder.
+ * Only a branch can be edited, so the ref must be one of `branches`.
+ */
+export function editRouteFromSplat(splat: string, branches: BranchInfo[]): { mode: EditMode; ref: string; path: string } | null {
+  const m = /^(edit|new|upload|delete)\//.exec(splat);
+  if (!m) return null;
+  const ref = refFromSplat(splat, branches);
+  if (!ref || !branches.some((b) => b.name === ref)) return null;
+  const path = splat.slice(m[0].length + ref.length + 1);
+  const mode = m[1] as EditMode;
+  if ((mode === "edit" || mode === "delete") && !path) return null;
+  return { mode, ref, path };
 }
