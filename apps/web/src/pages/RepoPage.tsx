@@ -21,7 +21,7 @@ import { PULL_DETAIL, RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
 import { RepoProjectsTab } from "./repo/projects/RepoProjectsTab";
 import { RepoSettingsTab } from "./repo/RepoSettingsTab";
-import { RepoPermissionProvider, repoPermission } from "./repo/permission";
+import { RepoArchivedProvider, RepoPermissionProvider, repoPermission } from "./repo/permission";
 
 type Props = {
   token: string;
@@ -193,11 +193,14 @@ export function RepoPage({ token, user, onLogout }: Props) {
     setLoading(true);
     setNotFound(false);
     setError(null);
-    Promise.all([
-      getRepo(token, h, r),
-      listBranches(token, h, r),
-    ])
-      .then(([repoData, branchData]) => {
+    getRepo(token, h, r)
+      .then(async (repoData) => {
+        // A renamed repository answers at its old name (#256): move to the current one.
+        if (repoData.fullName && repoData.fullName.toLowerCase() !== `${h}/${r}`.toLowerCase()) {
+          navigate(`/${repoData.fullName}${splat ? `/${splat}` : ""}${location.search}${location.hash}`, { replace: true });
+          return;
+        }
+        const branchData = await listBranches(token, h, r);
         setRepo(repoData);
         setBranches(branchData.branches);
         setDefaultBranch(branchData.defaultBranch);
@@ -361,7 +364,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
   // Settings and the other admin controls follow the server's answer (#217) — a
   // personal repo's owner, or an org repo's org owners — never "the URL handle
   // is mine", which an org repo's handle never is.
-  const { canAdmin, canWrite } = repoPermission(repo.viewerPermission);
+  const { canAdmin, canWrite: mayWrite } = repoPermission(repo.viewerPermission);
+  // Archived (#256): read-only for everyone until unarchived.
+  const canWrite = mayWrite && !repo.archived;
 
   return (
     <div className="min-h-screen flex flex-col bg-fh-canvas">
@@ -554,7 +559,16 @@ export function RepoPage({ token, user, onLogout }: Props) {
       )}
 
       {/* Tab content: every tab asks the server's verdict on what the viewer may do (#218). */}
+      {repo.archived && (
+        <div className={`w-full ${column} mx-auto pt-4`}>
+          <div className="flex items-center gap-2 rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-4 py-3 text-fh-sm text-fh-fg">
+            <span aria-hidden className="font-bold text-fh-warning-fg">!</span>
+            This repository was archived{repo.archivedAt ? <> on {new Date(repo.archivedAt).toLocaleDateString(undefined, { dateStyle: "medium" })}</> : null}. It is now read-only.
+          </div>
+        </div>
+      )}
       <RepoPermissionProvider value={repo.viewerPermission ?? null}>
+      <RepoArchivedProvider value={!!repo.archived}>
       <div className={`flex-1 w-full ${column} mx-auto py-6`}>
         {activeTab === "code" && splat.startsWith("forks") && (
           <RepoForksTab token={token} handle={h} repoName={r} />
@@ -647,6 +661,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
           <RepoSettingsTab token={token} handle={h} repoName={r} canAdmin={canAdmin} />
         )}
       </div>
+      </RepoArchivedProvider>
       </RepoPermissionProvider>
 
       <Footer />

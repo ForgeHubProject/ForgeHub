@@ -6,7 +6,7 @@ import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
-import { canRead, canWrite, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
+import { canRead, canWrite, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
 
 /**
  * The authenticated actor plus the scopes their credential carries. Session/JWT
@@ -162,10 +162,7 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const repo = await prisma.repo.findFirst({
-      where: repoByOwningHandleWhere(handleRaw, repoName),
-      include: repoAccessInclude,
-    });
+    const repo = await findRepoForGit(handleRaw, repoName);
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
@@ -209,10 +206,7 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const repo = await prisma.repo.findFirst({
-      where: repoByOwningHandleWhere(handleRaw, repoName),
-      include: repoAccessInclude,
-    });
+    const repo = await findRepoForGit(handleRaw, repoName);
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
@@ -234,10 +228,7 @@ export async function gitHttpRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Repository not found" });
     }
 
-    const repo = await prisma.repo.findFirst({
-      where: repoByOwningHandleWhere(handleRaw, repoName),
-      include: repoAccessInclude,
-    });
+    const repo = await findRepoForGit(handleRaw, repoName);
     if (!repo || !repo.storageKey) {
       return reply.status(404).send({ error: "Repository not found" });
     }
@@ -278,4 +269,12 @@ export async function gitHttpRoutes(app: FastifyInstance) {
 
     return reply;
   });
+}
+
+/** The repository a git URL names, following a rename's redirect (#256) so old clones keep working. */
+async function findRepoForGit(handle: string, name: string) {
+  const repo = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(handle, name), include: repoAccessInclude });
+  if (repo) return repo;
+  const id = await redirectedRepoId(handle, name);
+  return id ? prisma.repo.findFirst({ where: { id }, include: repoAccessInclude }) : null;
 }

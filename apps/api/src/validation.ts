@@ -90,6 +90,10 @@ export const updateRepoBodySchema = z.object({
   // since either field may arrive alone).
   allowedMergeMethods: z.array(mergeMethodSchema).nonempty().optional(),
   defaultMergeMethod: mergeMethodSchema.optional(),
+  // Repository settings (#256).
+  defaultBranch: z.string().min(1).max(255).regex(/^[\w/._-]+$/).optional(),
+  archived: z.boolean().optional(),
+  deleteBranchOnMerge: z.boolean().optional(),
 });
 
 export const renameRepoBodySchema = z.object({
