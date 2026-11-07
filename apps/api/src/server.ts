@@ -47,6 +47,7 @@ import { repoPathsRoutes } from "./routes/repo-paths.js";
 import { blobMetaRoutes } from "./routes/blob-meta.js";
 import { contentRoutes } from "./routes/contents.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { peopleRoutes } from "./routes/people.js";
 import { registerArchivedGuard } from "./archived-guard.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
@@ -207,6 +208,7 @@ export async function buildServer() {
   await app.register(blobMetaRoutes);
   await app.register(contentRoutes);
   await app.register(dashboardRoutes);
+  await app.register(peopleRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
   await app.register(userKeyRoutes);

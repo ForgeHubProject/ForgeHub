@@ -25,7 +25,44 @@ type DbUser = {
   id: string; email: string; handle: string; displayName: string | null;
   bio: string | null; location: string | null; website: string | null; createdAt: Date;
   emailNotifications: boolean; avatarKey: string | null;
+  // Profile (#257); optional so narrower rows and mocks still format.
+  pronouns?: string | null; company?: string | null; socialLinks?: string | null;
+  statusEmoji?: string | null; statusText?: string | null; statusExpiresAt?: Date | null;
 };
+
+/** The profile fields #257 added, as the API shows them; an expired status reads as none. */
+function profileExtras(u: DbUser) {
+  const live = !u.statusExpiresAt || u.statusExpiresAt > new Date();
+  return {
+    pronouns: u.pronouns ?? null,
+    company: u.company ?? null,
+    socialLinks: parseLinks(u.socialLinks),
+    status: live && (u.statusEmoji || u.statusText)
+      ? { emoji: u.statusEmoji ?? null, text: u.statusText ?? null, expiresAt: u.statusExpiresAt?.toISOString() ?? null }
+      : null,
+  };
+}
+
+function parseLinks(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A social link: an http(s) URL, at most 200 characters. */
+function isLink(s: unknown): s is string {
+  if (typeof s !== "string" || s.length > 200) return false;
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 function publicUser(u: DbUser) {
   return {
@@ -38,6 +75,7 @@ function publicUser(u: DbUser) {
     website: u.website,
     emailNotifications: u.emailNotifications,
     avatarKey: u.avatarKey,
+    ...profileExtras(u),
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -51,6 +89,7 @@ function publicProfile(u: DbUser) {
     location: u.location,
     website: u.website,
     avatarKey: u.avatarKey,
+    ...profileExtras(u),
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -106,16 +145,44 @@ export async function authRoutes(app: FastifyInstance) {
     const { handle } = request.params as { handle: string };
     const user = await prisma.user.findUnique({ where: { handle: handle.toLowerCase() } });
     if (!user) return reply.status(404).send({ error: "User not found" });
-    return publicProfile(user);
+    // Following (#257): the counts, and whether the viewer follows them.
+    const viewer = (request as { user?: { sub: string } }).user?.sub;
+    const [followers, following, viewerFollows] = await Promise.all([
+      prisma.follow.count({ where: { followingId: user.id } }),
+      prisma.follow.count({ where: { followerId: user.id } }),
+      viewer && viewer !== user.id
+        ? prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer, followingId: user.id } } }).then(Boolean)
+        : Promise.resolve(false),
+    ]);
+    return { ...publicProfile(user), followers, following, viewerFollows };
   });
 
   // Update own profile
   app.patch("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { displayName, bio, location, website, emailNotifications } = request.body as {
+    const { displayName, bio, location, website, emailNotifications, pronouns, company, socialLinks, status } = request.body as {
       displayName?: string; bio?: string; location?: string; website?: string; emailNotifications?: boolean;
+      pronouns?: string; company?: string; socialLinks?: unknown;
+      status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
     };
 
-    const data: Record<string, string | boolean | null> = {};
+    const data: Record<string, string | boolean | Date | null> = {};
+    // Profile (#257).
+    if (pronouns !== undefined) data.pronouns = String(pronouns).trim().slice(0, 30) || null;
+    if (company !== undefined) data.company = String(company).trim().slice(0, 100) || null;
+    if (socialLinks !== undefined) {
+      const links = Array.isArray(socialLinks) ? socialLinks.map((l) => (typeof l === "string" ? l.trim() : l)).filter((l) => l !== "") : null;
+      if (!links || links.length > 4 || !links.every(isLink)) {
+        return reply.status(400).send({ error: "socialLinks must be up to four http(s) URLs" });
+      }
+      data.socialLinks = links.length ? JSON.stringify(links) : null;
+    }
+    if (status !== undefined) {
+      const expires = status?.expiresAt ? new Date(status.expiresAt) : null;
+      if (expires && Number.isNaN(expires.getTime())) return reply.status(400).send({ error: "Invalid status expiry" });
+      data.statusEmoji = status?.emoji?.trim().slice(0, 16) || null;
+      data.statusText = status?.text?.trim().slice(0, 80) || null;
+      data.statusExpiresAt = data.statusEmoji || data.statusText ? expires : null;
+    }
     if (displayName !== undefined) data.displayName = displayName.trim() || null;
     if (bio !== undefined) data.bio = bio.trim() || null;
     if (location !== undefined) data.location = location.trim() || null;
