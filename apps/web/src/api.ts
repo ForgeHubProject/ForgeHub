@@ -905,8 +905,11 @@ export async function listPRFiles(
   handle: string,
   repoName: string,
   number: number,
+  /** One of the PR's commits on its own (#252). */
+  commit?: string | null,
 ): Promise<{ files: PRFileEntry[]; mergeBaseSha?: string | null; headSha?: string | null }> {
-  return req(`/repos/${handle}/${repoName}/pulls/${number}/files`, { token: token ?? undefined });
+  const q = commit ? `?commit=${encodeURIComponent(commit)}` : "";
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/files${q}`, { token: token ?? undefined });
 }
 
 export async function getPRFileDiff(
@@ -915,8 +918,13 @@ export async function getPRFileDiff(
   repoName: string,
   number: number,
   filePath: string,
+  /** Files changed toolbar (#252): one of the PR's commits, and hide whitespace. */
+  opts: { commit?: string | null; hideWhitespace?: boolean } = {},
 ): Promise<{ files: FileDiff[] }> {
-  return req(`/repos/${handle}/${repoName}/pulls/${number}/diff?path=${encodeURIComponent(filePath)}`, { token: token ?? undefined });
+  const qs = new URLSearchParams({ path: filePath });
+  if (opts.commit) qs.set("commit", opts.commit);
+  if (opts.hideWhitespace) qs.set("w", "1");
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/diff?${qs}`, { token: token ?? undefined });
 }
 
 export async function closePull(
