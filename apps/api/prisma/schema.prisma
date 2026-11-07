@@ -143,6 +143,14 @@ model Repo {
   // written with their own numbers, start the sequence above what exists.
   lastNumber Int @default(0)
 
+  // ─── Repository settings (issue #256) ─────────────────────────────────────────
+  // Archived: read-only for everyone until an admin unarchives it (canWrite says
+  // no; settings stay reachable through canAdmin). deleteBranchOnMerge: GitHub's
+  // "Automatically delete head branches" after a pull request merges.
+  archivedAt          DateTime?
+  deleteBranchOnMerge Boolean   @default(false)
+  redirects           RepoRedirect[]
+
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
   // deleting an upstream orphans its forks rather than cascade-deleting them.
@@ -463,6 +471,20 @@ model Label {
   pullRequests PullRequestLabel[]
 
   @@unique([repoId, name])
+}
+
+// A name a repository used to have (renamed, #256): `ownerHandle/name` keeps
+// leading to it, for the web and for git, until another repo takes the name.
+model RepoRedirect {
+  id          String   @id @default(cuid())
+  ownerHandle String
+  name        String
+  repoId      String
+  createdAt   DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerHandle, name])
 }
 
 model PullRequestLabel {

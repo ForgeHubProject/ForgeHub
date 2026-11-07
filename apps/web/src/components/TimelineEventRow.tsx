@@ -172,6 +172,11 @@ function renderEvent(event: TimelineEvent, repo: RepoRef): RenderResult | null {
     // Draft PRs + requested reviewers (#82)
     case "ready_for_review":
       return { icon: <PullRequestMark />, tone: "text-fh-success-fg", body: <>marked this pull request as ready for review</> };
+    case "head_ref_deleted":
+      return {
+        icon: <PullRequestMark />, tone: "text-fh-fg-subtle",
+        body: <>deleted the <span className="font-mono text-fh-xs">{str(d.branch) ?? "head"}</span> branch</>,
+      };
     case "converted_to_draft":
       return { icon: <PullRequestMark />, tone: "text-fh-fg-subtle", body: <>marked this pull request as draft</> };
     case "review_requested": {

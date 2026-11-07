@@ -67,6 +67,11 @@ export async function defaultBranch(storageKey: string): Promise<string> {
   }
 }
 
+/** Make `branch` the repository's default (#256): HEAD names it. */
+export async function setDefaultBranch(storageKey: string, branch: string): Promise<void> {
+  await git(storageKey, ["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+}
+
 export async function branchExists(storageKey: string, branch: string): Promise<boolean> {
   try {
     await git(storageKey, ["rev-parse", "--verify", `refs/heads/${branch}`]);

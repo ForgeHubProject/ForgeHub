@@ -52,6 +52,18 @@ export function repoByOwningHandleWhere(handle: string, name: string): Prisma.Re
  * user (personal repo) or an org (org-owned repo). Returns null when no such repo
  * exists. The payload carries everything `canRead`/`canWrite` need.
  */
+/**
+ * The repository a name it used to have now points at (#256): renamed repos
+ * keep their old `handle/name` for the web and for git. Null when there's none.
+ */
+export async function redirectedRepoId(handle: string, name: string): Promise<string | null> {
+  const redirect = await prisma.repoRedirect.findUnique({
+    where: { ownerHandle_name: { ownerHandle: handle.toLowerCase(), name: name.toLowerCase() } },
+    select: { repoId: true },
+  });
+  return redirect?.repoId ?? null;
+}
+
 export async function resolveRepo(handle: string, name: string) {
   return prisma.repo.findFirst({
     where: repoByOwningHandleWhere(handle, name),
@@ -69,6 +81,8 @@ export async function resolveRepo(handle: string, name: string) {
 export type RepoAccessInput = {
   visibility: "PUBLIC" | "PRIVATE";
   ownerId: string;
+  /** Archived (#256): read-only for everyone; absent on lean selects ⇒ not archived. */
+  archivedAt?: Date | null;
   collaborators: Array<{ userId: string; role: "READER" | "WRITER" }>;
   orgId?: string | null;
   org?: { memberships: Array<{ userId: string; role: string }> } | null;
@@ -115,6 +129,9 @@ export function canRead(repo: RepoAccessInput, userId: string | undefined): bool
  */
 export function canWrite(repo: RepoAccessInput, userId: string | undefined): boolean {
   if (!userId) return false;
+  // An archived repository takes no writes from anyone, admins included, until
+  // it's unarchived (its settings go through canAdmin, which stays as it was).
+  if (repo.archivedAt) return false;
   if (repo.ownerId === userId) return true;
   if (repo.collaborators.some((c) => c.userId === userId && c.role === "WRITER")) return true;
   if (isOrgOwner(repo, userId)) return true;
