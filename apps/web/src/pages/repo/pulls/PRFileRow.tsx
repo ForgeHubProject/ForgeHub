@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getPRFileDiff } from "../../../api";
+import { fetchRawBlob, getPRFileDiff } from "../../../api";
 import type { FileDiff, PRFileEntry } from "../../../types";
 import type { RepoRef } from "../../../lib/autolink";
 import { resolveFileDiffViewer, extensionForFilename } from "../../../views/fileDiffViewerRegistry";
@@ -33,6 +33,7 @@ export function PRFileRow({
   comments,
   review,
   onToggleViewed,
+  options = {},
 }: {
   token: string;
   handle: string;
@@ -48,6 +49,11 @@ export function PRFileRow({
   review: ReviewInteraction;
   /** Set when the viewer is signed in — enables the per-file Viewed tick (issue #119). */
   onToggleViewed?: (path: string, viewed: boolean) => void;
+  /**
+   * The Files changed toolbar (#252): unified or split, hide whitespace, one
+   * commit on its own, and the head commit the hidden lines are read from.
+   */
+  options?: { view?: "unified" | "split"; hideWhitespace?: boolean; commit?: string | null; headSha?: string | null };
 }) {
   const fileComments = comments.filter((c) => c.filePath === file.path);
   const threads = groupThreads(fileComments);
@@ -83,7 +89,10 @@ export function PRFileRow({
     if (loaded || diffLoading) return;
     setDiffLoading(true);
     try {
-      const result = await getPRFileDiff(token, handle, repoName, prNumber, file.path);
+      const result = await getPRFileDiff(token, handle, repoName, prNumber, file.path, {
+        commit: options.commit,
+        hideWhitespace: options.hideWhitespace,
+      });
       setDiff(result.files[0] ?? null);
     } catch {
       setDiff(null);
@@ -91,6 +100,15 @@ export function PRFileRow({
       setDiffLoading(false);
       setLoaded(true);
     }
+  }
+
+  /** The file at the head, as lines, for the diff's hidden-line expanders. */
+  async function headLines(sha: string): Promise<string[] | null> {
+    const blob = await fetchRawBlob(token, handle, repoName, file.path, sha);
+    const text = await blob.text();
+    const lines = text.split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    return lines;
   }
 
   async function toggle() {
@@ -199,6 +217,8 @@ export function PRFileRow({
             threads={threads}
             repo={repoRef}
             review={review}
+            view={options.view}
+            loadFile={options.headSha && file.status !== "deleted" ? () => headLines(options.headSha!) : undefined}
           />
         ) : diff ? (
           <div className="bg-fh-surface">

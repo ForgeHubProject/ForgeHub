@@ -934,8 +934,20 @@ export async function pullRoutes(app: FastifyInstance) {
     // viewer falls back to the head commit's parent, which in a PR of several
     // commits is only the last one's changes (or none, after a merge from main).
     const range = await pullRange(repo.storageKey, pr);
-    const files = range ? await getMergeBaseFileList(repo.storageKey, range.base, range.head) : [];
-    const mergeBaseSha = range?.base ?? null;
+    // `?commit=` (#252): one of the PR's commits on its own, against its parent.
+    const { commit: commitQ } = request.query as { commit?: string };
+    let files: Awaited<ReturnType<typeof getMergeBaseFileList>> = [];
+    let mergeBaseSha = range?.base ?? null;
+    let headSha = range?.head ?? null;
+    if (commitQ && range) {
+      const commit = await prCommit(repo.storageKey, range, commitQ);
+      if (!commit) return reply.status(404).send({ error: "That commit isn't part of this pull request" });
+      files = await getMergeBaseFileList(repo.storageKey, `${commit.sha}^`, commit.sha);
+      mergeBaseSha = commit.parents[0] ?? null;
+      headSha = commit.sha;
+    } else if (range) {
+      files = await getMergeBaseFileList(repo.storageKey, range.base, range.head);
+    }
 
     // Per-user viewed state (issue #119): stamp each entry for the signed-in
     // viewer. Anonymous readers get plain `viewed: false` everywhere.
@@ -951,8 +963,9 @@ export async function pullRoutes(app: FastifyInstance) {
     return {
       files: files.map((f) => ({ ...f, viewed: viewedPaths.has(f.path) })),
       mergeBaseSha,
-      // The head those files are at: the branch while open, the merged commit after.
-      headSha: range?.head ?? null,
+      // The head those files are at: the branch while open, the merged commit
+      // after, or the chosen commit.
+      headSha,
     };
   });
 
@@ -991,9 +1004,11 @@ export async function pullRoutes(app: FastifyInstance) {
   app.get("/repos/:handle/:name/pulls/:number/diff", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = (request as { user?: { sub: string } }).user?.sub;
-    const { path: filePath } = request.query as { path?: string };
+    const { path: filePath, commit: commitQ, w } = request.query as { path?: string; commit?: string; w?: string };
 
     if (!filePath) return reply.status(400).send({ error: "path query parameter is required" });
+    // `?w=1`: hide whitespace changes; `?commit=`: one of the PR's commits (#252).
+    const diffOptions = { ignoreWhitespace: w === "1" || w === "true" };
 
     const repo = await resolveRepo(handle, name);
     if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
@@ -1005,7 +1020,12 @@ export async function pullRoutes(app: FastifyInstance) {
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
 
     const range = await pullRange(repo.storageKey, pr);
-    const files = range ? await getMergeBaseDiff(repo.storageKey, range.base, range.head, filePath) : [];
+    if (commitQ && range) {
+      const commit = await prCommit(repo.storageKey, range, commitQ);
+      if (!commit) return reply.status(404).send({ error: "That commit isn't part of this pull request" });
+      return { files: await getMergeBaseDiff(repo.storageKey, `${commit.sha}^`, commit.sha, filePath, diffOptions) };
+    }
+    const files = range ? await getMergeBaseDiff(repo.storageKey, range.base, range.head, filePath, diffOptions) : [];
     return { files };
   });
 
@@ -1263,4 +1283,11 @@ async function closingIssuesOf(prId: string) {
     orderBy: { number: "asc" },
   });
   return issues.map((i) => ({ number: i.number, title: i.title, state: i.state.toLowerCase() }));
+}
+
+/** One of a pull request's own commits, by full or abbreviated sha (#252), or null. */
+async function prCommit(storageKey: string, range: { base: string; head: string }, sha: string) {
+  if (!/^[0-9a-f]{4,40}$/i.test(sha)) return null;
+  const commits = await listMergeBaseCommits(storageKey, range.base, range.head);
+  return commits.find((c) => c.sha.startsWith(sha.toLowerCase())) ?? null;
 }

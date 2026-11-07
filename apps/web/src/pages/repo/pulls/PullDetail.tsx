@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApiError, applySuggestion, createPullComment, createReview, createReviewComment, deleteReview, getIssue, getPull,
   listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
@@ -13,7 +13,7 @@ import type {
   CommitInfo, IssueComment, PRFileEntry, PullRequest, Review, ReviewComment,
   ReviewCommentPosition, TimelineEvent, User,
 } from "../../../types";
-import { Avatar, Button, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput } from "../../../ui";
+import { Avatar, Button, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput, cx } from "../../../ui";
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
 import { Popover } from "../issues/pickers";
@@ -176,10 +176,29 @@ export function PullDetail({
       .catch(() => setCheckCount(undefined));
   }, [headSha, token, handle, repoName]);
 
+  // The Files changed toolbar (#252), kept in the URL as GitHub does:
+  // ?commit= (one of the PR's commits), ?diff=split, ?w=1 (hide whitespace).
+  const [params, setParams] = useSearchParams();
+  const commitSha = params.get("commit");
+  const diffView: "unified" | "split" = params.get("diff") === "split" ? "split" : "unified";
+  const hideWhitespace = params.get("w") === "1";
+  const [fileFilter, setFileFilter] = useState("");
+  function setOption(key: string, value: string | null) {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value); else next.delete(key);
+    setParams(next, { replace: true });
+  }
+  // Choosing a commit (or going back to all of them) is another file list.
+  const filesFor = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (filesFor.current !== undefined && filesFor.current !== commitSha) setPrFiles(null);
+    filesFor.current = commitSha;
+  }, [commitSha]);
+
   useEffect(() => {
     if (prFiles !== null || !pr) return;
     setFilesLoading(true);
-    listPRFiles(token, handle, repoName, number)
+    listPRFiles(token, handle, repoName, number, commitSha)
       .then((d) => {
         setPrFiles(d.files);
         setPrMergeBase(d.mergeBaseSha ?? null);
@@ -187,7 +206,7 @@ export function PullDetail({
       })
       .catch(() => setPrFiles([]))
       .finally(() => setFilesLoading(false));
-  }, [prFiles, pr, token, handle, repoName, number]);
+  }, [prFiles, pr, token, handle, repoName, number, commitSha]);
 
   async function saveTitle(e: React.FormEvent) {
     e.preventDefault();
@@ -234,6 +253,7 @@ export function PullDetail({
 
   if (!pr) return null;
 
+  const shownFiles = (prFiles ?? []).filter((f) => !fileFilter.trim() || f.path.toLowerCase().includes(fileFilter.trim().toLowerCase()));
   const totalAdditions = prFiles?.reduce((s, f) => s + f.additions, 0) ?? 0;
   const totalDeletions = prFiles?.reduce((s, f) => s + f.deletions, 0) ?? 0;
 
@@ -665,15 +685,51 @@ export function PullDetail({
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-fh-sm text-fh-fg-muted">
-                Showing <span className="font-semibold text-fh-fg">{prFiles.length}</span> changed file
-                {prFiles.length !== 1 ? "s" : ""} with{" "}
+            {/* GitHub's Files changed toolbar (#252) */}
+            <div className="flex items-center gap-2 flex-wrap rounded-md border border-fh-border bg-fh-canvas px-3 py-2 text-fh-sm">
+              <select
+                aria-label="Changes from"
+                value={commitSha ?? ""}
+                onChange={(e) => setOption("commit", e.target.value || null)}
+                className="h-7 max-w-[260px] rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg"
+              >
+                <option value="">All commits</option>
+                {(commits ?? []).slice().reverse().map((c) => (
+                  <option key={c.sha} value={c.sha}>{c.shortSha} {c.subject}</option>
+                ))}
+              </select>
+              <input
+                type="search"
+                aria-label="Filter changed files"
+                placeholder="Filter files…"
+                value={fileFilter}
+                onChange={(e) => setFileFilter(e.target.value)}
+                className="h-7 w-44 rounded-md border border-fh-border bg-fh-surface px-2 text-fh-sm text-fh-fg"
+              />
+              <div role="group" aria-label="Diff view" className="inline-flex overflow-hidden rounded-md border border-fh-border">
+                {(["unified", "split"] as const).map((v, i) => (
+                  <button
+                    key={v}
+                    type="button"
+                    aria-pressed={diffView === v}
+                    onClick={() => setOption("diff", v === "split" ? "split" : null)}
+                    className={cx("h-7 px-2.5 text-fh-sm", i > 0 && "border-l border-fh-border", diffView === v ? "bg-fh-surface font-semibold text-fh-fg" : "text-fh-fg-muted hover:text-fh-fg")}
+                  >
+                    {v === "unified" ? "Unified" : "Split"}
+                  </button>
+                ))}
+              </div>
+              <label className="inline-flex items-center gap-1.5 text-fh-fg-muted cursor-pointer">
+                <input type="checkbox" checked={hideWhitespace} onChange={(e) => setOption("w", e.target.checked ? "1" : null)} />
+                Hide whitespace
+              </label>
+              <span className="text-fh-fg-muted">
+                <span className="font-semibold text-fh-fg">{shownFiles.length}</span> {shownFiles.length === 1 ? "file" : "files"}{" "}
                 <span className="font-mono font-semibold text-fh-success-fg">+{totalAdditions}</span>{" "}
                 <span className="font-mono font-semibold text-fh-danger-fg">−{totalDeletions}</span>
-              </p>
+              </span>
               <div className="ml-auto flex items-center gap-3">
-                {canComment && (
+                {canComment && !commitSha && (
                   <span className="text-fh-xs text-fh-fg-subtle">
                     Hover a line and click <span className="font-semibold text-fh-accent-fg">+</span> to comment
                   </span>
@@ -707,12 +763,22 @@ export function PullDetail({
             {/* File-tree navigator (issue #119) beside the diff cards. */}
             <div className="flex flex-col md:flex-row gap-4 items-start">
               <div className="w-full md:w-56 shrink-0 md:sticky md:top-16 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
-                <PRFileTree files={prFiles} />
+                <PRFileTree files={shownFiles} />
               </div>
               <div className="flex-1 min-w-0 space-y-2">
-                {prFiles.map((file) => (
+                {commitSha && (
+                  <p className="rounded-md border border-fh-warning-emphasis/40 bg-fh-warning-muted px-3 py-2 text-fh-sm text-fh-fg">
+                    Showing the changes of one commit.{" "}
+                    <button type="button" onClick={() => setOption("commit", null)} className="text-fh-accent-fg hover:underline">Show all commits</button>
+                  </p>
+                )}
+                {shownFiles.length === 0 && (
+                  <p className="rounded-md border border-fh-border bg-fh-surface px-4 py-6 text-center text-fh-sm text-fh-fg-muted">No changed files match “{fileFilter.trim()}”.</p>
+                )}
+                {shownFiles.map((file) => (
                   <PRFileRow
-                    key={file.path}
+                    // A different commit, view or whitespace setting is a different diff: start fresh.
+                    key={`${file.path}|${commitSha ?? ""}|${hideWhitespace ? "w" : ""}|${diffView}`}
                     token={token}
                     handle={handle}
                     repoName={repoName}
@@ -723,8 +789,10 @@ export function PullDetail({
                     baseRef={prMergeBase ?? undefined}
                     repoRef={repoRef}
                     comments={reviewComments}
-                    review={reviewInteraction}
-                    onToggleViewed={onToggleViewed}
+                    // One commit's diff is read-only: review comments anchor to the whole PR's lines.
+                    review={commitSha ? { ...reviewInteraction, canComment: false } : reviewInteraction}
+                    onToggleViewed={commitSha ? undefined : onToggleViewed}
+                    options={{ view: diffView, hideWhitespace, commit: commitSha, headSha: commitSha ?? prHead ?? pr.headSha ?? null }}
                   />
                 ))}
               </div>
