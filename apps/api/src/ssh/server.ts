@@ -6,7 +6,8 @@ import ssh2 from "ssh2";
 import type { AuthContext, PublicKeyAuthContext, ServerChannel, Session } from "ssh2";
 import { bareRepoPathFromKey, sshHostKeyPath } from "../git-storage.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
-import { resolveRepo, canRead, canWrite, type RepoAccessInput } from "../repo-access.js";
+import { prisma } from "../prisma.js";
+import { resolveRepo, canRead, canWrite, redirectedRepoId, repoAccessInclude, type RepoAccessInput } from "../repo-access.js";
 import { fingerprintFromRaw } from "./keys.js";
 import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
@@ -226,7 +227,12 @@ async function handleExec(
     return;
   }
 
-  const repo = await resolveRepo(parsed.ownerHandle, parsed.repoName);
+  // A renamed repository's old name still works over SSH (#256).
+  let repo = await resolveRepo(parsed.ownerHandle, parsed.repoName);
+  if (!repo) {
+    const id = await redirectedRepoId(parsed.ownerHandle, parsed.repoName);
+    if (id) repo = await prisma.repo.findFirst({ where: { id }, include: repoAccessInclude });
+  }
 
   if (!repo || !repo.storageKey) {
     fail(stream, "repository not found");

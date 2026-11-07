@@ -162,7 +162,7 @@ export async function maybeAutoMergePr(prId: string, log?: LogLike): Promise<Aut
     if (!gate.ready) return { fired: false, reason: gate.reasons.join("; ") };
 
     const outcome = await executePullMerge({
-      repo: { id: repo.id, storageKey },
+      repo: { id: repo.id, storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge },
       pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch },
       actorId: pr.autoMergeById,
       mergeMethod: pr.autoMergeMethod,

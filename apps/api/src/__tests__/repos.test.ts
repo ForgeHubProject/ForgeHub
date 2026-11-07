@@ -33,6 +33,13 @@ vi.mock("../prisma.js", () => ({
       update: vi.fn(),
       count: vi.fn(),
     },
+    // Rename redirects (#256) — default to "no old name".
+    repoRedirect: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      create: vi.fn().mockResolvedValue({}),
+    },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));
 
@@ -67,6 +74,7 @@ vi.mock("../git-utils.js", () => ({
   deleteTag: vi.fn(),
   cloneMirror: vi.fn(),
   git: vi.fn(),
+  setDefaultBranch: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("bcryptjs", () => ({
@@ -606,5 +614,91 @@ describe("DELETE /repos/:name/collaborators/:handle", () => {
       headers: { authorization: token },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("repository settings (#256)", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+
+  beforeAll(async () => {
+    app = await createTestServer();
+    ownerToken = await authHeader(app, OWNER_ID);
+  });
+  afterAll(async () => { await app.close(); });
+
+  beforeEach(async () => {
+    const { branchExists, setDefaultBranch } = await import("../git-utils.js");
+    const { moveBareRepo } = await import("../git-storage.js");
+    vi.mocked(branchExists).mockReset();
+    vi.mocked(setDefaultBranch).mockClear();
+    vi.mocked(moveBareRepo).mockClear();
+    vi.mocked(prisma.repoRedirect.create).mockClear();
+    vi.mocked(prisma.repoRedirect.deleteMany).mockClear();
+    vi.mocked(prisma.repo.update).mockReset().mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.repo.findFirstOrThrow).mockResolvedValue(makeRepo() as never);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(mockOwner as never);
+  });
+
+  const settings = (payload: object) =>
+    app.inject({ method: "PATCH", url: "/repos/alice/my-repo/settings", headers: { authorization: ownerToken }, payload });
+
+  it("changes the default branch when the branch exists", async () => {
+    const { branchExists, setDefaultBranch } = await import("../git-utils.js");
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    vi.mocked(branchExists).mockResolvedValue(true);
+    expect((await settings({ defaultBranch: "develop" })).statusCode).toBe(200);
+    expect(setDefaultBranch).toHaveBeenCalledWith("alice/my-repo.git", "develop");
+
+    vi.mocked(branchExists).mockResolvedValue(false);
+    expect((await settings({ defaultBranch: "nope" })).statusCode).toBe(400);
+  });
+
+  it("archives and unarchives, and refuses other changes while archived", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    expect((await settings({ archived: true, deleteBranchOnMerge: true })).statusCode).toBe(200);
+    expect(vi.mocked(prisma.repo.update).mock.calls[0][0]).toMatchObject({
+      data: { archivedAt: expect.any(Date), deleteBranchOnMerge: true },
+    });
+
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo({ archivedAt: new Date() }) as never);
+    expect((await settings({ description: "new" })).statusCode).toBe(409);
+    expect((await settings({ archived: false })).statusCode).toBe(200);
+    expect(vi.mocked(prisma.repo.update).mock.calls.at(-1)![0]).toMatchObject({ data: { archivedAt: null } });
+  });
+
+  it("renames, moving the bare repo and leaving a redirect at the old name", async () => {
+    const { moveBareRepo, buildStorageKey } = await import("../git-storage.js");
+    vi.mocked(buildStorageKey).mockReturnValueOnce("alice/new-name.git");
+    vi.mocked(prisma.repo.findFirst)
+      .mockResolvedValueOnce(makeRepo() as never) // the repo being renamed
+      .mockResolvedValueOnce(null as never); // nothing at the new name
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/rename", headers: { authorization: ownerToken }, payload: { name: "New-Name" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ name: "new-name", fullName: "alice/new-name" });
+    expect(moveBareRepo).toHaveBeenCalledWith("alice/my-repo.git", "alice/new-name.git");
+    expect(prisma.repoRedirect.create).toHaveBeenCalledWith({ data: { ownerHandle: "alice", name: "my-repo", repoId: "repo-1" } });
+  });
+
+  it("refuses a rename onto an existing repository", async () => {
+    vi.mocked(prisma.repo.findFirst)
+      .mockResolvedValueOnce(makeRepo() as never)
+      .mockResolvedValueOnce({ id: "repo-2" } as never);
+    const res = await app.inject({
+      method: "POST", url: "/repos/alice/my-repo/rename", headers: { authorization: ownerToken }, payload: { name: "taken" },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("finds a repository by a name it used to have", async () => {
+    vi.mocked(prisma.repo.findFirst)
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce(makeRepo({ name: "new-name", visibility: "PUBLIC" }) as never);
+    vi.mocked(prisma.repoRedirect.findUnique).mockResolvedValueOnce({ repoId: "repo-1" } as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ name: "new-name", fullName: "alice/new-name", archived: false });
   });
 });

@@ -28,7 +28,13 @@ const RepoPermissionContext = createContext<ViewerPermission>(null);
 /** Set once by RepoPage from the repo payload; every tab under it reads it. */
 export const RepoPermissionProvider = RepoPermissionContext.Provider;
 
+const RepoArchivedContext = createContext(false);
+
+/** Archived (#256): no write controls for anyone, admins included; settings stay. */
+export const RepoArchivedProvider = RepoArchivedContext.Provider;
+
 /** The viewer's write and admin rights in the current repo. Outside a repo page: none. */
 export function useRepoPermission(): RepoPermission {
-  return repoPermission(useContext(RepoPermissionContext));
+  const p = repoPermission(useContext(RepoPermissionContext));
+  return useContext(RepoArchivedContext) ? { ...p, canWrite: false } : p;
 }

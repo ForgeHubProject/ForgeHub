@@ -605,7 +605,7 @@ export async function pullRoutes(app: FastifyInstance) {
     // Execution + merge side effects live in the shared executor (issue #119),
     // so the interactive endpoint and auto-merge can never drift apart.
     const outcome = await executePullMerge({
-      repo: { id: repo.id, storageKey: repo.storageKey },
+      repo: { id: repo.id, storageKey: repo.storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge },
       pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch },
       actorId: userId,
       mergeMethod,

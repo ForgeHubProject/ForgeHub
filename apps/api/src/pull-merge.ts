@@ -1,5 +1,7 @@
 import { prisma } from "./prisma.js";
 import {
+  defaultBranch,
+  deleteBranch,
   listMergeBaseCommits,
   performMerge,
   performRebaseMerge,
@@ -30,7 +32,8 @@ import { liveRange } from "./pull-range.js";
 type LogLike = { error: (obj: unknown, msg?: string) => void };
 
 export type PullMergeInput = {
-  repo: { id: string; storageKey: string };
+  /** `deleteBranchOnMerge` (#256): delete the head branch once merged. */
+  repo: { id: string; storageKey: string; deleteBranchOnMerge?: boolean };
   pr: { id: string; number: number; title: string; fromBranch: string; toBranch: string };
   /** The user the merge is performed AS (squash author, timeline actor, webhook sender). */
   actorId: string;
@@ -46,6 +49,34 @@ export type PullMergeOutcome =
   | { status: "conflict" }
   | { status: "alreadyMerged" }
   | { status: "error" };
+
+/**
+ * GitHub's "Automatically delete head branches" (#256): once merged, the pull
+ * request's branch goes, unless it's the default branch, protected, or still
+ * in another open pull request. The merged PR keeps its recorded range, so its
+ * files stay viewable.
+ */
+async function deleteMergedHeadBranch(
+  repo: { id: string; storageKey: string },
+  pr: { id: string; number: number; fromBranch: string },
+  actorId: string,
+): Promise<boolean> {
+  const branch = pr.fromBranch;
+  if (branch === (await defaultBranch(repo.storageKey))) return false;
+  const [rule, stillUsed] = await Promise.all([
+    prisma.protectedBranch.findFirst({ where: { repoId: repo.id, branch }, select: { id: true } }),
+    prisma.pullRequest.count({
+      where: { repoId: repo.id, state: "OPEN", id: { not: pr.id }, OR: [{ fromBranch: branch }, { toBranch: branch }] },
+    }),
+  ]);
+  if (rule || stillUsed > 0) return false;
+  await deleteBranch(repo.storageKey, branch, true);
+  await recordEvent({
+    repoId: repo.id, subjectType: "PULL_REQUEST", subjectNumber: pr.number,
+    kind: "head_ref_deleted", actorId, data: { branch },
+  });
+  return true;
+}
 
 /** Resolve the git author identity for a user performing a merge/revert. */
 export async function resolveActorIdentity(userId: string): Promise<CommitAuthor> {
@@ -125,6 +156,9 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
   ]);
   await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: actorId })
     .catch((err) => input.log?.error({ err }, "closeIssuesForMergedPull"));
+  if (repo.deleteBranchOnMerge) {
+    await deleteMergedHeadBranch(repo, pr, actorId).catch((err) => input.log?.error({ err }, "delete head branch after merge"));
+  }
 
   // Fire-and-forget: ingest any new .gltf files introduced by the merge
   if (beforeSha && result.sha) {
