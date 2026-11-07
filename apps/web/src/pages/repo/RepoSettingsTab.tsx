@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
   getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
   type MergeMethod,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
@@ -198,7 +198,14 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
                 </Button>
               </div>
             </div>
-          ) : (
+          ) : null}
+          {isOwner && !repo.archived && (
+            <>
+              <RenameCard token={token} handle={handle} repo={repo} />
+              <DefaultBranchCard token={token} handle={handle} repoName={repoName} />
+            </>
+          )}
+          {isOwner ? null : (
             <p className="text-fh-sm text-fh-fg-muted rounded-md border border-fh-border bg-fh-surface px-4 py-3">
               Only the repository owner can change these settings.
             </p>
@@ -208,6 +215,124 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
         <p className="text-fh-sm text-fh-fg-muted">Could not load repository details.</p>
       )}
     </div>
+  );
+}
+
+/** GitHub's "Repository name" with Rename (#256); the old name keeps redirecting. */
+function RenameCard({ token, handle, repo }: { token: string; handle: string; repo: Repo }) {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [name, setName] = useState(repo.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valid = /^[a-zA-Z0-9._-]+$/.test(name.trim()) && name.trim().toLowerCase() !== repo.name;
+
+  async function rename() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await renameRepo(token, handle, repo.name, name.trim());
+      toast(`Renamed to ${res.fullName}`, { tone: "success" });
+      navigate(`/${res.fullName}/settings`, { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rename failed");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+      <Field label="Repository name" hint="Links and clones using the old name keep working: they're redirected here.">
+        {(id) => (
+          <div className="flex gap-2">
+            <TextInput id={id} value={name} onChange={(e) => setName(e.target.value)} className="font-mono" />
+            <Button variant="default" loading={busy} disabled={!valid} onClick={() => void rename()}>Rename</Button>
+          </div>
+        )}
+      </Field>
+      {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
+    </div>
+  );
+}
+
+/** GitHub's "Default branch" (#256): the branch the repo opens on and pull requests target. */
+function DefaultBranchCard({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const { toast } = useToast();
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [current, setCurrent] = useState("");
+  const [choice, setChoice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    listBranches(token, handle, repoName)
+      .then((d) => {
+        setBranches(d.branches);
+        setCurrent(d.defaultBranch);
+        setChoice(d.defaultBranch);
+      })
+      .catch(() => {});
+  }, [token, handle, repoName]);
+
+  async function update() {
+    setBusy(true);
+    try {
+      await updateRepo(token, handle, repoName, { defaultBranch: choice });
+      setCurrent(choice);
+      toast(`Default branch is now ${choice}`, { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't change the default branch", { tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (branches.length === 0) return null;
+  return (
+    <div className="bg-fh-surface border border-fh-border rounded-md p-4 space-y-3">
+      <Field label="Default branch" hint="The branch the repository opens on, and that new pull requests target.">
+        {(id) => (
+          <div className="flex gap-2">
+            <Select id={id} value={choice} onChange={(e) => setChoice(e.target.value)} className="font-mono">
+              {branches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+            </Select>
+            <Button variant="default" loading={busy} disabled={choice === current} onClick={() => void update()}>Update</Button>
+          </div>
+        )}
+      </Field>
+    </div>
+  );
+}
+
+/** "Automatically delete head branches" (#256), under the merge policy. */
+function HeadBranchCleanup({ token, handle, repoName, isOwner }: { token: string; handle: string; repoName: string; isOwner: boolean }) {
+  const { toast } = useToast();
+  const [on, setOn] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getRepo(token, handle, repoName).then((r) => setOn(!!r.deleteBranchOnMerge)).catch(() => setOn(null));
+  }, [token, handle, repoName]);
+
+  async function toggle(next: boolean) {
+    setOn(next);
+    try {
+      await updateRepo(token, handle, repoName, { deleteBranchOnMerge: next });
+    } catch (err) {
+      setOn(!next);
+      toast(err instanceof Error ? err.message : "Couldn't save", { tone: "danger" });
+    }
+  }
+
+  if (on === null) return null;
+  return (
+    <label className={cx("mt-4 flex items-start gap-3 rounded-md border border-fh-border bg-fh-surface p-4", isOwner ? "cursor-pointer" : "opacity-70")}>
+      <input type="checkbox" className="mt-1" checked={on} disabled={!isOwner} onChange={(e) => void toggle(e.target.checked)} />
+      <span>
+        <span className="block text-fh-base font-semibold text-fh-fg">Automatically delete head branches</span>
+        <span className="block text-fh-sm text-fh-fg-muted">
+          After a pull request merges, its branch is deleted, unless it's protected, the default branch, or still used by another open pull request.
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -1584,6 +1709,7 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
         </p>
       ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
+        <ArchiveRow token={token} handle={handle} repoName={repoName} />
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
           <div className="min-w-0">
             <p className="text-fh-base font-semibold text-fh-fg">Delete this repository</p>
@@ -1626,6 +1752,55 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
           </Field>
         </div>
       </Dialog>
+    </div>
+  );
+}
+
+/** Archive / unarchive (#256): an archived repository is read-only for everyone. */
+function ArchiveRow({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const { toast } = useToast();
+  const [archived, setArchived] = useState<boolean | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getRepo(token, handle, repoName).then((r) => setArchived(!!r.archived)).catch(() => setArchived(null));
+  }, [token, handle, repoName]);
+
+  async function apply() {
+    setBusy(true);
+    try {
+      await updateRepo(token, handle, repoName, { archived: !archived });
+      toast(archived ? "Repository unarchived" : "Repository archived", { tone: "success" });
+      // The whole repo page changes (banner, write controls): reload it.
+      window.location.reload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't change the archive state", { tone: "danger" });
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  if (archived === null) return null;
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
+      <div className="min-w-0">
+        <p className="text-fh-base font-semibold text-fh-fg">{archived ? "Unarchive this repository" : "Archive this repository"}</p>
+        <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+          {archived ? "It becomes writable again." : "Mark this repository as archived and read-only: no pushes, issues, pull requests or comments, for anyone."}
+        </p>
+      </div>
+      <Button variant="danger" onClick={() => setConfirming(true)}>{archived ? "Unarchive" : "Archive this repository"}</Button>
+      <ConfirmDialog
+        open={confirming}
+        title={archived ? "Unarchive this repository?" : "Archive this repository?"}
+        message={archived ? "Collaborators will be able to push, open issues and pull requests again." : "It becomes read-only for everyone. You can unarchive it later from here."}
+        confirmLabel={archived ? "Unarchive" : "Archive"}
+        tone="danger"
+        loading={busy}
+        onConfirm={() => void apply()}
+        onCancel={() => setConfirming(false)}
+      />
     </div>
   );
 }
@@ -1821,7 +1996,12 @@ export function RepoSettingsTab({ token, handle, repoName, canAdmin }: Props) {
         {section === "general" && <GeneralSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "topics" && <TopicsSection token={token} handle={handle} repoName={repoName} />}
         {section === "collaborators" && <CollaboratorsSection token={token} handle={handle} repoName={repoName} />}
-        {section === "pulls" && <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
+        {section === "pulls" && (
+          <>
+            <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
+            <HeadBranchCleanup token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
+          </>
+        )}
         {section === "branches" && <BranchesSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "tags" && <TagsSection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />}
         {section === "labels" && <LabelsSection token={token} handle={handle} repoName={repoName} />}

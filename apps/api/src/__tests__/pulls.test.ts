@@ -592,6 +592,29 @@ describe("POST /repos/:handle/:name/pulls/:number/merge", () => {
     expect(res.json().method).toBe("merge");
   });
 
+  it("deletes the merged head branch when the repository asks for it (#256)", async () => {
+    const { performMerge, deleteBranch } = await import("../git-utils.js");
+    vi.mocked(deleteBranch).mockClear();
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo({ deleteBranchOnMerge: true }) as never);
+    vi.mocked(prisma.pullRequest.count).mockResolvedValue(0 as never);
+    const res = await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: { authorization: ownerToken } });
+    expect(res.statusCode).toBe(200);
+    expect(deleteBranch).toHaveBeenCalledWith("alice/my-repo.git", "feature", true);
+  });
+
+  it("keeps the head branch when another open pull request uses it, or the setting is off", async () => {
+    const { performMerge, deleteBranch } = await import("../git-utils.js");
+    vi.mocked(deleteBranch).mockClear();
+    vi.mocked(performMerge).mockResolvedValueOnce({ ok: true, sha: "deadbeef" }).mockResolvedValueOnce({ ok: true, sha: "deadbeef" });
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo({ deleteBranchOnMerge: true }) as never);
+    vi.mocked(prisma.pullRequest.count).mockResolvedValue(1 as never);
+    await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: { authorization: ownerToken } });
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue(makeRepo() as never);
+    await app.inject({ method: "POST", url: "/repos/alice/my-repo/pulls/1/merge", headers: { authorization: ownerToken } });
+    expect(deleteBranch).not.toHaveBeenCalled();
+  });
+
   // Regression (issue #119): the armed intent is spent once the PR merges —
   // leaving it set made `GET /pulls/:number` report auto-merge as still armed.
   it("clears the armed auto-merge intent when the PR merges", async () => {

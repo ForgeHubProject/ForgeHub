@@ -5,7 +5,8 @@ import type { z } from "zod";
 import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
-import { canAdmin, canRead, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
+import { canAdmin, canRead, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
+import { branchExists, setDefaultBranch } from "../git-utils.js";
 import { repoMergePolicy } from "../merge-policy.js";
 import { ensureImplicitWatch, pruneWatchOnAccessLoss } from "../watch-service.js";
 import {
@@ -99,6 +100,9 @@ export function repoResponse(
     // Merge policy columns (issue #119); absent on narrower selects ⇒ defaults.
     allowedMergeMethods?: string | null;
     defaultMergeMethod?: string | null;
+    // Repository settings (#256); absent on narrower selects ⇒ off.
+    archivedAt?: Date | null;
+    deleteBranchOnMerge?: boolean;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -129,6 +133,10 @@ export function repoResponse(
     // Owner merge policy (issue #119): drives the merge box's method menu.
     allowedMergeMethods: mergePolicy.allowedMethods,
     defaultMergeMethod: mergePolicy.defaultMethod,
+    // Repository settings (#256).
+    archived: !!r.archivedAt,
+    archivedAt: r.archivedAt?.toISOString() ?? null,
+    deleteBranchOnMerge: r.deleteBranchOnMerge ?? false,
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -222,7 +230,7 @@ export async function repoRoutes(app: FastifyInstance) {
     body: z.infer<typeof updateRepoBodySchema>,
     reply: FastifyReply,
   ) {
-    const { description, visibility, allowedMergeMethods, defaultMergeMethod } = body;
+    const { description, visibility, allowedMergeMethods, defaultMergeMethod, defaultBranch, archived, deleteBranchOnMerge } = body;
     const descriptionValue =
       description === undefined ? undefined : description === null ? null : description.trim() || null;
 
@@ -231,7 +239,24 @@ export async function repoRoutes(app: FastifyInstance) {
       visibility?: RepoVisibility;
       allowedMergeMethods?: string;
       defaultMergeMethod?: string;
+      archivedAt?: Date | null;
+      deleteBranchOnMerge?: boolean;
     } = {};
+
+    // An archived repository's settings stay read-only too, apart from unarchiving it.
+    if (existing.archivedAt && archived !== false) {
+      const other = Object.entries(body).some(([k, v]) => k !== "archived" && v !== undefined);
+      if (other) return reply.status(409).send({ error: "This repository is archived. Unarchive it to change its settings." });
+    }
+    if (archived !== undefined) data.archivedAt = archived ? (existing.archivedAt ?? new Date()) : null;
+    if (deleteBranchOnMerge !== undefined) data.deleteBranchOnMerge = deleteBranchOnMerge;
+    // Default branch (#256): HEAD in the bare repository, not a column.
+    if (defaultBranch !== undefined) {
+      if (!existing.storageKey || !(await branchExists(existing.storageKey, defaultBranch))) {
+        return reply.status(400).send({ error: `Branch '${defaultBranch}' not found` });
+      }
+      await setDefaultBranch(existing.storageKey, defaultBranch);
+    }
     if (descriptionValue !== undefined) {
       data.description = descriptionValue;
     }
@@ -491,15 +516,19 @@ export async function repoRoutes(app: FastifyInstance) {
 
       // Resolve under the owning handle (user OR org) and fetch with the full access
       // include so org owners + team members can see private org repos (issue #114).
-      const repo = await prisma.repo.findFirst({
-        where: repoByOwningHandleWhere(handleParam, name),
-        include: {
-          ...repoAccessInclude,
-          owner: { select: { handle: true } },
-          ...topicsInclude,
-          _count: { select: { stars: true } },
-        },
-      });
+      const include = {
+        ...repoAccessInclude,
+        owner: { select: { handle: true } },
+        ...topicsInclude,
+        _count: { select: { stars: true } },
+      } as const;
+      // A name the repository used to have (#256) still finds it; the answer's
+      // ownerHandle/name are the current ones, which the web moves to.
+      let repo = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(handleParam, name), include });
+      if (!repo) {
+        const redirectId = await redirectedRepoId(handleParam, name);
+        if (redirectId) repo = await prisma.repo.findFirst({ where: { id: redirectId }, include });
+      }
       const viewer = viewerId(request);
       if (!repo || !canRead(repo, viewer)) {
         return reply.status(404).send({ error: "Repository not found" });
@@ -586,6 +615,59 @@ export async function repoRoutes(app: FastifyInstance) {
       const repo = await adminRepo(request, reply);
       if (!repo) return reply;
       return applySettings(repo, parsed.data, reply);
+    },
+  );
+
+  // POST /repos/:handle/:name/rename { name } — rename (#256): any repo the
+  // caller administers, personal or org. The bare repository moves with it, and
+  // the old name keeps redirecting (web and git) until another repo takes it.
+  app.post(
+    "/repos/:handle/:name/rename",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const parsed = renameRepoBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      if (repo.archivedAt) {
+        return reply.status(409).send({ error: "This repository is archived. Unarchive it to rename it." });
+      }
+
+      const newName = parsed.data.name.toLowerCase();
+      if (newName === repo.name) return reply.send({ name: repo.name });
+      const owner = await prisma.user.findUnique({ where: { id: repo.ownerId }, select: { handle: true } });
+      const owningHandle = (repo.org?.handle ?? owner?.handle ?? "").toLowerCase();
+      if (!owningHandle) return reply.status(500).send({ error: "Owner handle missing" });
+
+      const taken = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(owningHandle, newName), select: { id: true } });
+      if (taken) return reply.status(409).send({ error: `${owningHandle}/${newName} already exists` });
+
+      const newStorageKey = repo.storageKey ? buildStorageKey(owningHandle, newName) : null;
+      let moved = false;
+      try {
+        if (repo.storageKey && newStorageKey) {
+          await moveBareRepo(repo.storageKey, newStorageKey);
+          moved = true;
+        }
+        await prisma.$transaction([
+          prisma.repo.update({ where: { id: repo.id }, data: { name: newName, storageKey: newStorageKey } }),
+          // The new name is no longer anyone's redirect; the old one now is this repo's.
+          prisma.repoRedirect.deleteMany({ where: { ownerHandle: owningHandle, name: { in: [newName, repo.name] } } }),
+          prisma.repoRedirect.create({ data: { ownerHandle: owningHandle, name: repo.name, repoId: repo.id } }),
+        ]);
+      } catch (e: unknown) {
+        if (moved && repo.storageKey && newStorageKey) {
+          await moveBareRepo(newStorageKey, repo.storageKey).catch(() => undefined);
+        }
+        const code = errorCode(e);
+        if (code === "P2002" || code === "EEXIST") {
+          return reply.status(409).send({ error: `${owningHandle}/${newName} already exists` });
+        }
+        throw e;
+      }
+      return reply.send({ name: newName, fullName: `${owningHandle}/${newName}` });
     },
   );
 

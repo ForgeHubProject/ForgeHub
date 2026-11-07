@@ -80,6 +80,12 @@ describe("canRead", () => {
 });
 
 describe("canWrite", () => {
+  it("nobody writes to an archived repository, the owner included (#256)", () => {
+    const repo = makeRepo({ visibility: "PUBLIC", archivedAt: new Date() });
+    expect(canWrite(repo, repo.ownerId)).toBe(false);
+    expect(canRead(repo, undefined)).toBe(true);
+  });
+
   it("unauthenticated user cannot write", () => {
     const repo = makeRepo({ visibility: "PUBLIC" });
     expect(canWrite(repo, undefined)).toBe(false);

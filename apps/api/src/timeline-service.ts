@@ -22,6 +22,8 @@ export type TimelineEventKind =
   | "ready_for_review"
   // Back to draft (#252)
   | "converted_to_draft"
+  // The head branch deleted after merging (#256)
+  | "head_ref_deleted"
   | "review_requested"
   | "referenced"
   | "head_pushed"

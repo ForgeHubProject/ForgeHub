@@ -368,9 +368,21 @@ export async function updateRepo(
   token: string,
   owner: string,
   repoName: string,
-  patch: { description?: string | null; visibility?: "public" | "private" },
+  patch: {
+    description?: string | null;
+    visibility?: "public" | "private";
+    /** Repository settings (#256). */
+    defaultBranch?: string;
+    archived?: boolean;
+    deleteBranchOnMerge?: boolean;
+  },
 ): Promise<Repo> {
   return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** Rename a repository (#256); the old name keeps redirecting, for the web and for git. */
+export async function renameRepo(token: string, owner: string, repoName: string, name: string): Promise<{ name: string; fullName: string }> {
+  return req(`/repos/${owner}/${repoName}/rename`, { method: "POST", token, body: JSON.stringify({ name }) });
 }
 
 /**

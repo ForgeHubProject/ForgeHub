@@ -138,6 +138,11 @@ export type Repo = {
    * match.
    */
   viewerPermission?: "admin" | "write" | "read" | null;
+  /** Archived (#256): read-only until an admin unarchives it. */
+  archived?: boolean;
+  archivedAt?: string | null;
+  /** Delete the head branch after a pull request merges (#256). */
+  deleteBranchOnMerge?: boolean;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
