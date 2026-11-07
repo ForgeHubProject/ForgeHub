@@ -339,13 +339,19 @@ export async function socialRoutes(app: FastifyInstance) {
     const cursor = parseFeedCursor(cursorQ);
     const empty = { items: [] as FeedItem[], perPage, nextCursor: null, hasMore: false };
 
-    const [stars, watches] = await Promise.all([
+    const [stars, watches, follows] = await Promise.all([
       prisma.star.findMany({ where: { userId }, select: { repoId: true } }),
       prisma.watch.findMany({ where: { userId }, select: { repoId: true, level: true } }),
+      // People you follow (#257): their own repositories join the feed.
+      prisma.follow.findMany({ where: { followerId: userId }, select: { followingId: true } }),
     ]);
+    const followedRepos = follows.length
+      ? await prisma.repo.findMany({ where: { ownerId: { in: follows.map((f) => f.followingId) }, orgId: null }, select: { id: true }, take: 500 })
+      : [];
     const candidateIds = new Set<string>([
       ...stars.map((s) => s.repoId),
       ...watches.filter((w) => w.level !== "IGNORE").map((w) => w.repoId),
+      ...followedRepos.map((r) => r.id),
     ]);
     if (candidateIds.size === 0) return empty;
 

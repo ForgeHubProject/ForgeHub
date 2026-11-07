@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -293,9 +293,33 @@ export async function getPublicProfile(token: string | null, handle: string): Pr
 
 export async function updateMyProfile(
   token: string,
-  patch: { displayName?: string; bio?: string; location?: string; website?: string },
+  patch: {
+    displayName?: string; bio?: string; location?: string; website?: string;
+    /** Profile (#257). */
+    pronouns?: string; company?: string; socialLinks?: string[];
+    status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
+  },
 ): Promise<{ user: User }> {
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** A profile's pinned repositories, in order, as the viewer may see them (#257). */
+export async function getPins(token: string | null, handle: string): Promise<{ repos: Repo[] }> {
+  return req(`/users/${handle}/pins`, { token: token ?? undefined });
+}
+
+/** Replace your pinned repositories (up to six), in order (#257). */
+export async function setPins(token: string, repoIds: string[]): Promise<{ repoIds: string[] }> {
+  return req("/users/me/pins", { method: "PUT", token, body: JSON.stringify({ repoIds }) });
+}
+
+/** Follow or unfollow someone (#257); the answer has their new follower count. */
+export async function setFollowing(token: string, handle: string, follow: boolean): Promise<{ following: boolean; followers: number }> {
+  return req(`/users/${handle}/follow`, { method: follow ? "PUT" : "DELETE", token });
+}
+
+export async function listPeople(token: string | null, handle: string, kind: "followers" | "following"): Promise<{ users: PersonCard[] }> {
+  return req(`/users/${handle}/${kind}`, { token: token ?? undefined });
 }
 
 /** Toggle the current user's global email-notifications preference. */
