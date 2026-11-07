@@ -1177,11 +1177,13 @@ export async function getMergeBaseDiff(
   toBranch: string,
   fromBranch: string,
   filePath?: string,
+  /** GitHub's "Hide whitespace" (#252): `git diff -w`. */
+  options: { ignoreWhitespace?: boolean } = {},
 ): Promise<FileDiff[]> {
   try {
     const mergeBase = await git(storageKey, ["merge-base", toBranch, fromBranch]);
     if (!mergeBase) return [];
-    const args = ["diff", "--patch", mergeBase, fromBranch];
+    const args = ["diff", "--patch", ...(options.ignoreWhitespace ? ["-w"] : []), mergeBase, fromBranch];
     if (filePath) args.push("--", filePath);
     const patch = await git(storageKey, args);
     return parseDiff(patch);

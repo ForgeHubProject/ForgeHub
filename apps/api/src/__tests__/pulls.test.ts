@@ -132,6 +132,7 @@ vi.mock("../git-utils.js", () => ({
     { path: "docs/b.md", additions: 5, deletions: 0, binary: false, status: "added" },
   ]),
   listChangedPaths: vi.fn().mockResolvedValue([]),
+  getMergeBaseDiff: vi.fn().mockResolvedValue([]),
   branchShas: vi.fn().mockResolvedValue([]),
   listFilesDifferingBetweenBranches: vi.fn().mockResolvedValue([]),
   readFileAtBranch: vi.fn().mockResolvedValue(null),
@@ -178,7 +179,7 @@ import { applyCodeownersReviewers } from "../codeowners-service.js";
 import { emitPushEvents, ZERO_SHA } from "../push-events.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
-import { getMergeBaseFileList, git } from "../git-utils.js";
+import { getMergeBaseDiff, getMergeBaseFileList, git, listMergeBaseCommits } from "../git-utils.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -1382,6 +1383,36 @@ describe("PR viewed files (issue #119)", () => {
     expect(res.statusCode).toBe(200);
     expect(vi.mocked(getMergeBaseFileList)).toHaveBeenCalledWith(expect.any(String), "a".repeat(40), "b".repeat(40));
     expect(res.json()).toMatchObject({ mergeBaseSha: "a".repeat(40), headSha: "b".repeat(40) });
+  });
+
+  // The Files changed toolbar (#252).
+  it("lists one of the PR's commits on its own, against its parent", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", baseSha: "a".repeat(40), headSha: "b".repeat(40) }) as never);
+    const c1 = "c".repeat(40);
+    vi.mocked(listMergeBaseCommits).mockResolvedValueOnce([{ sha: c1, parents: ["p".repeat(40)], subject: "one" }] as never);
+    vi.mocked(getMergeBaseFileList).mockClear();
+    const res = await app.inject({ method: "GET", url: `/repos/alice/my-repo/pulls/1/files?commit=${c1.slice(0, 7)}` });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(getMergeBaseFileList)).toHaveBeenCalledWith(expect.any(String), `${c1}^`, c1);
+    expect(res.json()).toMatchObject({ mergeBaseSha: "p".repeat(40), headSha: c1 });
+  });
+
+  it("refuses a commit that isn't the PR's, or isn't a sha", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", baseSha: "a".repeat(40), headSha: "b".repeat(40) }) as never);
+    vi.mocked(listMergeBaseCommits).mockResolvedValueOnce([{ sha: "c".repeat(40), parents: [], subject: "one" }] as never);
+    expect((await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files?commit=deadbee" })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/files?commit=--all" })).statusCode).toBe(404);
+  });
+
+  it("hides whitespace in a file's diff when asked", async () => {
+    vi.mocked(prisma.pullRequest.findFirst).mockResolvedValue(
+      makePR({ state: "MERGED", baseSha: "a".repeat(40), headSha: "b".repeat(40) }) as never);
+    vi.mocked(getMergeBaseDiff).mockClear();
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1/diff?path=src%2Fa.ts&w=1" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(getMergeBaseDiff)).toHaveBeenCalledWith(expect.any(String), "a".repeat(40), "b".repeat(40), "src/a.ts", { ignoreWhitespace: true });
   });
 
   it("anonymous readers get viewed: false without a lookup", async () => {
