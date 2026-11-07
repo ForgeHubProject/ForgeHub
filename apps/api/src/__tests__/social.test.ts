@@ -9,6 +9,8 @@ vi.mock("../prisma.js", () => ({
     repoCollaborator: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
     star: { upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
     watch: { upsert: vi.fn(), deleteMany: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    // Following (#257): default to "follows nobody", so the feed's candidates are stars and watches.
+    follow: { findMany: vi.fn().mockResolvedValue([]) },
     backfillMarker: { findUnique: vi.fn(), create: vi.fn() },
     notification: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), upsert: vi.fn() },
     release: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },

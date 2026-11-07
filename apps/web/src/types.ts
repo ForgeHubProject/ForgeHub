@@ -105,7 +105,21 @@ export type PublicProfile = {
   /** Rotating cache-buster token; non-null ⇒ the user has an uploaded avatar (issue #115). */
   avatarKey: string | null;
   createdAt: string;
+  /** Profile (#257); optional so older payloads still parse. */
+  pronouns?: string | null;
+  company?: string | null;
+  socialLinks?: string[];
+  status?: ProfileStatus | null;
+  followers?: number;
+  following?: number;
+  viewerFollows?: boolean;
 };
+
+/** A profile's status (#257): an emoji and a short text, until it expires. */
+export type ProfileStatus = { emoji: string | null; text: string | null; expiresAt: string | null };
+
+/** Someone in a followers or following list (#257). */
+export type PersonCard = { handle: string; displayName: string | null; avatarKey: string | null; bio: string | null };
 
 /** Best-effort license detection (SPDX id + the file it was read from). */
 export type RepoLicense = { spdxId: string; path: string };

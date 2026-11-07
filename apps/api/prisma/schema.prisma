@@ -33,6 +33,14 @@ model User {
   bio            String?
   location       String?
   website        String?
+  // Profile (issue #257): GitHub's extra fields, a status, and up to four
+  // social links (a JSON array of URLs, validated in the route).
+  pronouns        String?
+  company         String?
+  socialLinks     String?
+  statusEmoji     String?
+  statusText      String?
+  statusExpiresAt DateTime?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   repos          Repo[]
@@ -69,6 +77,9 @@ model User {
   teamMemberships  TeamMembership[]
   prFileViews      PullRequestFileView[]      @relation("PRFileViewUser")
   stars            Star[]
+  pins             ProfilePin[]
+  following        Follow[]                   @relation("Follower")
+  followers        Follow[]                   @relation("Following")
   watches          Watch[]
   reactions        Reaction[]
 }
@@ -169,6 +180,7 @@ model Repo {
   teamAccess TeamRepoAccess[]
 
   stars   Star[]
+  pins    ProfilePin[]
   watches Watch[]
 
   // Personal-repo name uniqueness is guaranteed by the globally-unique `storageKey`
@@ -684,6 +696,34 @@ enum WatchLevel {
   ALL
   PARTICIPATING
   IGNORE
+}
+
+// A repository pinned to a profile (#257), in the order shown (up to six).
+model ProfilePin {
+  id        String   @id @default(cuid())
+  userId    String
+  repoId    String
+  position  Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, repoId])
+  @@index([userId, position])
+}
+
+// One user following another (#257).
+model Follow {
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
 }
 
 model Star {

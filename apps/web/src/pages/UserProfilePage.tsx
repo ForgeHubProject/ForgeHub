@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   avatarSrc,
   deleteAvatar,
@@ -7,6 +7,7 @@ import {
   getPublicProfile,
   getReadme,
   getUserRepos,
+  setFollowing,
   updateMyProfile,
   uploadAvatar,
 } from "../api";
@@ -22,11 +23,15 @@ import {
   EmptyState,
   Field,
   Icons,
+  Select,
   Skeleton,
+  TabItem,
+  TabNav,
   TextInput,
   Textarea,
   useToast,
 } from "../ui";
+import { PeopleList, PinnedRepos, StarsList } from "./profileParts";
 import { CalendarIcon, LinkIcon, LocationIcon, RepoIcon, RepoRow, RowList } from "./listShared";
 
 type Props = {
@@ -41,6 +46,30 @@ type Props = {
 const AVATAR_ACCEPT = "image/png,image/jpeg,image/webp";
 
 const EDIT_FORM_ID = "edit-profile-form";
+
+function OrgIcon() {
+  return (
+    <svg aria-hidden width={14} height={14} viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
+      <path d="M1.75 16A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0h8.5C11.216 0 12 .784 12 1.75v12.5c0 .085-.006.168-.018.25h2.268a.25.25 0 0 0 .25-.25V8.285a.25.25 0 0 0-.111-.208l-1.055-.703a.749.749 0 1 1 .832-1.248l1.055.703c.487.325.779.871.779 1.456v5.965A1.75 1.75 0 0 1 14.25 16h-3.5a.766.766 0 0 1-.197-.026c-.099.017-.2.026-.303.026h-3a.75.75 0 0 1-.75-.75V14h-1v1.25a.75.75 0 0 1-.75.75Zm-.25-1.75c0 .138.112.25.25.25H4v-1.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 .75.75v1.25h2.25a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25ZM3.75 6h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3 3.75A.75.75 0 0 1 3.75 3h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 3.75Zm4 3A.75.75 0 0 1 7.75 6h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 7 6.75ZM7.75 3h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3 9.75A.75.75 0 0 1 3.75 9h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 9.75ZM7.75 9h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5Z" />
+    </svg>
+  );
+}
+
+function BookIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.062 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm7.75 3.19v8.502A3.75 3.75 0 0111.006 11.5h3.744V2.5h-3.5a2.25 2.25 0 00-2.25 2.25v.19zm-1.5 8.502V4.75A2.25 2.25 0 004.75 2.5H1.25v9h4.008a3.75 3.75 0 01.992.132V13.442z" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25zm0 2.445L6.615 5.5a.75.75 0 01-.564.41l-3.097.45 2.24 2.184a.75.75 0 01.216.664l-.528 3.084 2.769-1.456a.75.75 0 01.698 0l2.77 1.456-.53-3.084a.75.75 0 01.216-.664l2.24-2.183-3.096-.45a.75.75 0 01-.564-.41L8 2.694v.001z" />
+    </svg>
+  );
+}
 
 function joinedLabel(iso: string): string {
   const d = new Date(iso);
@@ -63,6 +92,13 @@ function EditProfileDialog({
   const [bio, setBio] = useState(profile.bio ?? "");
   const [location, setLocation] = useState(profile.location ?? "");
   const [website, setWebsite] = useState(profile.website ?? "");
+  // Profile (#257).
+  const [pronouns, setPronouns] = useState(profile.pronouns ?? "");
+  const [company, setCompany] = useState(profile.company ?? "");
+  const [links, setLinks] = useState<string[]>([0, 1, 2, 3].map((i) => profile.socialLinks?.[i] ?? ""));
+  const [statusEmoji, setStatusEmoji] = useState(profile.status?.emoji ?? "");
+  const [statusText, setStatusText] = useState(profile.status?.text ?? "");
+  const [statusFor, setStatusFor] = useState("never");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -72,7 +108,14 @@ function EditProfileDialog({
     setSaving(true);
     setError(null);
     try {
-      const res = await updateMyProfile(token, { displayName, bio, location, website });
+      const hours = ({ never: 0, day: 24, week: 24 * 7 } as Record<string, number>)[statusFor] ?? 0;
+      const res = await updateMyProfile(token, {
+        displayName, bio, location, website, pronouns, company,
+        socialLinks: links.map((l) => l.trim()).filter(Boolean),
+        status: statusEmoji.trim() || statusText.trim()
+          ? { emoji: statusEmoji, text: statusText, expiresAt: hours ? new Date(Date.now() + hours * 3_600_000).toISOString() : null }
+          : null,
+      });
       onSave({ ...profile, ...res.user });
       toast("Profile updated", { tone: "success" });
     } catch (err) {
@@ -145,6 +188,38 @@ function EditProfileDialog({
             />
           )}
         </Field>
+        <Field label="Pronouns" htmlFor="edit-pronouns">
+          {(id) => <TextInput id={id} value={pronouns} onChange={(e) => setPronouns(e.target.value)} placeholder="they/them" maxLength={30} />}
+        </Field>
+        <Field label="Company" htmlFor="edit-company">
+          {(id) => <TextInput id={id} value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Where you work" maxLength={100} />}
+        </Field>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-fh-sm font-semibold text-fh-fg">Social accounts</legend>
+          {links.map((l, i) => (
+            <TextInput
+              key={i}
+              aria-label={`Social account ${i + 1}`}
+              type="url"
+              value={l}
+              onChange={(e) => setLinks((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+              placeholder="https://…"
+              maxLength={200}
+            />
+          ))}
+        </fieldset>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-fh-sm font-semibold text-fh-fg">Status</legend>
+          <div className="flex gap-2">
+            <TextInput aria-label="Status emoji" value={statusEmoji} onChange={(e) => setStatusEmoji(e.target.value)} placeholder="🙂" maxLength={16} className="w-16 text-center" />
+            <TextInput aria-label="Status" value={statusText} onChange={(e) => setStatusText(e.target.value)} placeholder="What's happening?" maxLength={80} />
+          </div>
+          <Select aria-label="Clear status after" value={statusFor} onChange={(e) => setStatusFor(e.target.value)}>
+            <option value="never">Don't clear</option>
+            <option value="day">Clear after a day</option>
+            <option value="week">Clear after a week</option>
+          </Select>
+        </fieldset>
         {error && (
           <p className="rounded-md bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg">{error}</p>
         )}
@@ -186,6 +261,26 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   const { toast } = useToast();
 
   const isOwnProfile = user.handle === handle;
+  // GitHub's profile tabs (#257), kept in the URL.
+  const [params] = useSearchParams();
+  const tabParam = params.get("tab") ?? "";
+  const tab = ["repositories", "stars", "followers", "following"].includes(tabParam) ? tabParam : "overview";
+  const [repoType, setRepoType] = useState("all");
+  const [repoSort, setRepoSort] = useState("updated");
+  const [followBusy, setFollowBusy] = useState(false);
+
+  async function toggleFollow() {
+    if (!profile || !handle) return;
+    setFollowBusy(true);
+    try {
+      const res = await setFollowing(token, handle, !profile.viewerFollows);
+      setProfile({ ...profile, viewerFollows: res.following, followers: res.followers });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't update following", { tone: "danger" });
+    } finally {
+      setFollowBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!handle) return;
@@ -265,11 +360,22 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
 
   const filteredRepos = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return repos;
-    return repos.filter(
-      (r) => r.name.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q),
+    const matched = repos.filter(
+      (r) =>
+        (!q || r.name.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q)) &&
+        (repoType === "all" ||
+          (repoType === "sources" && !r.parent) ||
+          (repoType === "forks" && !!r.parent) ||
+          (repoType === "archived" && !!r.archived)),
     );
-  }, [filter, repos]);
+    const order: Record<string, (a: Repo, b: Repo) => number> = {
+      updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
+      name: (a, b) => a.name.localeCompare(b.name),
+      stars: (a, b) => (b.starCount ?? 0) - (a.starCount ?? 0),
+    };
+    return [...matched].sort(order[repoSort] ?? order.updated);
+  }, [filter, repos, repoType, repoSort]);
+  const filtering = filter.trim() !== "" || repoType !== "all";
 
   return (
     <div className="flex min-h-screen flex-col bg-fh-canvas">
@@ -330,17 +436,47 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                     {profile.displayName}
                   </h1>
                 )}
-                <p className="text-fh-xl text-fh-fg-muted">@{profile.handle}</p>
+                <p className="text-fh-xl text-fh-fg-muted">
+                  @{profile.handle}
+                  {profile.pronouns && <span className="text-fh-base"> · {profile.pronouns}</span>}
+                </p>
+                {profile.status && (
+                  <p className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border border-fh-border bg-fh-surface px-3 py-1 text-fh-sm text-fh-fg">
+                    {profile.status.emoji && <span aria-hidden>{profile.status.emoji}</span>}
+                    <span className="truncate">{profile.status.text}</span>
+                  </p>
+                )}
               </div>
 
-              {isOwnProfile && (
+              {isOwnProfile ? (
                 <Button variant="default" block className="mt-4" onClick={() => setShowEdit(true)}>
                   Edit profile
                 </Button>
+              ) : (
+                <Button variant={profile.viewerFollows ? "default" : "primary"} block className="mt-4" loading={followBusy} onClick={() => void toggleFollow()}>
+                  {profile.viewerFollows ? "Unfollow" : "Follow"}
+                </Button>
               )}
+
+              <p className="mt-3 text-fh-sm text-fh-fg-muted">
+                <Link to="?tab=followers" className="text-fh-fg-muted no-underline hover:text-fh-accent-fg">
+                  <span className="font-semibold text-fh-fg">{profile.followers ?? 0}</span> {profile.followers === 1 ? "follower" : "followers"}
+                </Link>
+                {" · "}
+                <Link to="?tab=following" className="text-fh-fg-muted no-underline hover:text-fh-accent-fg">
+                  <span className="font-semibold text-fh-fg">{profile.following ?? 0}</span> following
+                </Link>
+              </p>
 
               <div className="mt-4 space-y-2 text-fh-base">
                 {profile.bio && <p className="text-fh-fg">{profile.bio}</p>}
+
+                {profile.company && (
+                  <div className="flex items-center gap-2 text-fh-fg-muted">
+                    <OrgIcon />
+                    <span>{profile.company}</span>
+                  </div>
+                )}
 
                 {profile.location && (
                   <div className="flex items-center gap-2 text-fh-fg-muted">
@@ -363,6 +499,15 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                   </div>
                 )}
 
+                {(profile.socialLinks ?? []).map((l) => (
+                  <div key={l} className="flex items-center gap-2 text-fh-fg-muted">
+                    <LinkIcon size={14} className="shrink-0" />
+                    <a href={l} target="_blank" rel="noopener noreferrer me" className="truncate text-fh-accent-fg hover:underline">
+                      {l.replace(/^https?:\/\//, "")}
+                    </a>
+                  </div>
+                ))}
+
                 <div className="flex items-center gap-2 text-fh-fg-muted">
                   <CalendarIcon size={14} className="shrink-0" />
                   <span>Joined {joinedLabel(profile.createdAt)}</span>
@@ -370,98 +515,132 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
               </div>
             </aside>
 
-            {/* Main — profile README, contributions, repositories */}
+            {/* Main — GitHub's profile tabs */}
             <main className="min-w-0 flex-1">
-              {/* Profile README (from the handle/handle repo, when present + readable) */}
-              {readme && (
-                <div className="mb-6 overflow-hidden rounded-md border border-fh-border bg-fh-surface">
-                  <div className="flex items-center gap-2 border-b border-fh-border bg-fh-canvas px-4 py-2.5">
-                    <RepoIcon size={14} className="text-fh-fg-muted" />
-                    <span className="text-fh-sm font-semibold text-fh-fg">
-                      {profile.handle}/{profile.handle}
-                    </span>
-                  </div>
-                  <div className="px-6 py-6 md:px-8">
-                    <MarkdownRenderer content={readme.content} />
-                  </div>
-                </div>
+              <TabNav aria-label="Profile" className="mb-6">
+                <TabItem to="?" active={tab === "overview"} icon={<BookIcon />}>Overview</TabItem>
+                <TabItem to="?tab=repositories" active={tab === "repositories"} icon={<RepoIcon size={16} />} count={repos.length}>Repositories</TabItem>
+                <TabItem to="?tab=stars" active={tab === "stars"} icon={<StarIcon />}>Stars</TabItem>
+              </TabNav>
+
+              {tab === "overview" && (
+                <>
+                  {/* Profile README (from the handle/handle repo, when present + readable) */}
+                  {readme && (
+                    <div className="mb-6 overflow-hidden rounded-md border border-fh-border bg-fh-surface">
+                      <div className="flex items-center gap-2 border-b border-fh-border bg-fh-canvas px-4 py-2.5">
+                        <RepoIcon size={14} className="text-fh-fg-muted" />
+                        <span className="text-fh-sm font-semibold text-fh-fg">
+                          {profile.handle}/{profile.handle}
+                        </span>
+                      </div>
+                      <div className="px-6 py-6 md:px-8">
+                        <MarkdownRenderer content={readme.content} />
+                      </div>
+                    </div>
+                  )}
+
+                  <PinnedRepos token={token} handle={profile.handle} own={isOwnProfile} candidates={repos} />
+
+                  {/* Contribution calendar heatmap */}
+                  {contrib && (
+                    <section className="mb-6" aria-label="Contribution activity">
+                      <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">
+                        {contrib.total} {contrib.total === 1 ? "contribution" : "contributions"} in the last year
+                      </h2>
+                      <div className="rounded-md border border-fh-border bg-fh-surface p-4">
+                        <ContributionHeatmap data={contrib} />
+                      </div>
+                    </section>
+                  )}
+
+                </>
               )}
 
-              {/* Contribution calendar heatmap */}
-              {contrib && (
-                <section className="mb-6" aria-label="Contribution activity">
-                  <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">
-                    {contrib.total} {contrib.total === 1 ? "contribution" : "contributions"} in the last year
-                  </h2>
-                  <div className="rounded-md border border-fh-border bg-fh-surface p-4">
-                    <ContributionHeatmap data={contrib} />
+              {tab === "repositories" && (
+                <>
+                  <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-fh-border pb-4">
+                    {repos.length > 0 && (
+                      <div className="relative w-full sm:flex-1">
+                        <Icons.SearchIcon
+                          size={14}
+                          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fh-fg-muted"
+                        />
+                        <TextInput
+                          sizing="sm"
+                          className="pl-8"
+                          placeholder="Find a repository…"
+                          aria-label="Find a repository"
+                          value={filter}
+                          onChange={(e) => setFilter(e.target.value)}
+                        />
+                      </div>
+                    )}
+                    {repos.length > 0 && (
+                      <div className="flex gap-2">
+                        <Select sizing="sm" aria-label="Type" value={repoType} onChange={(e) => setRepoType(e.target.value)}>
+                          <option value="all">Type: All</option>
+                          <option value="sources">Sources</option>
+                          <option value="forks">Forks</option>
+                          <option value="archived">Archived</option>
+                        </Select>
+                        <Select sizing="sm" aria-label="Sort" value={repoSort} onChange={(e) => setRepoSort(e.target.value)}>
+                          <option value="updated">Sort: Last updated</option>
+                          <option value="name">Name</option>
+                          <option value="stars">Stars</option>
+                        </Select>
+                      </div>
+                    )}
                   </div>
-                </section>
+
+                  {repos.length === 0 ? (
+                    <EmptyState
+                      bordered
+                      icon={<RepoIcon size={28} />}
+                      title={isOwnProfile ? "You don't have any repositories yet" : "No repositories to show"}
+                      description={
+                        isOwnProfile
+                          ? "When you create repositories, they'll show up here on your profile."
+                          : `@${profile.handle} doesn't have any public repositories yet.`
+                      }
+                    />
+                  ) : filteredRepos.length === 0 && filtering ? (
+                    <EmptyState
+                      bordered
+                      icon={<Icons.SearchIcon size={28} />}
+                      title="No matching repositories"
+                      description={filter.trim() ? `No repository matches “${filter.trim()}”.` : "No repository of this type."}
+                      actions={
+                        <Button variant="default" onClick={() => { setFilter(""); setRepoType("all"); }}>
+                          Clear filter
+                        </Button>
+                      }
+                    />
+                  ) : (
+                    <RowList aria-label={`Repositories owned by ${profile.handle}`}>
+                      {filteredRepos.map((repo) => (
+                        <RepoRow
+                          key={repo.id}
+                          to={`/${repo.ownerHandle ?? profile.handle}/${repo.name}`}
+                          name={repo.name}
+                          description={repo.description}
+                          visibility={repo.visibility}
+                          updatedAt={repo.updatedAt}
+                          topics={repo.topics}
+                        />
+                      ))}
+                    </RowList>
+                  )}
+
+                </>
               )}
 
-              <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-fh-border pb-4">
-                <h2 className="flex items-center gap-2 text-fh-lg font-semibold text-fh-fg">
-                  <RepoIcon className="text-fh-fg-muted" />
-                  Repositories
-                  <span className="inline-flex h-[18px] min-w-[20px] items-center justify-center rounded-full bg-fh-neutral-muted px-1.5 text-fh-xs font-semibold text-fh-fg-muted">
-                    {repos.length}
-                  </span>
-                </h2>
-                {repos.length > 0 && (
-                  <div className="relative ml-auto w-full sm:w-56">
-                    <Icons.SearchIcon
-                      size={14}
-                      className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fh-fg-muted"
-                    />
-                    <TextInput
-                      sizing="sm"
-                      className="pl-8"
-                      placeholder="Find a repository…"
-                      aria-label="Find a repository"
-                      value={filter}
-                      onChange={(e) => setFilter(e.target.value)}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {repos.length === 0 ? (
-                <EmptyState
-                  bordered
-                  icon={<RepoIcon size={28} />}
-                  title={isOwnProfile ? "You don't have any repositories yet" : "No repositories to show"}
-                  description={
-                    isOwnProfile
-                      ? "When you create repositories, they'll show up here on your profile."
-                      : `@${profile.handle} doesn't have any public repositories yet.`
-                  }
-                />
-              ) : filteredRepos.length === 0 ? (
-                <EmptyState
-                  bordered
-                  icon={<Icons.SearchIcon size={28} />}
-                  title="No matching repositories"
-                  description={`No repository matches “${filter.trim()}”.`}
-                  actions={
-                    <Button variant="default" onClick={() => setFilter("")}>
-                      Clear filter
-                    </Button>
-                  }
-                />
-              ) : (
-                <RowList aria-label={`Repositories owned by ${profile.handle}`}>
-                  {filteredRepos.map((repo) => (
-                    <RepoRow
-                      key={repo.id}
-                      to={`/${repo.ownerHandle ?? profile.handle}/${repo.name}`}
-                      name={repo.name}
-                      description={repo.description}
-                      visibility={repo.visibility}
-                      updatedAt={repo.updatedAt}
-                      topics={repo.topics}
-                    />
-                  ))}
-                </RowList>
+              {tab === "stars" && <StarsList token={token} handle={profile.handle} />}
+              {(tab === "followers" || tab === "following") && (
+                <>
+                  <h2 className="mb-3 text-fh-lg font-semibold text-fh-fg">{tab === "followers" ? "Followers" : "Following"}</h2>
+                  <PeopleList token={token} handle={profile.handle} kind={tab} />
+                </>
               )}
             </main>
           </div>
