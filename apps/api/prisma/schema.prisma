@@ -172,6 +172,16 @@ model Repo {
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
 
+  // More repository settings (#256): features on or off, pull request behaviour,
+  // and the default merge and squash commit messages ("default", "title",
+  // "title_description"; squash also "title_commits").
+  hasIssues           Boolean   @default(true)
+  hasProjects         Boolean   @default(true)
+  allowAutoMerge      Boolean   @default(true)
+  autoCloseIssues     Boolean   @default(true)
+  mergeCommitMessage  String    @default("default")
+  squashCommitMessage String    @default("default")
+
   // Formats on the default branch (#257, Explore's format filter): a JSON array of
   // official FHR handler ids, most files first. Refreshed on push; null until then.
   formats             String?

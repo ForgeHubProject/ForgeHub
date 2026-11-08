@@ -94,6 +94,16 @@ export const updateRepoBodySchema = z.object({
   defaultBranch: z.string().min(1).max(255).regex(/^[\w/._-]+$/).optional(),
   archived: z.boolean().optional(),
   deleteBranchOnMerge: z.boolean().optional(),
+  hasIssues: z.boolean().optional(),
+  hasProjects: z.boolean().optional(),
+  allowAutoMerge: z.boolean().optional(),
+  autoCloseIssues: z.boolean().optional(),
+  mergeCommitMessage: z.enum(["default", "title", "title_description"]).optional(),
+  squashCommitMessage: z.enum(["default", "title", "title_commits", "title_description"]).optional(),
+});
+
+export const transferRepoBodySchema = z.object({
+  newOwner: handleSchema,
 });
 
 export const renameRepoBodySchema = z.object({
