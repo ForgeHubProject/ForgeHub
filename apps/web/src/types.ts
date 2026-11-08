@@ -138,6 +138,24 @@ export type BlockedUser = { handle: string; displayName: string | null; avatarKe
 /** A profile's status (#257): an emoji and a short text, until it expires. */
 export type ProfileStatus = { emoji: string | null; text: string | null; expiresAt: string | null };
 
+/** A repository's Insights (#256), from its history at one ref. */
+export type RepoInsights = {
+  ref: string | null;
+  sha: string | null;
+  weeks: Array<{ week: string; commits: number; additions: number; deletions: number }>;
+  authors: Array<{
+    name: string;
+    commits: number;
+    additions: number;
+    deletions: number;
+    weeks: Record<string, number>;
+    user: { handle: string; displayName: string | null; avatarKey: string | null } | null;
+  }>;
+  days: number[][];
+  scanned: number;
+  truncated: boolean;
+};
+
 /** One branch update on a repository's Activity page (#256). */
 export type RefActivity = {
   id: string;

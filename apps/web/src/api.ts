@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, RefActivity, NotificationPrefs, NotificationReasonKey, BlockedUser, InboxView, InboxReason, InboxAction, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, RefActivity, RepoInsights, NotificationPrefs, NotificationReasonKey, BlockedUser, InboxView, InboxReason, InboxAction, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -466,6 +466,11 @@ export async function createRepo(
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined }),
   });
+}
+
+/** A repository's Insights (#256): weekly commits, code frequency, contributors. */
+export async function getRepoInsights(token: string | null, handle: string, repoName: string, ref?: string): Promise<RepoInsights> {
+  return req(`/repos/${handle}/${repoName}/insights${ref ? `?ref=${encodeURIComponent(ref)}` : ""}`, { token: token ?? undefined });
 }
 
 /** A repository's Activity (#256): branch updates, newest first, a page at a time. */
