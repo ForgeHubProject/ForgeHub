@@ -5,7 +5,7 @@ import { z } from "zod";
  * profile, so a user named "issues" would hide /issues (#255).
  */
 export const RESERVED_HANDLES = new Set([
-  "about", "explore", "feed", "import", "issues", "login", "logout", "new", "notifications",
+  "about", "explore", "feed", "ghost", "import", "issues", "login", "logout", "new", "notifications",
   "organizations", "orgs", "pulls", "search", "settings", "stars", "topics", "trending",
 ]);
 

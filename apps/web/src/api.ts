@@ -304,6 +304,21 @@ export async function updateMyProfile(
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
 }
 
+/** Change your username (#258); your repositories move with you and their old URLs redirect. */
+export async function renameAccount(token: string, handle: string): Promise<{ handle: string }> {
+  return req("/users/me/rename", { method: "POST", token, body: JSON.stringify({ handle }) });
+}
+
+/** Everything you made here, as JSON (#258). */
+export async function exportAccount(token: string): Promise<unknown> {
+  return req("/users/me/export", { token });
+}
+
+/** Delete your account (#258); what you wrote elsewhere stays, credited to the ghost. */
+export async function deleteAccount(token: string, password: string, confirm: string): Promise<void> {
+  return req("/users/me", { method: "DELETE", token, body: JSON.stringify({ password, confirm }) });
+}
+
 /** Explore (#257): public repositories, popular or recently updated, by format family and topic. */
 export async function exploreRepos(
   token: string | null,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { listSessions, revokeOtherSessions, revokeSession } from "../api";
-import { Header } from "../components/Header";
+import { SettingsLayout } from "../components/SettingsLayout";
 import { deviceLabel } from "../lib/deviceLabel";
 import type { SessionInfo, User } from "../types";
 import {
@@ -71,10 +71,8 @@ export function SettingsSessionsPage({ token, user, onLogout }: Props) {
   const others = sessions?.filter((s) => !s.current) ?? [];
 
   return (
-    <div className="min-h-screen bg-fh-canvas">
-      <Header user={user} onLogout={onLogout} token={token} />
-
-      <div className="max-w-[900px] mx-auto px-4 py-8">
+    <SettingsLayout token={token} user={user} onLogout={onLogout}>
+      <div>
         <PageHeading
           title="Active sessions"
           icon={<Icon path={DEVICE} size={20} />}
@@ -163,6 +161,6 @@ export function SettingsSessionsPage({ token, user, onLogout }: Props) {
           onCancel={() => setConfirmAll(false)}
         />
       )}
-    </div>
+    </SettingsLayout>
   );
 }
