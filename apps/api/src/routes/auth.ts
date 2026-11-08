@@ -29,6 +29,7 @@ type DbUser = {
   pronouns?: string | null; company?: string | null; socialLinks?: string | null;
   statusEmoji?: string | null; statusText?: string | null; statusExpiresAt?: Date | null;
   privateProfile?: boolean;
+  showEmail?: boolean; timezone?: string | null;
 };
 
 /** The profile fields #257 added, as the API shows them; an expired status reads as none. */
@@ -65,6 +66,16 @@ function isLink(s: unknown): s is string {
   }
 }
 
+/** An IANA time zone the runtime knows ("Europe/Istanbul"). */
+function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz.length <= 64;
+  } catch {
+    return false;
+  }
+}
+
 function publicUser(u: DbUser) {
   return {
     id: u.id,
@@ -78,6 +89,8 @@ function publicUser(u: DbUser) {
     avatarKey: u.avatarKey,
     ...profileExtras(u),
     privateProfile: u.privateProfile ?? false,
+    showEmail: u.showEmail ?? false,
+    timezone: u.timezone ?? null,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -92,6 +105,9 @@ function publicProfile(u: DbUser) {
     website: u.website,
     avatarKey: u.avatarKey,
     ...profileExtras(u),
+    // Profile (#257): the email only when they chose to show it; their time zone for "local time".
+    email: u.showEmail ? u.email : null,
+    timezone: u.timezone ?? null,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -159,20 +175,35 @@ export async function authRoutes(app: FastifyInstance) {
     // A private profile (#257) hides its status and follow counts from everyone
     // else; whether the viewer follows them is the viewer's own to know.
     if (user.privateProfile && viewer !== user.id) {
-      return { ...publicProfile(user), status: null, privateProfile: true, followers: null, following: null, viewerFollows, viewerBlocks };
+      return { ...publicProfile(user), status: null, privateProfile: true, followers: null, following: null, organizations: [], viewerFollows, viewerBlocks };
     }
-    const [followers, following] = await Promise.all([
+    const [followers, following, memberships] = await Promise.all([
       prisma.follow.count({ where: { followingId: user.id } }),
       prisma.follow.count({ where: { followerId: user.id } }),
+      // Organizations they chose to show (#257).
+      prisma.orgMembership.findMany({
+        where: { userId: user.id, public: true },
+        select: { org: { select: { handle: true, displayName: true } } },
+        orderBy: { org: { handle: "asc" } },
+      }),
     ]);
-    return { ...publicProfile(user), privateProfile: user.privateProfile ?? false, followers, following, viewerFollows, viewerBlocks };
+    return {
+      ...publicProfile(user),
+      privateProfile: user.privateProfile ?? false,
+      followers,
+      following,
+      organizations: memberships.map((m) => m.org),
+      viewerFollows,
+      viewerBlocks,
+    };
   });
 
   // Update own profile
   app.patch("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { displayName, bio, location, website, emailNotifications, pronouns, company, socialLinks, status, privateProfile } = request.body as {
+    const { displayName, bio, location, website, emailNotifications, pronouns, company, socialLinks, status, privateProfile, showEmail, timezone } = request.body as {
       displayName?: string; bio?: string; location?: string; website?: string; emailNotifications?: boolean;
       pronouns?: string; company?: string; socialLinks?: unknown; privateProfile?: boolean;
+      showEmail?: boolean; timezone?: string | null;
       status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
     };
 
@@ -200,6 +231,11 @@ export async function authRoutes(app: FastifyInstance) {
     if (website !== undefined) data.website = website.trim() || null;
     if (emailNotifications !== undefined) data.emailNotifications = Boolean(emailNotifications);
     if (privateProfile !== undefined) data.privateProfile = Boolean(privateProfile);
+    if (showEmail !== undefined) data.showEmail = Boolean(showEmail);
+    if (timezone !== undefined) {
+      if (timezone && !isTimeZone(timezone)) return reply.status(400).send({ error: "Unknown time zone" });
+      data.timezone = timezone || null;
+    }
 
     if (Object.keys(data).length === 0) {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user.sub } });
