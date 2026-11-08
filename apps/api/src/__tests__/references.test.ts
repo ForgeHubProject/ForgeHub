@@ -86,7 +86,7 @@ describe("parseReferences — code is not parsed", () => {
 
 describe("parseReferences — empty/edge", () => {
   it("returns empty structure for null/empty bodies", () => {
-    expect(parseReferences(null)).toEqual({ numbers: [], pulls: [], mentions: [], closing: [] });
-    expect(parseReferences("")).toEqual({ numbers: [], pulls: [], mentions: [], closing: [] });
+    expect(parseReferences(null)).toEqual({ numbers: [], pulls: [], mentions: [], teamMentions: [], closing: [] });
+    expect(parseReferences("")).toEqual({ numbers: [], pulls: [], mentions: [], teamMentions: [], closing: [] });
   });
 });

@@ -132,7 +132,7 @@ export type PublicProfile = {
 export type SavedReply = { id: string; title: string; body: string; updatedAt: string };
 
 /** Notification reasons, as the API names them. */
-export type NotificationReasonKey = "SUBSCRIBED" | "COMMENT" | "MENTIONED" | "ASSIGNED" | "REVIEW_REQUESTED";
+export type NotificationReasonKey = "SUBSCRIBED" | "COMMENT" | "MENTIONED" | "TEAM_MENTIONED" | "ASSIGNED" | "REVIEW_REQUESTED";
 
 /** Where each reason reaches you (#258); email also needs the master switch. */
 export type NotificationPrefs = {
@@ -908,7 +908,7 @@ export type Notification = {
   subjectType: "issue" | "pull_request" | "release";
   subjectId: string;
   subjectTitle: string;
-  reason: "assigned" | "comment" | "review_requested" | "subscribed" | "mentioned";
+  reason: "assigned" | "comment" | "review_requested" | "subscribed" | "mentioned" | "team_mentioned";
   read: boolean;
   repo: string;
   updatedAt: string;
@@ -923,7 +923,7 @@ export type Notification = {
 
 /** The inbox's views and filters (#258). */
 export type InboxView = "inbox" | "saved" | "done";
-export type InboxReason = "assigned" | "participating" | "mentioned" | "review_requested" | "watching";
+export type InboxReason = "assigned" | "participating" | "mentioned" | "team_mentioned" | "review_requested" | "watching";
 export type InboxAction = "read" | "unread" | "done" | "undone" | "save" | "unsave" | "unsubscribe";
 
 // ─── Stars + watching + feed (issue #88) ─────────────────────────────────────────

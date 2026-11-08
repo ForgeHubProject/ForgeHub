@@ -340,7 +340,7 @@ function ToolButton({ label, onClick, children }: { label: string; onClick: () =
 }
 
 type Sources = {
-  people: Array<{ handle: string; displayName: string | null }>;
+  people: Array<{ handle: string; displayName: string | null; team?: boolean }>;
   refs: Array<{ number: number; title: string; kind: "issue" | "pull"; state: string }>;
 };
 
@@ -353,7 +353,11 @@ function useSuggestionSources(token: string | null, repo: RepoRef | undefined, c
     if (char === "@" && people === null) {
       setPeople([]);
       listRepoMembers(token, repo.owner, repo.name)
-        .then((d) => setPeople(d.members.map((m) => ({ handle: m.handle, displayName: m.displayName }))))
+        .then((d) => setPeople([
+          ...d.members.map((m) => ({ handle: m.handle, displayName: m.displayName })),
+          // Teams (#253): @org/team notifies its members.
+          ...(d.teams ?? []).map((t) => ({ handle: t.handle, displayName: t.name, team: true })),
+        ]))
         .catch(() => {});
     }
     if (char === "#" && refs === null) {
@@ -379,7 +383,7 @@ function suggestionsFor(trigger: Trigger, sources: Sources): Suggestion[] {
       .map((p) => ({
         key: p.handle,
         insert: `@${p.handle}`,
-        label: <span className="inline-flex items-center gap-2"><Avatar name={p.handle} size={16} /><b>{p.handle}</b> {p.displayName && <span className="opacity-70">{p.displayName}</span>}</span>,
+        label: <span className="inline-flex items-center gap-2"><Avatar name={p.handle} size={16} square={p.team} /><b>{p.handle}</b> {p.displayName && <span className="opacity-70">{p.displayName}</span>}</span>,
       }));
   }
   if (trigger.char === "#") {

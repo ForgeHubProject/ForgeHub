@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { reasonPrefs, type NotificationReason } from "../notifications-service.js";
 
-const REASONS: NotificationReason[] = ["SUBSCRIBED", "COMMENT", "MENTIONED", "ASSIGNED", "REVIEW_REQUESTED"];
+const REASONS: NotificationReason[] = ["SUBSCRIBED", "COMMENT", "MENTIONED", "TEAM_MENTIONED", "ASSIGNED", "REVIEW_REQUESTED"];
 const MAX_REPLIES = 100;
 const MAX_REPLY_BODY = 65_536;
 

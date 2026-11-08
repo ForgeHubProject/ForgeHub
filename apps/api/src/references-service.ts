@@ -2,7 +2,7 @@ import { prisma } from "./prisma.js";
 import { parseReferences } from "./references.js";
 import { recordEvent, type ConversationSubjectType } from "./timeline-service.js";
 import { notifyUser } from "./notifications-service.js";
-import { type RepoAccessInput } from "./repo-access.js";
+import { canRead, type RepoAccessInput } from "./repo-access.js";
 
 export type CrossRefSourceType =
   | "ISSUE"
@@ -19,10 +19,10 @@ export type CrossRefSourceType =
  */
 type RepoForRefs = RepoAccessInput & { id: string };
 
+// The full read rule (collaborators, org owners, team grants): a narrower check
+// here used to skip people who read a private org repository through a team.
 function canUserRead(repo: RepoForRefs, userId: string): boolean {
-  if (repo.visibility === "PUBLIC") return true;
-  if (repo.ownerId === userId) return true;
-  return repo.collaborators.some((c) => c.userId === userId);
+  return canRead(repo, userId);
 }
 
 async function resolveHandle(actorId: string): Promise<string> {
@@ -161,9 +161,11 @@ export async function syncBodyReferences(p: SyncParams): Promise<void> {
   }
 
   // ── Mentions → notifications (once per reader, never the actor) ────────────────
+  const mentioned = new Set<string>();
   for (const handle of parsed.mentions) {
     const user = await prisma.user.findUnique({ where: { handle }, select: { id: true } });
     if (!user || user.id === p.actorId) continue;
+    mentioned.add(user.id);
     if (!canUserRead(p.repo, user.id)) continue;
     // The repo we already hold is the access row `notifyUser` would otherwise
     // load for itself, once per mention.
@@ -179,6 +181,41 @@ export async function syncBodyReferences(p: SyncParams): Promise<void> {
       },
       p.repo,
     );
+  }
+
+  // ── Team mentions (#253) → each member who can read, once ─────────────────────
+  // Only the repository's own organization's teams, and only from someone in that
+  // organization, so a stranger on a public repository can't page whole teams.
+  if (parsed.teamMentions.length > 0 && p.repo.orgId) {
+    const org = await prisma.organization.findUnique({
+      where: { id: p.repo.orgId },
+      select: { handle: true, memberships: { where: { userId: p.actorId }, select: { userId: true } } },
+    });
+    if (org && org.memberships.length > 0) {
+      const slugs = parsed.teamMentions.filter((t) => t.startsWith(`${org.handle}/`)).map((t) => t.slice(org.handle.length + 1));
+      const teams = slugs.length
+        ? await prisma.team.findMany({
+            where: { orgId: p.repo.orgId, slug: { in: slugs } },
+            select: { memberships: { select: { userId: true } } },
+          })
+        : [];
+      const members = new Set(teams.flatMap((t) => t.memberships.map((m) => m.userId)));
+      for (const userId of members) {
+        if (userId === p.actorId || mentioned.has(userId) || !canUserRead(p.repo, userId)) continue;
+        await notifyUser(
+          userId,
+          {
+            actorId: p.actorId,
+            repoId: p.repo.id,
+            subjectType: p.container.subjectType,
+            subjectId: p.container.id,
+            subjectTitle: p.container.title,
+            reason: "TEAM_MENTIONED",
+          },
+          p.repo,
+        );
+      }
+    }
   }
 }
 

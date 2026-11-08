@@ -21,6 +21,8 @@ export type ParsedReferences = {
   pulls: number[];
   /** Lower-cased, de-duplicated handles referenced with `@handle`. */
   mentions: string[];
+  /** "org/team" for each @org/team (#253). */
+  teamMentions: string[];
   /** Numbers a closing keyword (`closes #N`) points at. Subset of `numbers`. */
   closing: number[];
 };
@@ -33,6 +35,8 @@ const PULL_RE = /(^|[^0-9A-Za-z_])!(\d+)(?![0-9A-Za-z_])/g;
 // `path/@x` don't match). Handle is GitHub-shaped: alphanumerics + single hyphens,
 // no leading/trailing hyphen, ≤ 39 chars.
 const MENTION_RE = /(^|[^0-9A-Za-z_/])@([A-Za-z0-9](?:-?[A-Za-z0-9]){0,38})(?![A-Za-z0-9])/g;
+// A team mention (#253): @org/team-slug, the same left boundary as a person.
+const TEAM_MENTION_RE = /(^|[^0-9A-Za-z_/])@([A-Za-z0-9](?:-?[A-Za-z0-9]){0,38})\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?![A-Za-z0-9_.-])/g;
 // Closing keywords GitHub understands.
 const CLOSING_RE = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)(?![0-9A-Za-z_])/gi;
 
@@ -56,7 +60,7 @@ function uniqueNumbers(re: RegExp, text: string, group: number): number[] {
 
 /** Parse all references out of a markdown body. */
 export function parseReferences(body: string | null | undefined): ParsedReferences {
-  if (!body) return { numbers: [], pulls: [], mentions: [], closing: [] };
+  if (!body) return { numbers: [], pulls: [], mentions: [], teamMentions: [], closing: [] };
   const text = stripCode(body);
 
   const numbers = uniqueNumbers(NUMBER_RE, text, 2);
@@ -68,10 +72,16 @@ export function parseReferences(body: string | null | undefined): ParsedReferenc
     mentionSet.add(m[2].toLowerCase());
   }
 
+  const teams = new Set<string>();
+  for (const m of text.matchAll(TEAM_MENTION_RE)) {
+    teams.add(`${m[2].toLowerCase()}/${m[3].toLowerCase()}`);
+  }
+
   return {
     numbers,
     pulls,
     mentions: [...mentionSet],
+    teamMentions: [...teams],
     closing,
   };
 }
