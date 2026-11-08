@@ -149,19 +149,23 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user) return reply.status(404).send({ error: "User not found" });
     // Following (#257): the counts, and whether the viewer follows them.
     const viewer = (request as { user?: { sub: string } }).user?.sub;
-    const viewerFollows = viewer && viewer !== user.id
-      ? await prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer, followingId: user.id } } }).then(Boolean)
-      : false;
+    const [viewerFollows, viewerBlocks] = viewer && viewer !== user.id
+      ? await Promise.all([
+          prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer, followingId: user.id } } }).then(Boolean),
+          // Settings (#258): whether the viewer blocked them, for the profile's Block / Unblock.
+          prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: viewer, blockedId: user.id } } }).then(Boolean),
+        ])
+      : [false, false];
     // A private profile (#257) hides its status and follow counts from everyone
     // else; whether the viewer follows them is the viewer's own to know.
     if (user.privateProfile && viewer !== user.id) {
-      return { ...publicProfile(user), status: null, privateProfile: true, followers: null, following: null, viewerFollows };
+      return { ...publicProfile(user), status: null, privateProfile: true, followers: null, following: null, viewerFollows, viewerBlocks };
     }
     const [followers, following] = await Promise.all([
       prisma.follow.count({ where: { followingId: user.id } }),
       prisma.follow.count({ where: { followerId: user.id } }),
     ]);
-    return { ...publicProfile(user), privateProfile: user.privateProfile ?? false, followers, following, viewerFollows };
+    return { ...publicProfile(user), privateProfile: user.privateProfile ?? false, followers, following, viewerFollows, viewerBlocks };
   });
 
   // Update own profile
