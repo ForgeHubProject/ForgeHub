@@ -89,6 +89,7 @@ model User {
   savedReplies     SavedReply[]
   blocking         Block[]                    @relation("Blocker")
   blockedBy        Block[]                    @relation("Blocked")
+  threadMutes      ThreadMute[]
   watches          Watch[]
   reactions        Reaction[]
 }
@@ -726,6 +727,18 @@ model ProfilePin {
   @@index([userId, position])
 }
 
+// A conversation the user unsubscribed from (#258): its watching and comment
+// notifications stop; mentions, assignments and review requests still come.
+model ThreadMute {
+  userId    String
+  subjectId String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, subjectId])
+}
+
 // A reply saved for reuse in comment boxes (#258).
 model SavedReply {
   id        String   @id @default(cuid())
@@ -818,6 +831,9 @@ model Notification {
   subjectTitle String
   reason       NotificationReason
   read         Boolean                 @default(false)
+  // The inbox (#258): saved for later, and done (out of the inbox until new activity).
+  saved        Boolean                 @default(false)
+  done         Boolean                 @default(false)
   createdAt    DateTime                @default(now())
   updatedAt    DateTime                @updatedAt
 

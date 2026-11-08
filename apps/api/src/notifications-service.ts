@@ -14,6 +14,9 @@ export type EventParams = {
   reason: NotificationReason;
 };
 
+/** What unsubscribing from a conversation stops (#258); being addressed directly still notifies. */
+const MUTABLE_IN_THREAD: ReadonlySet<NotificationReason> = new Set(["SUBSCRIBED", "COMMENT"]);
+
 /** Whether a reason reaches the inbox and email (#258); a reason with no stored choice is on for both. */
 export function reasonPrefs(raw: string | null | undefined, reason: NotificationReason): { web: boolean; email: boolean } {
   let stored: unknown;
@@ -36,9 +39,15 @@ export function reasonPrefs(raw: string | null | undefined, reason: Notification
 async function notify(userId: string, p: EventParams): Promise<void> {
   const recipient = await prisma.user.findUnique({
     where: { id: userId },
-    select: { notificationPrefs: true, blocking: { where: { blockedId: p.actorId }, select: { blockedId: true } } },
+    select: {
+      notificationPrefs: true,
+      blocking: { where: { blockedId: p.actorId }, select: { blockedId: true } },
+      threadMutes: { where: { subjectId: p.subjectId }, select: { subjectId: true } },
+    },
   });
   if (recipient?.blocking?.length) return;
+  // An unsubscribed conversation stays quiet unless they're addressed directly.
+  if (recipient?.threadMutes?.length && MUTABLE_IN_THREAD.has(p.reason)) return;
   const prefs = reasonPrefs(recipient?.notificationPrefs, p.reason);
 
   let transitionedToUnread = true; // email-only: every event mails
@@ -50,7 +59,8 @@ async function notify(userId: string, p: EventParams): Promise<void> {
     await prisma.notification.upsert({
       where: { userId_subjectId: { userId, subjectId: p.subjectId } },
       create: { userId, repoId: p.repoId, subjectType: p.subjectType, subjectId: p.subjectId, subjectTitle: p.subjectTitle, reason: p.reason, read: false },
-      update: { read: false, reason: p.reason, subjectTitle: p.subjectTitle, updatedAt: new Date() },
+      // New activity brings a done thread back to the inbox.
+      update: { read: false, done: false, reason: p.reason, subjectTitle: p.subjectTitle, updatedAt: new Date() },
     });
     transitionedToUnread = !existing || existing.read === true;
   }

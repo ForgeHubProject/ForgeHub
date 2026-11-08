@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, NotificationPrefs, NotificationReasonKey, BlockedUser, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, NotificationPrefs, NotificationReasonKey, BlockedUser, InboxView, InboxReason, InboxAction, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -2207,6 +2207,27 @@ export async function listNotifications(
   all = false,
 ): Promise<{ notifications: Notification[] }> {
   return req(`/notifications${all ? "?all=true" : ""}`, { token });
+}
+
+/** The inbox (#258): a view, narrowed by reason, repository and unread; with per-repository counts. */
+export async function listInbox(
+  token: string,
+  opts: { view: InboxView; reason?: InboxReason; repo?: string; unread?: boolean },
+): Promise<{ notifications: Notification[]; repos: Array<{ repo: string; count: number }> }> {
+  const qs = new URLSearchParams({ view: opts.view });
+  if (opts.reason) qs.set("reason", opts.reason);
+  if (opts.repo) qs.set("repo", opts.repo);
+  if (opts.unread) qs.set("unread", "true");
+  return req(`/notifications?${qs}`, { token });
+}
+
+export async function notificationsAction(token: string, ids: string[], action: InboxAction): Promise<void> {
+  return req("/notifications/bulk", { method: "POST", token, body: JSON.stringify({ ids, action }) });
+}
+
+/** Repositories whose activity reaches you (#258): explicit watches and the ones you own or collaborate on. */
+export async function listWatching(token: string): Promise<{ repos: Array<{ repo: string; level: WatchLevel; explicit: boolean }> }> {
+  return req("/user/watching", { token });
 }
 
 export async function markAllNotificationsRead(token: string): Promise<void> {

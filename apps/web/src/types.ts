@@ -852,7 +852,19 @@ export type Notification = {
   read: boolean;
   repo: string;
   updatedAt: string;
+  /** The inbox (#258); optional so older payloads still parse. */
+  saved?: boolean;
+  done?: boolean;
+  /** The issue or pull request number and state, or the release tag. */
+  number?: number | null;
+  state?: "open" | "closed" | "merged" | null;
+  tag?: string | null;
 };
+
+/** The inbox's views and filters (#258). */
+export type InboxView = "inbox" | "saved" | "done";
+export type InboxReason = "assigned" | "participating" | "mentioned" | "review_requested" | "watching";
+export type InboxAction = "read" | "unread" | "done" | "undone" | "save" | "unsave" | "unsubscribe";
 
 // ─── Stars + watching + feed (issue #88) ─────────────────────────────────────────
 
