@@ -1626,6 +1626,19 @@ export async function listPullComments(
   return req(`/repos/${handle}/${repoName}/pulls/${number}/comments`, { token: token ?? undefined });
 }
 
+/** Edit or delete a conversation comment (#253): issue comments and pull request comments. */
+export async function updateComment(
+  token: string, handle: string, repoName: string, kind: "issues" | "pulls", number: number, commentId: string, body: string,
+): Promise<IssueComment> {
+  return req(`/repos/${handle}/${repoName}/${kind}/${number}/comments/${encodeURIComponent(commentId)}`, { method: "PATCH", token, body: JSON.stringify({ body }) });
+}
+
+export async function deleteComment(
+  token: string, handle: string, repoName: string, kind: "issues" | "pulls", number: number, commentId: string,
+): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/${kind}/${number}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE", token });
+}
+
 export async function createPullComment(
   token: string,
   handle: string,

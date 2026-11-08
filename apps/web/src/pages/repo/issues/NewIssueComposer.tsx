@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Avatar, Button, Field, Select, TextInput, useToast } from "../../../ui";
 import {
-  createIssue, listLabels, listMilestones, listRepoMembers, listRepoTemplates, RepoMember, updateIssue,
+  addProjectItem, createIssue, getProject, listBranches, listLabels, listMilestones, listProjects, listRepoMembers, listRepoTemplates, listTree,
+  RepoMember, updateIssue,
 } from "../../../api";
-import { MarkdownEditor } from "../../../components/MarkdownEditor";
-import type { IssueTemplate, Label, Milestone, User } from "../../../types";
+import { clearDraft, MarkdownEditor } from "../../../components/MarkdownEditor";
+import type { IssueTemplate, Label, Milestone, ProjectSummary, User } from "../../../types";
 import { canReplaceBody, resolveTemplateLabels } from "../templatesModel";
-import { SidebarAssignee, SidebarLabels, SidebarMilestone } from "./Sidebar";
+import { SidebarAssignee, SidebarLabels, SidebarMilestone, SidebarProjects } from "./Sidebar";
 import { ChevronLeftIcon } from "./icons";
 
 export function NewIssueComposer({ token, handle, repoName, user }: {
@@ -17,6 +18,7 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
   const { toast } = useToast();
   const base = `/${handle}/${repoName}`;
   const formRef = useRef<HTMLFormElement>(null);
+  const draftKey = `${handle}/${repoName}:new-issue`;
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -26,6 +28,11 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
   const [assignee, setAssignee] = useState<string | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [milestoneId, setMilestoneId] = useState<string | null>(null);
+  // Projects (#253): the new issue joins the chosen project's first column.
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectNumber, setProjectNumber] = useState<number | null>(null);
+  // The repo's contributing guidelines, linked above the form when there are some.
+  const [contributing, setContributing] = useState<string | null>(null);
   // GitHub's "Create more": stay on a fresh form after creating.
   const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -41,6 +48,8 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
     listMilestones(token, handle, repoName, "open").then((d) => setMilestones(d.milestones)).catch(() => {});
     // A repo without templates (or an unreadable one) just leaves the picker off.
     listRepoTemplates(token, handle, repoName).then((d) => setTemplates(d.issueTemplates)).catch(() => {});
+    listProjects(token, handle, repoName, "open").then((d) => setProjects(d.projects)).catch(() => {});
+    void findContributing(token, handle, repoName).then(setContributing);
   }, [token, handle, repoName]);
 
   /**
@@ -89,6 +98,13 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
           });
         } catch { /* non-fatal */ }
       }
+      if (projectNumber != null) {
+        try {
+          const project = await getProject(token, handle, repoName, projectNumber);
+          const column = project.columns[0];
+          if (column) await addProjectItem(token, handle, repoName, projectNumber, column.id, "issue", issue.number);
+        } catch { /* non-fatal */ }
+      }
       if (createMore) {
         toast(`Created issue #${issue.number}`, { tone: "success" });
         setTitle("");
@@ -98,6 +114,7 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
         setSubmitting(false);
         return;
       }
+      clearDraft(draftKey);
       navigate(`${base}/issues/${issue.number}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create issue");
@@ -116,6 +133,12 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
       </Link>
 
       <h1 className="text-fh-xl font-semibold text-fh-fg pb-4 mb-6 border-b border-fh-border">New issue</h1>
+      {contributing && (
+        <p className="mb-4 rounded-md border border-fh-border bg-fh-surface px-4 py-2.5 text-fh-sm text-fh-fg-muted">
+          Before you open an issue, read this repository's{" "}
+          <Link to={contributing} className="text-fh-accent-fg hover:underline">contributing guidelines</Link>.
+        </p>
+      )}
 
       <form ref={formRef} onSubmit={submit} className="flex flex-col lg:flex-row gap-6">
         {/* Main form */}
@@ -152,6 +175,7 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
               <div>
                 <p className="mb-1.5 text-fh-sm font-semibold text-fh-fg">Description</p>
                 <MarkdownEditor
+                  draftKey={draftKey}
                   rows={10}
                   placeholder="Leave a description"
                   value={body}
@@ -187,8 +211,30 @@ export function NewIssueComposer({ token, handle, repoName, user }: {
             canEdit
             base={base}
           />
+          {projects.length > 0 && (
+            <SidebarProjects projects={projects} selected={projectNumber} onSelect={setProjectNumber} base={base} />
+          )}
         </aside>
       </form>
     </div>
   );
+}
+
+/** Where the repo keeps CONTRIBUTING (root, .github/ or docs/), as a link on its default branch. */
+async function findContributing(token: string, handle: string, repoName: string): Promise<string | null> {
+  const isGuide = (name: string) => /^contributing(\.(md|markdown|txt|rst))?$/i.test(name);
+  try {
+    const [{ entries }, { defaultBranch }] = await Promise.all([listTree(token, handle, repoName), listBranches(token, handle, repoName)]);
+    const base = `/${handle}/${repoName}/blob/${defaultBranch}`;
+    const root = entries.find((e) => e.type === "blob" && isGuide(e.name));
+    if (root) return `${base}/${root.path}`;
+    for (const dir of [".github", "docs"]) {
+      if (!entries.some((e) => e.type === "tree" && e.name === dir)) continue;
+      const found = (await listTree(token, handle, repoName, defaultBranch, dir)).entries.find((e) => e.type === "blob" && isGuide(e.name));
+      if (found) return `${base}/${found.path}`;
+    }
+  } catch {
+    /* an empty or unreadable repo: no link */
+  }
+  return null;
 }

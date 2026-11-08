@@ -4,7 +4,7 @@ import { createPull, listBranches, listRepoTemplates } from "../../../api";
 import { canReplaceBody } from "../templatesModel";
 import type { BranchInfo } from "../../../types";
 import { Button, Field, Select, TextInput } from "../../../ui";
-import { MarkdownEditor } from "../../../components/MarkdownEditor";
+import { clearDraft, MarkdownEditor } from "../../../components/MarkdownEditor";
 import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, GitPullRequestIcon } from "./prShared";
 
 export function PullCreate({
@@ -83,6 +83,7 @@ export function PullCreate({
         description.trim() || undefined,
         draft || undefined,
       );
+      clearDraft(`${handle}/${repoName}:new-pull:${toBranch}...${fromBranch}`);
       navigate(`${base}/pulls/${pr.number}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create pull request");
@@ -170,6 +171,7 @@ export function PullCreate({
         <div>
           <p className="mb-1.5 text-fh-sm font-semibold text-fh-fg">Description</p>
           <MarkdownEditor
+            draftKey={`${handle}/${repoName}:new-pull:${toBranch}...${fromBranch}`}
             rows={8}
             placeholder="Describe your changes…"
             value={description}
