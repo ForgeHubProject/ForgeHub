@@ -121,6 +121,7 @@ vi.mock("../git-utils.js", () => ({
   branchExists: vi.fn().mockResolvedValue(true),
   defaultBranch: vi.fn().mockResolvedValue("main"),
   resolveBranchSha: vi.fn().mockResolvedValue("abc1234"),
+  countAheadBehind: vi.fn().mockResolvedValue({ ahead: 1, behind: 0 }),
   performMerge: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
   performMergeWithResolvedFiles: vi.fn().mockResolvedValue({ ok: true, sha: "deadbeef" }),
   performSquashMerge: vi.fn().mockResolvedValue({ ok: true, sha: "5qua5h00" }),
@@ -1141,7 +1142,7 @@ describe("merge endpoint honors the repo merge policy (issue #119)", () => {
     );
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().mergePolicy).toEqual({ allowedMethods: ["merge", "rebase"], defaultMethod: "rebase", allowAutoMerge: true });
+    expect(res.json().mergePolicy).toEqual({ allowedMethods: ["merge", "rebase"], defaultMethod: "rebase", allowAutoMerge: true, suggestUpdateBranch: false });
   });
 });
 

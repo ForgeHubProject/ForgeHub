@@ -188,6 +188,8 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
                     description="Track work and bugs with issues. Turned off, the Issues tab and its pages go away; nothing is deleted." />
                   <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="hasProjects" title="Projects"
                     description="Plan work on project boards. Turned off, the Projects tab and its pages go away; nothing is deleted." />
+                  <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="isTemplate" title="Template repository"
+                    description="People who can read this repository can start new ones from its files with “Use this template”." />
                 </div>
               </div>
             </>
@@ -291,7 +293,12 @@ function DefaultBranchCard({ token, handle, repoName }: { token: string; handle:
 }
 
 /** "Automatically delete head branches" (#256), under the merge policy. */
-type ToggleField = "hasIssues" | "hasProjects" | "allowAutoMerge" | "autoCloseIssues";
+type ToggleField = "hasIssues" | "hasProjects" | "allowAutoMerge" | "autoCloseIssues" | "isTemplate" | "suggestUpdateBranch";
+
+/** What each setting is when the repository never chose. */
+const TOGGLE_DEFAULT: Record<ToggleField, boolean> = {
+  hasIssues: true, hasProjects: true, allowAutoMerge: true, autoCloseIssues: true, isTemplate: false, suggestUpdateBranch: false,
+};
 
 /** One on/off repository setting (#256), saved as soon as it's switched. */
 function SettingToggle({ token, handle, repoName, isOwner, field, title, description }: {
@@ -301,7 +308,7 @@ function SettingToggle({ token, handle, repoName, isOwner, field, title, descrip
   const [on, setOn] = useState<boolean | null>(null);
 
   useEffect(() => {
-    getRepo(token, handle, repoName).then((r) => setOn(r[field] !== false)).catch(() => setOn(null));
+    getRepo(token, handle, repoName).then((r) => setOn(r[field] ?? TOGGLE_DEFAULT[field])).catch(() => setOn(null));
   }, [token, handle, repoName, field]);
 
   async function toggle(next: boolean) {
@@ -2204,6 +2211,8 @@ export function RepoSettingsTab({ token, handle, repoName, canAdmin }: Props) {
                 description="Let people arm a pull request to merge itself once its checks and reviews pass." />
               <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="autoCloseIssues" title="Auto-close linked issues"
                 description="When a pull request that says “Closes #N” merges, close those issues." />
+              <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="suggestUpdateBranch" title="Always suggest updating pull request branches"
+                description="Offer “Update branch” whenever a pull request's branch is behind its base." />
             </div>
             <HeadBranchCleanup token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
           </>

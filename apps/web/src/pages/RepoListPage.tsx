@@ -236,6 +236,7 @@ export function RepoListPage({ token, user, onLogout }: Props) {
         token={token}
         personalHandle={user.handle}
         orgs={orgs}
+        template={params.get("template") ?? undefined}
         onClose={() => {
           setShowCreate(false);
           if (params.get("new")) setParams({});

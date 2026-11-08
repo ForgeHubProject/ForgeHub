@@ -77,6 +77,8 @@ export const createRepoBodySchema = z.object({
    * org. Validated against the shared handle space in the route.
    */
   owner: handleSchema.optional(),
+  /** Start from a template repository (#256): "owner/name". */
+  template: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
 });
 
 /** A pull-request merge method (issue #119). */
@@ -100,6 +102,8 @@ export const updateRepoBodySchema = z.object({
   autoCloseIssues: z.boolean().optional(),
   mergeCommitMessage: z.enum(["default", "title", "title_description"]).optional(),
   squashCommitMessage: z.enum(["default", "title", "title_commits", "title_description"]).optional(),
+  isTemplate: z.boolean().optional(),
+  suggestUpdateBranch: z.boolean().optional(),
 });
 
 export const transferRepoBodySchema = z.object({
