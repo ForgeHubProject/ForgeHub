@@ -13,6 +13,23 @@ export const FORMAT_FAMILY_LABELS: Record<string, string> = {
   audio: "Audio",
 };
 
+/** Which handler ids make up each family (mirrors the API's FORMAT_FAMILIES). */
+export const FORMAT_FAMILIES: Record<string, string[]> = {
+  psd: ["psd"],
+  figcraft: ["figcraft"],
+  "3d": ["gltf-scene", "obj", "stl", "ply", "3mf", "off", "dae", "x3d", "fbx", "usd", "3ds", "blend", "amf", "vrml"],
+  cad: ["dxf"],
+  images: ["png", "jpeg", "gif", "svg"],
+  data: ["csv", "geojson"],
+  notebooks: ["ipynb"],
+  audio: ["wav"],
+};
+
+/** The families a set of handler ids touches, in the families' order. */
+export function familiesOf(formats: string[]): string[] {
+  return Object.entries(FORMAT_FAMILIES).filter(([, ids]) => ids.some((id) => formats.includes(id))).map(([f]) => f);
+}
+
 const HANDLER_LABELS: Record<string, string> = {
   "gltf-scene": "glTF",
   figcraft: "FigCraft",

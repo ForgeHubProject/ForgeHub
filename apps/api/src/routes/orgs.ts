@@ -152,13 +152,30 @@ export async function orgRoutes(app: FastifyInstance) {
     });
     return {
       orgs: memberships.map((m) =>
-        orgResponse(m.org, {
-          viewerRole: m.role === "OWNER" ? "OWNER" : "MEMBER",
-          memberCount: m.org._count.memberships,
-          teamCount: m.org._count.teams,
+        ({
+          ...orgResponse(m.org, {
+            viewerRole: m.role === "OWNER" ? "OWNER" : "MEMBER",
+            memberCount: m.org._count.memberships,
+            teamCount: m.org._count.teams,
+          }),
+          // Shown on the caller's profile (#257).
+          publicMember: m.public,
         }),
       ),
     };
+  });
+
+  // PUT /orgs/:handle/membership/visibility { public } — show or hide your own
+  // membership on your profile (#257). Private until you choose, as on GitHub.
+  app.put("/orgs/:handle/membership/visibility", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const { public: isPublic } = (request.body ?? {}) as { public?: unknown };
+    if (typeof isPublic !== "boolean") return reply.status(400).send({ error: "public must be true or false" });
+    const org = await prisma.organization.findUnique({ where: { handle: handle.toLowerCase() }, select: { id: true } });
+    if (!org) return reply.status(404).send({ error: "Organization not found" });
+    const { count } = await prisma.orgMembership.updateMany({ where: { orgId: org.id, userId: request.user.sub }, data: { public: isPublic } });
+    if (count === 0) return reply.status(404).send({ error: "You're not a member of this organization" });
+    return { public: isPublic };
   });
 
   // ── Org profile: info + visible repos + (for members) the member list ────────
