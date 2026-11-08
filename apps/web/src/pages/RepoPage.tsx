@@ -391,6 +391,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
                 </nav>
                 <Badge variant="outline" tone={isPrivate ? "warning" : "neutral"} className="ml-0.5">
                   {isPrivate ? <><LockIcon size={14} /> Private</> : "Public"}
+                  {repo.isTemplate && " template"}
                 </Badge>
               </div>
               {repo.parent && (
@@ -422,6 +423,12 @@ export function RepoPage({ token, user, onLogout }: Props) {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              {/* Template repositories (#256): start a new repository from this one. */}
+              {repo.isTemplate && (
+                <Link to={`/?new=repo&template=${encodeURIComponent(`${repo.ownerHandle ?? h}/${repo.name}`)}`} className="no-underline">
+                  <Button variant="primary" size="sm">Use this template</Button>
+                </Link>
+              )}
               {/* Watch — the three-level subscription (issue #88). */}
               <DropdownMenu
                 width={220}

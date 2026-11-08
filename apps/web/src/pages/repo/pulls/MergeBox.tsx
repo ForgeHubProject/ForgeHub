@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, markPullReady, mergePull, resolveMergePr, revertPull } from "../../../api";
+import { ApiError, cancelAutoMerge, closePull, enableAutoMerge, getPull, markPullReady, mergePull, resolveMergePr, revertPull, updatePullBranch } from "../../../api";
 import type { PullRequest } from "../../../types";
 import { Button, ConfirmDialog, DropdownMenu, Icons, RelativeTime, cx } from "../../../ui";
 import { AlertIcon, BranchChip, CheckCircleIcon, GitMergeIcon, GitPullRequestDraftIcon, PRStateIcon } from "./prShared";
@@ -391,6 +391,11 @@ export function MergeBox({
         </div>
       </div>
 
+      {/* Out of date (#256): "Update branch", when the repository asks for it. */}
+      {canWrite && (pr.behindBy ?? 0) > 0 && pr.mergePolicy?.suggestUpdateBranch && (
+        <UpdateBranchRow token={token} handle={handle} repoName={repoName} pr={pr} onUpdate={onUpdate} />
+      )}
+
       {/* Review status */}
       <ReviewStatusStrip summary={summary} />
 
@@ -638,6 +643,42 @@ function ReviewStatusStrip({ summary }: { summary: PullRequest["reviewSummary"] 
           {summary.unresolvedThreads} unresolved thread{summary.unresolvedThreads === 1 ? "" : "s"}
         </span>
       )}
+    </div>
+  );
+}
+
+/** "This branch is out-of-date with the base branch" and its Update branch button (#256). */
+function UpdateBranchRow({ token, handle, repoName, pr, onUpdate }: {
+  token: string; handle: string; repoName: string; pr: PullRequest; onUpdate: (next: PullRequest) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function update() {
+    setBusy(true);
+    setError(null);
+    try {
+      await updatePullBranch(token, handle, repoName, pr.number);
+      onUpdate(await getPull(token, handle, repoName, pr.number));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't update the branch");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-fh-border px-4 py-3">
+      <AlertIcon size={16} className="shrink-0 text-fh-warning-fg" />
+      <div className="min-w-0 flex-1">
+        <p className="text-fh-sm font-semibold text-fh-fg">This branch is out-of-date with the base branch</p>
+        <p className="text-fh-xs text-fh-fg-muted">
+          Merge the latest changes from <code className="font-mono">{pr.toBranch}</code> into this branch
+          ({pr.behindBy} {pr.behindBy === 1 ? "commit" : "commits"} behind).
+        </p>
+        {error && <p className="mt-1 text-fh-xs text-fh-danger-fg">{error}</p>}
+      </div>
+      <Button size="sm" variant="default" loading={busy} onClick={() => void update()}>Update branch</Button>
     </div>
   );
 }

@@ -21,6 +21,8 @@ type Props = {
    * (used from an org profile, where the target is unambiguous).
    */
   lockedNamespace?: string;
+  /** Start from this template repository (#256): "owner/name". */
+  template?: string;
   onClose: () => void;
   onCreated: (repo: Repo) => void;
 };
@@ -30,7 +32,7 @@ type Props = {
  * repo can be created under the caller's account OR any org they belong to. The
  * dashboard uses the free picker; the org profile locks it to that org.
  */
-export function CreateRepoDialog({ open, token, personalHandle, orgs, lockedNamespace, onClose, onCreated }: Props) {
+export function CreateRepoDialog({ open, token, personalHandle, orgs, lockedNamespace, template, onClose, onCreated }: Props) {
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -55,7 +57,7 @@ export function CreateRepoDialog({ open, token, personalHandle, orgs, lockedName
     setError(null);
     try {
       const owner = namespace === PERSONAL ? undefined : namespace;
-      const repo = await createRepo(token, name, description || undefined, visibility, owner);
+      const repo = await createRepo(token, name, description || undefined, visibility, owner, template);
       toast("Repository created", { tone: "success" });
       onCreated(repo);
     } catch (err) {
@@ -72,7 +74,11 @@ export function CreateRepoDialog({ open, token, personalHandle, orgs, lockedName
       open={open}
       onClose={creating ? () => {} : onClose}
       title="Create a new repository"
-      description="A repository contains all your project's files and their revision history."
+      description={
+        template
+          ? `Starts with the files of ${template}, in one commit, without its history.`
+          : "A repository contains all your project's files and their revision history."
+      }
       footer={
         <>
           <Button variant="default" onClick={onClose} disabled={creating}>
