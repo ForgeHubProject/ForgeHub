@@ -10,6 +10,7 @@ import { resetViewedFilesForPush } from "./pull-file-views.js";
 import { installPreReceiveHook } from "./git-hooks.js";
 import { syncProtectionConfig } from "./branch-protection.js";
 import { syncProtectedTagsConfig } from "./protected-tags.js";
+import { markFormatsStale } from "./repo-formats.js";
 
 const execFile = promisify(execFileCb);
 
@@ -95,6 +96,9 @@ export async function runPostReceiveEffects(
           app.log.error({ err }, `post-push ingestion failed for ${branchName}`),
         );
       }
+    }
+    if (changed.length > 0) {
+      markFormatsStale(repoId).catch((err: unknown) => app.log.error({ err }, "post-push format reset failed"));
     }
     emitHeadPushedForPush(repoId, actorId, changed).catch((err: unknown) =>
       app.log.error({ err }, "post-push head_pushed events failed"),
