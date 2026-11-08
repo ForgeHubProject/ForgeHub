@@ -5,8 +5,7 @@ import { ForgeLogo } from "./ForgeLogo";
 import type { User } from "../types";
 import { Avatar } from "../ui/Avatar";
 import { DropdownItem, DropdownMenu, DropdownSeparator } from "../ui/DropdownMenu";
-import { useTheme } from "../ui/theme";
-import { BellIcon, ChevronDownIcon, MoonIcon, SearchIcon, SunIcon } from "../ui/icons";
+import { BellIcon, ChevronDownIcon, SearchIcon } from "../ui/icons";
 import { DropdownLabel } from "../ui/DropdownMenu";
 import { repoFromPath } from "../lib/shortcuts";
 
@@ -27,7 +26,6 @@ export function Header({ user, onLogout, token }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { resolved, toggle } = useTheme();
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // Inside a repository, "+" offers its New issue / New pull request (#255).
   const here = repoFromPath(useLocation().pathname);
@@ -190,18 +188,7 @@ export function Header({ user, onLogout, token }: Props) {
             )}
           </DropdownItem>
           <DropdownSeparator />
-          <DropdownItem onSelect={() => navigate("/settings/tokens")}>Settings</DropdownItem>
-          <DropdownItem onSelect={() => navigate("/settings/tokens")}>Personal access tokens</DropdownItem>
-          <DropdownItem onSelect={() => navigate("/settings/keys")}>SSH keys</DropdownItem>
-          <DropdownItem onSelect={() => navigate("/settings/sessions")}>Active sessions</DropdownItem>
-          <DropdownItem onSelect={() => navigate("/settings/rendering")}>Rendering</DropdownItem>
-          <DropdownSeparator />
-          <DropdownItem
-            onSelect={toggle}
-            leadingIcon={resolved === "dark" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
-          >
-            {resolved === "dark" ? "Light theme" : "Dark theme"}
-          </DropdownItem>
+          <DropdownItem onSelect={() => navigate("/settings/profile")}>Settings</DropdownItem>
           <DropdownSeparator />
           <DropdownItem onSelect={onLogout}>Sign out</DropdownItem>
         </DropdownMenu>
