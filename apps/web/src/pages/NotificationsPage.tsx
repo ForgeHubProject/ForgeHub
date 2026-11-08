@@ -75,6 +75,7 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
   const repo = params.get("repo") ?? undefined;
   const unread = params.get("unread") === "1";
   const groupBy = params.get("group") === "repo" ? "repo" : "date";
+  const oldest = params.get("sort") === "oldest";
 
   const [items, setItems] = useState<Notification[] | null>(null);
   const [repos, setRepos] = useState<Array<{ repo: string; count: number }>>([]);
@@ -84,13 +85,13 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
   const navigate = useNavigate();
 
   const load = useCallback(() => {
-    listInbox(token, { view, reason, repo, unread })
+    listInbox(token, { view, reason, repo, unread, oldest })
       .then((d) => {
         setItems(d.notifications);
         setRepos(d.repos);
       })
       .catch(() => setItems([]));
-  }, [token, view, reason, repo, unread]);
+  }, [token, view, reason, repo, unread, oldest]);
 
   useEffect(() => {
     setItems(null);
@@ -152,7 +153,11 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
     navigate(notificationHref(n));
   }
 
-  const groups = useMemo(() => groupNotifications(items ?? [], groupBy), [items, groupBy]);
+  const groups = useMemo(() => {
+    const g = groupNotifications(items ?? [], groupBy);
+    // Date buckets come newest first; oldest-first reads them the other way round.
+    return oldest && groupBy === "date" ? [...g].reverse() : g;
+  }, [items, groupBy, oldest]);
   const allIds = (items ?? []).map((n) => n.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
   const sel = [...selected];
@@ -232,6 +237,7 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
           )}
           <div className="mt-4 border-t border-fh-border-muted px-3 pt-3 text-fh-xs">
             <Link to="/notifications/watching" className="block text-fh-accent-fg hover:underline">Watching</Link>
+            <Link to="/notifications/subscriptions" className="mt-1 block text-fh-accent-fg hover:underline">Subscriptions</Link>
             <Link to="/settings/notifications" className="mt-1 block text-fh-accent-fg hover:underline">Manage notification settings</Link>
           </div>
         </nav>
@@ -290,10 +296,18 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
                   >
                     Unread
                   </button>
-                  <Select sizing="sm" aria-label="Group by" value={groupBy} onChange={(e) => setParam("group", e.target.value === "repo" ? "repo" : null)}>
-                    <option value="date">Group by: Date</option>
-                    <option value="repo">Group by: Repository</option>
-                  </Select>
+                  <div className="w-44">
+                    <Select sizing="sm" aria-label="Group by" value={groupBy} onChange={(e) => setParam("group", e.target.value === "repo" ? "repo" : null)}>
+                      <option value="date">Group by: Date</option>
+                      <option value="repo">Group by: Repository</option>
+                    </Select>
+                  </div>
+                  <div className="w-36">
+                    <Select sizing="sm" aria-label="Sort" value={oldest ? "oldest" : "newest"} onChange={(e) => setParam("sort", e.target.value === "oldest" ? "oldest" : null)}>
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </Select>
+                  </div>
                   {view === "inbox" && (items ?? []).some((n) => !n.read) && (
                     <Button size="sm" variant="default" loading={busy} onClick={() => void markAllRead()}>Mark all as read</Button>
                   )}

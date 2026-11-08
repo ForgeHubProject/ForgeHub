@@ -8,6 +8,7 @@ import { NewOrgPage } from "./pages/NewOrgPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { WatchingPage } from "./pages/WatchingPage";
+import { SubscriptionsPage } from "./pages/SubscriptionsPage";
 import { OrgProfilePage } from "./pages/OrgProfilePage";
 import { OrgSettingsPage } from "./pages/OrgSettingsPage";
 import { RepoListPage } from "./pages/RepoListPage";
@@ -142,6 +143,10 @@ function AppRoutes() {
             <Navigate to="/login" replace />
           )
         }
+      />
+      <Route
+        path="/notifications/subscriptions"
+        element={authed ? <SubscriptionsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/notifications/watching"

@@ -13,7 +13,7 @@ vi.mock("../prisma.js", () => ({
     pullRequest: { findMany: vi.fn() },
     release: { findMany: vi.fn() },
     notification: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), groupBy: vi.fn(), upsert: vi.fn() },
-    threadMute: { upsert: vi.fn(), deleteMany: vi.fn() },
+    threadMute: { upsert: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
     $executeRaw: vi.fn(),
   },
@@ -77,6 +77,26 @@ describe("listing", () => {
     // An org repository reads as the org's.
     expect(res.notifications[0]).toMatchObject({ repo: "acme/poster", number: 12, state: "merged", saved: true });
     expect(res.repos).toEqual([{ repo: "acme/poster", count: 3 }]);
+  });
+});
+
+describe("sorting and subscriptions", () => {
+  it("sorts oldest first on request", async () => {
+    await get("/notifications?view=inbox&sort=oldest");
+    expect(vi.mocked(prisma.notification.findMany).mock.calls.at(-1)![0]!.orderBy).toEqual({ updatedAt: "asc" });
+  });
+
+  it("splits the conversations reaching you from the ones you unsubscribed from", async () => {
+    const row = (id: string, subjectId: string) => ({
+      id, subjectType: "ISSUE", subjectId, subjectTitle: id, reason: "COMMENT", read: true, saved: false, done: false,
+      repoId: "r1", repo: { name: "poster", owner: { handle: "ada" }, org: null }, createdAt: new Date(), updatedAt: new Date(),
+    });
+    vi.mocked(prisma.notification.findMany).mockResolvedValue([row("a", "i1"), row("b", "i2")] as never);
+    vi.mocked(prisma.issue.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.threadMute.findMany).mockResolvedValue([{ subjectId: "i2" }] as never);
+    const res = (await get("/user/subscriptions")).json();
+    expect(res.subscriptions.map((n: { id: string }) => n.id)).toEqual(["a"]);
+    expect(res.unsubscribed.map((n: { id: string }) => n.id)).toEqual(["b"]);
   });
 });
 

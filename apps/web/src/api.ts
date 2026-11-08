@@ -2273,9 +2273,10 @@ export async function listNotifications(
 /** The inbox (#258): a view, narrowed by reason, repository and unread; with per-repository counts. */
 export async function listInbox(
   token: string,
-  opts: { view: InboxView; reason?: InboxReason; repo?: string; unread?: boolean },
+  opts: { view: InboxView; reason?: InboxReason; repo?: string; unread?: boolean; oldest?: boolean },
 ): Promise<{ notifications: Notification[]; repos: Array<{ repo: string; count: number }> }> {
   const qs = new URLSearchParams({ view: opts.view });
+  if (opts.oldest) qs.set("sort", "oldest");
   if (opts.reason) qs.set("reason", opts.reason);
   if (opts.repo) qs.set("repo", opts.repo);
   if (opts.unread) qs.set("unread", "true");
@@ -2284,6 +2285,15 @@ export async function listInbox(
 
 export async function notificationsAction(token: string, ids: string[], action: InboxAction): Promise<void> {
   return req("/notifications/bulk", { method: "POST", token, body: JSON.stringify({ ids, action }) });
+}
+
+/** Conversations reaching your inbox, and the ones you unsubscribed from (#258). */
+export async function listSubscriptions(token: string): Promise<{ subscriptions: Notification[]; unsubscribed: Notification[] }> {
+  return req("/user/subscriptions", { token });
+}
+
+export async function setThreadSubscribed(token: string, notificationId: string, subscribed: boolean): Promise<void> {
+  return req(`/notifications/${encodeURIComponent(notificationId)}/unsubscribe`, { method: subscribed ? "DELETE" : "POST", token });
 }
 
 /** Repositories whose activity reaches you (#258): explicit watches and the ones you own or collaborate on. */
