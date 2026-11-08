@@ -43,6 +43,9 @@ model User {
   statusExpiresAt DateTime?
   // Private profile (#257): hides activity, stars, followers and status from others.
   privateProfile  Boolean   @default(false)
+  // Profile (#257): show the account email, and the local time in this IANA zone.
+  showEmail       Boolean   @default(false)
+  timezone        String?
   // Notification preferences (#258): JSON { [reason]: { web, email } }; a missing
   // reason means both on. Email still needs emailNotifications, the master switch.
   notificationPrefs String?
@@ -1407,6 +1410,8 @@ model OrgMembership {
   orgId     String
   userId    String
   role      String   @default("MEMBER")
+  // Shown on the member's profile (#257); private until they choose, as on GitHub.
+  public    Boolean  @default(false)
   createdAt DateTime @default(now())
 
   org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)

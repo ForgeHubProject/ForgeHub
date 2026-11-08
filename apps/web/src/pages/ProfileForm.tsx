@@ -36,6 +36,9 @@ export function ProfileForm({
   const [statusText, setStatusText] = useState(profile.status?.text ?? "");
   const [statusFor, setStatusFor] = useState("never");
   const [privateProfile, setPrivateProfile] = useState(!!profile.privateProfile);
+  // Shown only when chosen (#257); the profile carries the email exactly then.
+  const [showEmail, setShowEmail] = useState(!!profile.email);
+  const [timezone, setTimezone] = useState(profile.timezone ?? "");
   const [saving, setSavingState] = useState(false);
   const setSaving = (v: boolean) => {
     setSavingState(v);
@@ -51,7 +54,7 @@ export function ProfileForm({
     try {
       const hours = ({ never: 0, day: 24, week: 24 * 7 } as Record<string, number>)[statusFor] ?? 0;
       const res = await updateMyProfile(token, {
-        displayName, bio, location, website, pronouns, company, privateProfile,
+        displayName, bio, location, website, pronouns, company, privateProfile, showEmail, timezone: timezone || null,
         socialLinks: links.map((l) => l.trim()).filter(Boolean),
         status: statusEmoji.trim() || statusText.trim()
           ? { emoji: statusEmoji, text: statusText, expiresAt: hours ? new Date(Date.now() + hours * 3_600_000).toISOString() : null }
@@ -146,6 +149,23 @@ export function ProfileForm({
           <option value="week">Clear after a week</option>
         </Select>
       </fieldset>
+      <Field label="Local time" htmlFor="edit-timezone" hint="Shows your time of day on your profile.">
+        {(id) => (
+          <Select id={id} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+            <option value="">Don't show</option>
+            {timeZones().map((tz) => (
+              <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      <label className="flex items-start gap-2 text-fh-sm text-fh-fg">
+        <input type="checkbox" className="mt-0.5" checked={showEmail} onChange={(e) => setShowEmail(e.target.checked)} />
+        <span>
+          <span className="font-semibold">Show my email on my profile</span>
+          <span className="block text-fh-fg-muted">Off by default; people can see the address you sign in with.</span>
+        </span>
+      </label>
       <label className="flex items-start gap-2 text-fh-sm text-fh-fg">
         <input type="checkbox" className="mt-0.5" checked={privateProfile} onChange={(e) => setPrivateProfile(e.target.checked)} />
         <span>
@@ -159,4 +179,11 @@ export function ProfileForm({
       {footer?.(saving)}
     </form>
   );
+}
+
+/** Every IANA time zone the browser knows, your own first. */
+function timeZones(): string[] {
+  const own = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const all = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ?? [own, "UTC"];
+  return [own, ...all.filter((tz) => tz !== own)];
 }

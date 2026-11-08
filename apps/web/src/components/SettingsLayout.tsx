@@ -18,6 +18,7 @@ export const SETTINGS_NAV: Array<{ group?: string; items: Array<{ to: string; la
   {
     group: "Access",
     items: [
+      { to: "/settings/organizations", label: "Organizations" },
       { to: "/settings/sessions", label: "Sessions" },
       { to: "/settings/keys", label: "SSH keys" },
     ],

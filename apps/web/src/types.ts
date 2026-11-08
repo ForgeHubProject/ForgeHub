@@ -11,6 +11,9 @@ export type User = {
   /** Rotating cache-buster token; non-null ⇒ the user has an uploaded avatar (issue #115). */
   avatarKey?: string | null;
   createdAt?: string;
+  /** Profile (#257): whether the email shows on the profile, and the time zone for local time. */
+  showEmail?: boolean;
+  timezone?: string | null;
 };
 
 /** v0 PAT scopes (issue #87). `admin` ⊇ `repo:write` ⊇ `repo:read`. */
@@ -118,6 +121,11 @@ export type PublicProfile = {
   privateProfile?: boolean;
   /** Whether the viewer blocked them (#258). */
   viewerBlocks?: boolean;
+  /** Profile (#257): organizations they show, their email if they show it, their time zone. */
+  organizations?: Array<{ handle: string; displayName: string }>;
+  email?: string | null;
+  timezone?: string | null;
+  showEmail?: boolean;
 };
 
 /** A reply saved for reuse in comment boxes (#258). */
@@ -226,6 +234,8 @@ export type Repo = {
   squashCommitMessage?: "default" | "title" | "title_commits" | "title_description";
   isTemplate?: boolean;
   suggestUpdateBranch?: boolean;
+  /** Official FHR handler ids it holds, most files first (#257); on lists that compute them. */
+  formats?: string[];
   /** Archived (#256): read-only until an admin unarchives it. */
   archived?: boolean;
   archivedAt?: string | null;
@@ -1137,6 +1147,8 @@ export type Organization = {
   viewerRole: OrgRole | null;
   memberCount: number;
   teamCount: number;
+  /** Your membership shows on your profile (#257); only in your own list. */
+  publicMember?: boolean;
 };
 
 /** A member row in an org's roster. */

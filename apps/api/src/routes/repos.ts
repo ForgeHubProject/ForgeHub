@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import { bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { seedFromTemplate } from "../repo-template.js";
+import { fillMissingFormats, parseFormats } from "../repo-formats.js";
 import { resolveActorIdentity } from "../pull-merge.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
 import { detectRepoLicense } from "../license.js";
@@ -622,7 +623,13 @@ export async function repoRoutes(app: FastifyInstance) {
         orderBy: { updatedAt: "desc" },
         include: repoCardInclude,
       });
-      return { repos: repos.map((r) => repoResponse(r)) };
+      // The Repositories tab's format filter (#257): what each one holds.
+      const unscanned = repos.filter((r) => r.formats === null).map((r) => r.id);
+      if (unscanned.length) await fillMissingFormats({ id: { in: unscanned } }).catch(() => undefined);
+      const scanned = unscanned.length
+        ? new Map((await prisma.repo.findMany({ where: { id: { in: unscanned } }, select: { id: true, formats: true } })).map((r) => [r.id, r.formats]))
+        : new Map<string, string | null>();
+      return { repos: repos.map((r) => ({ ...repoResponse(r), formats: parseFormats(scanned.get(r.id) ?? r.formats) })) };
     },
   );
 

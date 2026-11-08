@@ -299,9 +299,16 @@ export async function updateMyProfile(
     pronouns?: string; company?: string; socialLinks?: string[];
     status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
     privateProfile?: boolean;
+    showEmail?: boolean;
+    timezone?: string | null;
   },
 ): Promise<{ user: User }> {
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** Show or hide your membership of an organization on your profile (#257). */
+export async function setOrgMembershipVisibility(token: string, org: string, isPublic: boolean): Promise<{ public: boolean }> {
+  return req(`/orgs/${org}/membership/visibility`, { method: "PUT", token, body: JSON.stringify({ public: isPublic }) });
 }
 
 /** Notification preferences (#258). */
