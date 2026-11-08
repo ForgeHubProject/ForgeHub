@@ -178,6 +178,8 @@ export function Header({ user, onLogout, token }: Props) {
           <DropdownItem onSelect={() => navigate("/issues")}>Your issues</DropdownItem>
           <DropdownItem onSelect={() => navigate("/pulls")}>Your pull requests</DropdownItem>
           <DropdownItem onSelect={() => navigate("/?tab=feed")}>Your feed</DropdownItem>
+          <DropdownItem onSelect={() => navigate(`/${user.handle}?tab=stars`)}>Your stars</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/explore")}>Explore</DropdownItem>
           <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
           <DropdownItem onSelect={() => navigate("/notifications")}>
             Notifications

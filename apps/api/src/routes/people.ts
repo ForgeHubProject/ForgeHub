@@ -8,6 +8,10 @@ const MAX_PINS = 6;
 
 const userCard = { select: { handle: true, displayName: true, avatarKey: true, bio: true } } as const;
 
+/** A private profile (#257) shows its followers and following to its owner only. */
+const hidden = (user: { id: string; privateProfile: boolean }, request: object) =>
+  user.privateProfile && (request as { user?: { sub: string } }).user?.sub !== user.id;
+
 /**
  * People on profiles (#257): pinned repositories, and following. Pins only
  * ever show repositories the viewer can read.
@@ -70,8 +74,9 @@ export async function peopleRoutes(app: FastifyInstance) {
 
   // GET /users/:handle/followers and /following — newest first.
   app.get("/users/:handle/followers", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
-    const user = await prisma.user.findUnique({ where: { handle: (request.params as { handle: string }).handle.toLowerCase() }, select: { id: true } });
+    const user = await prisma.user.findUnique({ where: { handle: (request.params as { handle: string }).handle.toLowerCase() }, select: { id: true, privateProfile: true } });
     if (!user) return reply.status(404).send({ error: "User not found" });
+    if (hidden(user, request)) return { users: [], private: true };
     const rows = await prisma.follow.findMany({
       where: { followingId: user.id }, orderBy: { createdAt: "desc" }, take: 200, include: { follower: userCard },
     });
@@ -79,8 +84,9 @@ export async function peopleRoutes(app: FastifyInstance) {
   });
 
   app.get("/users/:handle/following", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
-    const user = await prisma.user.findUnique({ where: { handle: (request.params as { handle: string }).handle.toLowerCase() }, select: { id: true } });
+    const user = await prisma.user.findUnique({ where: { handle: (request.params as { handle: string }).handle.toLowerCase() }, select: { id: true, privateProfile: true } });
     if (!user) return reply.status(404).send({ error: "User not found" });
+    if (hidden(user, request)) return { users: [], private: true };
     const rows = await prisma.follow.findMany({
       where: { followerId: user.id }, orderBy: { createdAt: "desc" }, take: 200, include: { following: userCard },
     });

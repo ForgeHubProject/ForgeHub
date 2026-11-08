@@ -80,14 +80,14 @@ export const CalendarIcon = (p: IconProps) => (
 
 // ── Topic chips ────────────────────────────────────────────────────────────────
 
-/** Link a single topic to a prefilled repository search (`topic:<slug>`). */
-export function topicSearchHref(topic: string): string {
-  return `/search?q=${encodeURIComponent(`topic:${topic}`)}&type=repos`;
+/** A topic's page (#257): the public repositories carrying it. */
+export function topicHref(topic: string): string {
+  return `/topics/${encodeURIComponent(topic)}`;
 }
 
 /**
- * A row of clickable topic chips (GitHub-style). Each chip navigates to a repo
- * search filtered to that topic. Rendered in the repo header and on the
+ * A row of clickable topic chips (GitHub-style). Each chip opens that topic's
+ * page. Rendered in the repo header and on the
  * dashboard / profile / search rows. `max` caps the visible chips with a "+N"
  * overflow marker so long topic sets don't blow out a compact row.
  */
@@ -108,7 +108,7 @@ export function TopicChips({
       {shown.map((t) => (
         <Link
           key={t}
-          to={topicSearchHref(t)}
+          to={topicHref(t)}
           onClick={(e) => e.stopPropagation()}
           className="inline-flex max-w-full items-center rounded-full bg-fh-accent-muted px-2 py-0.5 text-fh-xs font-medium text-fh-accent-fg hover:bg-fh-accent-emphasis hover:text-fh-on-emphasis"
         >

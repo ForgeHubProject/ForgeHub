@@ -41,6 +41,8 @@ model User {
   statusEmoji     String?
   statusText      String?
   statusExpiresAt DateTime?
+  // Private profile (#257): hides activity, stars, followers and status from others.
+  privateProfile  Boolean   @default(false)
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   repos          Repo[]
@@ -161,6 +163,10 @@ model Repo {
   archivedAt          DateTime?
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
+
+  // Formats on the default branch (#257, Explore's format filter): a JSON array of
+  // official FHR handler ids, most files first. Refreshed on push; null until then.
+  formats             String?
 
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
