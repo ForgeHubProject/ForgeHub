@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createToken, listTokens, revokeToken } from "../api";
-import { Header } from "../components/Header";
+import { SettingsLayout } from "../components/SettingsLayout";
 import type { PatScope, PersonalAccessToken, User } from "../types";
 import {
   Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, PageHeading,
@@ -215,10 +215,8 @@ export function SettingsTokensPage({ token, user, onLogout }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-fh-canvas">
-      <Header user={user} onLogout={onLogout} token={token} />
-
-      <div className="max-w-[900px] mx-auto px-4 py-8">
+    <SettingsLayout token={token} user={user} onLogout={onLogout}>
+      <div>
         <PageHeading
           title="Personal access tokens"
           icon={<Icon path={KEY} size={20} />}
@@ -301,6 +299,6 @@ export function SettingsTokensPage({ token, user, onLogout }: Props) {
           onCancel={() => setPendingRevoke(null)}
         />
       )}
-    </div>
+    </SettingsLayout>
   );
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Header } from "../components/Header";
+import { SettingsLayout } from "../components/SettingsLayout";
 import type { User } from "../types";
 import { Badge, Button, EmptyState, PageHeading, Select } from "../ui";
 import {
@@ -57,10 +57,8 @@ export function SettingsRenderingPage({ token, user, onLogout }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-fh-canvas">
-      <Header user={user} onLogout={onLogout} token={token} />
-
-      <div className="max-w-[900px] mx-auto px-4 py-8">
+    <SettingsLayout token={token} user={user} onLogout={onLogout}>
+      <div>
         <PageHeading
           title="Rendering"
           icon={<Icon path={CPU} size={20} />}
@@ -117,6 +115,6 @@ export function SettingsRenderingPage({ token, user, onLogout }: Props) {
           )}
         </section>
       </div>
-    </div>
+    </SettingsLayout>
   );
 }

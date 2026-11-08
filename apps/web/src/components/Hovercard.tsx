@@ -5,7 +5,7 @@ import type { PublicProfile } from "../types";
 import { Avatar, Button } from "../ui";
 import { LocationIcon } from "../pages/listShared";
 
-/** Site pages at the top level: a link to one of these is not a person (mirrors the API's RESERVED_HANDLES). */
+/** Site pages at the top level: a link to one of these is not a person (the API's RESERVED_HANDLES, less "ghost", which is a profile). */
 const RESERVED = new Set([
   "about", "explore", "feed", "import", "issues", "login", "logout", "new", "notifications",
   "organizations", "orgs", "pulls", "search", "settings", "stars", "topics", "trending",
