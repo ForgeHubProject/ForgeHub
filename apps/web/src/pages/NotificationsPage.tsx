@@ -44,6 +44,7 @@ function subjectIcon(n: Notification): { path: string; color: string } {
 
 const REASON_LABEL: Record<Notification["reason"], string> = {
   assigned: "assigned", comment: "comment", review_requested: "review requested", subscribed: "subscribed", mentioned: "mention",
+  team_mentioned: "team mention",
 };
 
 const VIEWS: Array<{ view: InboxView; label: string; icon: string }> = [
@@ -56,6 +57,7 @@ const REASONS: Array<{ reason: InboxReason; label: string }> = [
   { reason: "assigned", label: "Assigned" },
   { reason: "participating", label: "Participating" },
   { reason: "mentioned", label: "Mentioned" },
+  { reason: "team_mentioned", label: "Team mentioned" },
   { reason: "review_requested", label: "Review requested" },
   { reason: "watching", label: "Watching" },
 ];

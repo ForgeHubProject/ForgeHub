@@ -24,6 +24,7 @@ const REASON_LEAD: Record<NotificationReason, string> = {
   REVIEW_REQUESTED: "Your review was requested",
   SUBSCRIBED: "There's new activity",
   MENTIONED: "You were mentioned",
+  TEAM_MENTIONED: "Your team was mentioned",
 };
 
 function escapeHtml(s: string): string {

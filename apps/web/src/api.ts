@@ -1409,7 +1409,11 @@ export async function listIssues(
 
 export type RepoMember = { id: string; handle: string; displayName: string | null; role: "owner" | "writer" | "reader" };
 
-export async function listRepoMembers(token: string | null, handle: string, repoName: string): Promise<{ members: RepoMember[] }> {
+export async function listRepoMembers(
+  token: string | null,
+  handle: string,
+  repoName: string,
+): Promise<{ members: RepoMember[]; /** Teams you can @mention (#253): "org/slug". */ teams?: Array<{ handle: string; name: string }> }> {
   return req(`/repos/${handle}/${repoName}/members`, { token: token ?? undefined });
 }
 
