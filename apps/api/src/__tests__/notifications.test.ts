@@ -7,7 +7,10 @@ vi.mock("../prisma.js", () => ({
     user: { create: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     repo: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
     repoCollaborator: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
-    notification: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), upsert: vi.fn() },
+    notification: {
+      findMany: vi.fn(), findFirst: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn(), upsert: vi.fn(),
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
     release: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     protectedBranch: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null), upsert: vi.fn(), deleteMany: vi.fn() },
     pullRequest: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), count: vi.fn() },
@@ -23,6 +26,7 @@ vi.mock("../prisma.js", () => ({
     constraint: { findMany: vi.fn().mockResolvedValue([]) },
     tag: { findMany: vi.fn() },
     $transaction: vi.fn(),
+    $executeRaw: vi.fn(),
   },
 }));
 
@@ -111,6 +115,8 @@ afterAll(async () => { await app.close(); });
 
 beforeEach(() => {
   vi.mocked(prisma.repo.findFirst).mockResolvedValue(MOCK_REPO as never);
+  // Subjects for the links (#258): the notifications here are about issue #7.
+  vi.mocked(prisma.issue.findMany).mockResolvedValue([{ id: "issue-1", number: 7, state: "OPEN" }] as never);
 });
 
 // ─── GET /notifications ───────────────────────────────────────────────────────
@@ -129,6 +135,7 @@ describe("GET /notifications", () => {
     expect(notifications[0].reason).toBe("subscribed");
     expect(notifications[0].repo).toBe("alice/my-repo");
     expect(notifications[0].read).toBe(false);
+    expect(notifications[0]).toMatchObject({ number: 7, state: "open" });
   });
 
   it("passes read:false filter when ?all is not set", async () => {
@@ -154,16 +161,16 @@ describe("GET /notifications", () => {
 // ─── PATCH /notifications (mark all read) ────────────────────────────────────
 
 describe("PATCH /notifications (mark all read)", () => {
-  it("returns 204 and calls updateMany with read:true", async () => {
-    vi.mocked(prisma.notification.updateMany).mockResolvedValue({ count: 3 } as never);
+  it("returns 204 and marks the inbox read without reordering it", async () => {
+    vi.mocked(prisma.$executeRaw).mockResolvedValue(3 as never);
     const res = await app.inject({
       method: "PATCH", url: "/notifications",
       headers: { authorization: ownerToken },
     });
     expect(res.statusCode).toBe(204);
-    expect(prisma.notification.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { read: true } }),
-    );
+    // Raw SQL: setting read must not bump updatedAt, which orders the inbox.
+    const [sql] = vi.mocked(prisma.$executeRaw).mock.calls.at(-1)! as unknown as [TemplateStringsArray];
+    expect(sql.join("?")).toContain('SET "read" = true');
   });
 
   it("returns 401 for unauthenticated request", async () => {
@@ -177,7 +184,7 @@ describe("PATCH /notifications (mark all read)", () => {
 describe("PATCH /notifications/:id", () => {
   it("marks a notification as read and returns it", async () => {
     vi.mocked(prisma.notification.findFirst).mockResolvedValue(makeNotif() as never);
-    vi.mocked(prisma.notification.update).mockResolvedValue(makeNotif({ read: true }) as never);
+    vi.mocked(prisma.notification.findUniqueOrThrow).mockResolvedValue(makeNotif({ read: true }) as never);
     const res = await app.inject({
       method: "PATCH", url: "/notifications/notif-1",
       headers: { authorization: ownerToken },
