@@ -171,6 +171,7 @@ model Repo {
   archivedAt          DateTime?
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
+  refUpdates          RefUpdate[]
 
   // More repository settings (#256): features on or off, pull request behaviour,
   // and the default merge and squash commit messages ("default", "title",
@@ -739,6 +740,25 @@ model ProfilePin {
 
   @@unique([userId, repoId])
   @@index([userId, position])
+}
+
+// One branch update (#256), for the repository's Activity page: a push, a force
+// push, a branch created or deleted, or a pull request merged into it. The actor
+// is kept as a plain id so the record outlives an account.
+model RefUpdate {
+  id        String   @id @default(cuid())
+  repoId    String
+  ref       String
+  kind      String // push | force_push | branch_created | branch_deleted | merge
+  beforeSha String?
+  afterSha  String?
+  actorId   String?
+  prNumber  Int?
+  createdAt DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId, createdAt])
 }
 
 // A conversation the user unsubscribed from (#258): its watching and comment

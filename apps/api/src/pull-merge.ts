@@ -13,6 +13,7 @@ import {
 import { recordEvent } from "./timeline-service.js";
 import { emitRepoEvent } from "./webhook-service.js";
 import { closeIssuesForMergedPull } from "./references-service.js";
+import { recordMerge } from "./activity-log.js";
 import { ingestCommitRange } from "./ingest.js";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { emitPushEvents, ZERO_SHA } from "./push-events.js";
@@ -177,6 +178,9 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
   emitPushEvents(repo.id, repo.storageKey, actorId, [
     { branch: pr.toBranch, oldSha: beforeSha ?? ZERO_SHA, newSha: result.sha },
   ]);
+  // The Activity page's log (#256).
+  await recordMerge(repo.id, pr.toBranch, beforeSha ?? null, result.sha, actorId, pr.number)
+    .catch((err) => input.log?.error({ err }, "recordMerge"));
   // Closing keywords close their issues, unless the repository turned that off (#256).
   if (repo.autoCloseIssues !== false) {
     await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: actorId })

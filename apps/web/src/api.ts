@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, NotificationPrefs, NotificationReasonKey, BlockedUser, InboxView, InboxReason, InboxAction, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, RefActivity, NotificationPrefs, NotificationReasonKey, BlockedUser, InboxView, InboxReason, InboxAction, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -466,6 +466,18 @@ export async function createRepo(
     token,
     body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined }),
   });
+}
+
+/** A repository's Activity (#256): branch updates, newest first, a page at a time. */
+export async function listRepoActivity(
+  token: string | null,
+  handle: string,
+  repoName: string,
+  filters: { branch?: string; kind?: RefActivity["kind"]; actor?: string; before?: string },
+): Promise<{ events: RefActivity[]; next: string | null }> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) if (v) qs.set(k, v);
+  return req(`/repos/${handle}/${repoName}/activity${qs.toString() ? `?${qs}` : ""}`, { token: token ?? undefined });
 }
 
 /** "Update branch" (#256): merge a pull request's base into its head. */
