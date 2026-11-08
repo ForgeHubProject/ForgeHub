@@ -30,6 +30,7 @@ import {
   TextInput,
   useToast,
 } from "../ui";
+import { FORMAT_FAMILIES, FORMAT_FAMILY_LABELS, familiesOf } from "../lib/formats";
 import { ContributionActivity, PeopleList, PinnedRepos, StarsList } from "./profileParts";
 import { ProfileForm } from "./ProfileForm";
 import { CalendarIcon, LinkIcon, LocationIcon, RepoIcon, RepoRow, RowList } from "./listShared";
@@ -46,6 +47,39 @@ type Props = {
 const AVATAR_ACCEPT = "image/png,image/jpeg,image/webp";
 
 const EDIT_FORM_ID = "edit-profile-form";
+
+function MailIcon() {
+  return (
+    <svg aria-hidden width={14} height={14} viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
+      <path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zM1.5 12.251c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V5.809L8.38 9.397a.75.75 0 01-.76 0L1.5 5.809v6.442zm13-8.181v-.32a.25.25 0 00-.25-.25H1.75a.25.25 0 00-.25.25v.32L8 7.88l6.5-3.81z" />
+    </svg>
+  );
+}
+
+/** "14:32 (UTC +3)" in their zone (#257), kept current. */
+function LocalTime({ zone }: { zone: string }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+  let time: string;
+  let offset = "";
+  try {
+    time = new Intl.DateTimeFormat(undefined, { timeZone: zone, hour: "2-digit", minute: "2-digit" }).format(now);
+    offset = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    return null;
+  }
+  return (
+    <div className="flex items-center gap-2 text-fh-fg-muted" title={zone}>
+      <svg aria-hidden width={14} height={14} viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
+        <path d="M8 0a8 8 0 110 16A8 8 0 018 0zM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0z" />
+      </svg>
+      <span>{time} <span className="text-fh-xs">({offset.replace("GMT", "UTC ").trim() || "UTC"})</span></span>
+    </div>
+  );
+}
 
 function OrgIcon() {
   return (
@@ -157,6 +191,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   const tabParam = params.get("tab") ?? "";
   const tab = ["repositories", "stars", "followers", "following"].includes(tabParam) ? tabParam : "overview";
   const [repoType, setRepoType] = useState("all");
+  const [repoFormat, setRepoFormat] = useState("all");
   const [repoSort, setRepoSort] = useState("updated");
   const [followBusy, setFollowBusy] = useState(false);
 
@@ -286,7 +321,10 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
         (repoType === "all" ||
           (repoType === "sources" && !r.parent) ||
           (repoType === "forks" && !!r.parent) ||
-          (repoType === "archived" && !!r.archived)),
+          (repoType === "archived" && !!r.archived) ||
+          (repoType === "templates" && !!r.isTemplate)) &&
+        // Format (#257): repositories holding that kind of file.
+        (repoFormat === "all" || (FORMAT_FAMILIES[repoFormat] ?? []).some((id) => r.formats?.includes(id))),
     );
     const order: Record<string, (a: Repo, b: Repo) => number> = {
       updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
@@ -294,8 +332,9 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
       stars: (a, b) => (b.starCount ?? 0) - (a.starCount ?? 0),
     };
     return [...matched].sort(order[repoSort] ?? order.updated);
-  }, [filter, repos, repoType, repoSort]);
-  const filtering = filter.trim() !== "" || repoType !== "all";
+  }, [filter, repos, repoType, repoSort, repoFormat]);
+  const filtering = filter.trim() !== "" || repoType !== "all" || repoFormat !== "all";
+  const formatsHeld = useMemo(() => familiesOf(repos.flatMap((r) => r.formats ?? [])), [repos]);
 
   return (
     <div className="flex min-h-screen flex-col bg-fh-canvas">
@@ -432,11 +471,35 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                   </div>
                 ))}
 
+                {profile.email && (
+                  <div className="flex items-center gap-2 text-fh-fg-muted">
+                    <MailIcon />
+                    <a href={`mailto:${profile.email}`} className="truncate text-fh-accent-fg hover:underline">{profile.email}</a>
+                  </div>
+                )}
+
+                {profile.timezone && <LocalTime zone={profile.timezone} />}
+
                 <div className="flex items-center gap-2 text-fh-fg-muted">
                   <CalendarIcon size={14} className="shrink-0" />
                   <span>Joined {joinedLabel(profile.createdAt)}</span>
                 </div>
               </div>
+
+              {(profile.organizations ?? []).length > 0 && (
+                <section aria-label="Organizations" className="mt-4 border-t border-fh-border-muted pt-3">
+                  <h2 className="mb-2 text-fh-sm font-semibold text-fh-fg">Organizations</h2>
+                  <ul className="flex flex-wrap gap-1.5">
+                    {profile.organizations!.map((o) => (
+                      <li key={o.handle}>
+                        <Link to={`/${o.handle}`} title={o.displayName || o.handle} aria-label={o.displayName || o.handle}>
+                          <Avatar name={o.displayName || o.handle} size={32} square />
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
 
               {!isOwnProfile && !profile.viewerBlocks && (
                 <button type="button" onClick={() => void toggleBlock()} className="mt-4 border-t border-fh-border-muted pt-3 text-fh-sm text-fh-fg-muted hover:text-fh-danger-fg">
@@ -539,17 +602,32 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                     )}
                     {repos.length > 0 && (
                       <div className="flex gap-2">
+                        <div className="w-32">
                         <Select sizing="sm" aria-label="Type" value={repoType} onChange={(e) => setRepoType(e.target.value)}>
                           <option value="all">Type: All</option>
                           <option value="sources">Sources</option>
                           <option value="forks">Forks</option>
                           <option value="archived">Archived</option>
+                          <option value="templates">Templates</option>
                         </Select>
+                        </div>
+                        {formatsHeld.length > 0 && (
+                          <div className="w-36">
+                          <Select sizing="sm" aria-label="Format" value={repoFormat} onChange={(e) => setRepoFormat(e.target.value)}>
+                            <option value="all">Format: All</option>
+                            {formatsHeld.map((f) => (
+                              <option key={f} value={f}>{FORMAT_FAMILY_LABELS[f] ?? f}</option>
+                            ))}
+                          </Select>
+                          </div>
+                        )}
+                        <div className="w-44">
                         <Select sizing="sm" aria-label="Sort" value={repoSort} onChange={(e) => setRepoSort(e.target.value)}>
                           <option value="updated">Sort: Last updated</option>
                           <option value="name">Name</option>
                           <option value="stars">Stars</option>
                         </Select>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -572,7 +650,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                       title="No matching repositories"
                       description={filter.trim() ? `No repository matches “${filter.trim()}”.` : "No repository of this type."}
                       actions={
-                        <Button variant="default" onClick={() => { setFilter(""); setRepoType("all"); }}>
+                        <Button variant="default" onClick={() => { setFilter(""); setRepoType("all"); setRepoFormat("all"); }}>
                           Clear filter
                         </Button>
                       }

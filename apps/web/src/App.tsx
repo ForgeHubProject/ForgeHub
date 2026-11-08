@@ -20,6 +20,7 @@ import { SettingsAppearancePage } from "./pages/SettingsAppearancePage";
 import { SettingsNotificationsPage } from "./pages/SettingsNotificationsPage";
 import { SettingsRepliesPage } from "./pages/SettingsRepliesPage";
 import { SettingsBlockedPage } from "./pages/SettingsBlockedPage";
+import { SettingsOrganizationsPage } from "./pages/SettingsOrganizationsPage";
 import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { SettingsSessionsPage } from "./pages/SettingsSessionsPage";
 import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
@@ -186,6 +187,10 @@ function AppRoutes() {
       <Route
         path="/settings/replies"
         element={authed ? <SettingsRepliesPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/organizations"
+        element={authed ? <SettingsOrganizationsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/settings/blocked"
