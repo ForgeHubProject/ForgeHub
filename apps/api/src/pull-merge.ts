@@ -33,8 +33,12 @@ type LogLike = { error: (obj: unknown, msg?: string) => void };
 
 export type PullMergeInput = {
   /** `deleteBranchOnMerge` (#256): delete the head branch once merged. */
-  repo: { id: string; storageKey: string; deleteBranchOnMerge?: boolean };
-  pr: { id: string; number: number; title: string; fromBranch: string; toBranch: string };
+  repo: {
+    id: string; storageKey: string; deleteBranchOnMerge?: boolean;
+    // Settings (#256): absent ⇒ the defaults.
+    autoCloseIssues?: boolean; mergeCommitMessage?: string; squashCommitMessage?: string;
+  };
+  pr: { id: string; number: number; title: string; fromBranch: string; toBranch: string; description?: string | null };
   /** The user the merge is performed AS (squash author, timeline actor, webhook sender). */
   actorId: string;
   mergeMethod: MergeMethod;
@@ -89,10 +93,28 @@ export async function resolveActorIdentity(userId: string): Promise<CommitAuthor
   return { name, email };
 }
 
+type MessagePr = { number: number; title: string; fromBranch: string; toBranch: string; description?: string | null };
+
+/** A merge commit's message, by the repository's choice (#256). */
+export function defaultMergeMessage(style: string | undefined, pr: MessagePr): string {
+  const description = pr.description?.trim();
+  if (style === "title") return `${pr.title} (#${pr.number})`;
+  if (style === "title_description") return description ? `${pr.title} (#${pr.number})\n\n${description}` : `${pr.title} (#${pr.number})`;
+  return `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number})`;
+}
+
+/** A squash commit's message, by the repository's choice (#256); "default" is the title and the commit list. */
+export function defaultSquashMessage(style: string | undefined, pr: MessagePr, subjects: string): string {
+  const title = `${pr.title} (#${pr.number})`;
+  const description = pr.description?.trim();
+  if (style === "title") return `${title}\n`;
+  if (style === "title_description") return description ? `${title}\n\n${description}\n` : `${title}\n`;
+  return subjects ? `${title}\n\n${subjects}\n` : `${title}\n`;
+}
+
 export async function executePullMerge(input: PullMergeInput): Promise<PullMergeOutcome> {
   const { repo, pr, actorId, mergeMethod, auto } = input;
-  const message =
-    input.commitMessage?.trim() || `Merge '${pr.fromBranch}' into '${pr.toBranch}' (#${pr.number})`;
+  const message = input.commitMessage?.trim() || defaultMergeMessage(repo.mergeCommitMessage, pr);
 
   // Capture the toBranch SHA before merge for the ingestion range + push event.
   const beforeSha = await resolveBranchSha(repo.storageKey, pr.toBranch);
@@ -105,8 +127,9 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
       // Single squashed commit authored as the merger: "<title> (#N)" + subjects.
       const prCommits = await listMergeBaseCommits(repo.storageKey, pr.toBranch, pr.fromBranch);
       const subjects = prCommits.map((c) => `* ${c.subject}`).join("\n");
-      const subject = input.commitMessage?.trim() || `${pr.title} (#${pr.number})`;
-      const squashMessage = subjects ? `${subject}\n\n${subjects}\n` : `${subject}\n`;
+      const squashMessage = input.commitMessage?.trim()
+        ? `${input.commitMessage.trim()}${subjects ? `\n\n${subjects}` : ""}\n`
+        : defaultSquashMessage(repo.squashCommitMessage, pr, subjects);
       const author = await resolveActorIdentity(actorId);
       result = await performSquashMerge(repo.storageKey, pr.fromBranch, pr.toBranch, squashMessage, author);
     } else if (mergeMethod === "rebase") {
@@ -154,8 +177,11 @@ export async function executePullMerge(input: PullMergeInput): Promise<PullMerge
   emitPushEvents(repo.id, repo.storageKey, actorId, [
     { branch: pr.toBranch, oldSha: beforeSha ?? ZERO_SHA, newSha: result.sha },
   ]);
-  await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: actorId })
-    .catch((err) => input.log?.error({ err }, "closeIssuesForMergedPull"));
+  // Closing keywords close their issues, unless the repository turned that off (#256).
+  if (repo.autoCloseIssues !== false) {
+    await closeIssuesForMergedPull({ repoId: repo.id, prId: pr.id, prNumber: pr.number, mergerId: actorId })
+      .catch((err) => input.log?.error({ err }, "closeIssuesForMergedPull"));
+  }
   if (repo.deleteBranchOnMerge) {
     await deleteMergedHeadBranch(repo, pr, actorId).catch((err) => input.log?.error({ err }, "delete head branch after merge"));
   }

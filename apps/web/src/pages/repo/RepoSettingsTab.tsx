@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
   getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, transferRepo, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
   type MergeMethod,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
@@ -12,7 +12,7 @@ import type {
 } from "../../types";
 import {
   Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
-  RadioCard, RadioGroup, RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
+  RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
 } from "../../ui";
 import { LockIcon, RepoIcon } from "../listShared";
 
@@ -85,7 +85,6 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
   const [repo, setRepo] = useState<Repo | null>(null);
   const [loading, setLoading] = useState(true);
   const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<"public" | "private">("private");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -96,13 +95,12 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
       .then((r) => {
         setRepo(r);
         setDescription(r.description ?? "");
-        setVisibility(r.visibility);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [token, handle, repoName]);
 
-  const dirty = !!repo && ((description.trim() || null) !== (repo.description ?? null) || visibility !== repo.visibility);
+  const dirty = !!repo && (description.trim() || null) !== (repo.description ?? null);
 
   async function save() {
     if (!repo || !dirty) return;
@@ -111,7 +109,6 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
     try {
       const updated = await updateRepo(token, handle, repoName, {
         description: description.trim() || null,
-        visibility,
       });
       // The PATCH payload is the card shape (no lineage/license); keep the
       // richer detail fields we already loaded and overlay what changed.
@@ -172,25 +169,6 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
                   />
                 )}
               </Field>
-              <RadioGroup
-                name="settings-visibility"
-                legend="Visibility"
-                value={visibility}
-                onChange={(v) => setVisibility(v as "public" | "private")}
-              >
-                <RadioCard
-                  value="private"
-                  title="Private"
-                  icon={<LockIcon size={14} />}
-                  description="Only owners and collaborators can see this repository."
-                />
-                <RadioCard
-                  value="public"
-                  title="Public"
-                  icon={<RepoIcon size={14} />}
-                  description="Anyone can see this repository."
-                />
-              </RadioGroup>
               {error && <p className="text-fh-sm text-fh-danger-fg">{error}</p>}
               <div className="flex justify-end pt-1 border-t border-fh-border">
                 <Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}>
@@ -203,6 +181,15 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
             <>
               <RenameCard token={token} handle={handle} repo={repo} />
               <DefaultBranchCard token={token} handle={handle} repoName={repoName} />
+              <div>
+                <h3 className="mb-2 mt-6 text-fh-base font-semibold text-fh-fg">Features</h3>
+                <div className="space-y-3">
+                  <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="hasIssues" title="Issues"
+                    description="Track work and bugs with issues. Turned off, the Issues tab and its pages go away; nothing is deleted." />
+                  <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="hasProjects" title="Projects"
+                    description="Plan work on project boards. Turned off, the Projects tab and its pages go away; nothing is deleted." />
+                </div>
+              </div>
             </>
           )}
           {isOwner ? null : (
@@ -304,6 +291,104 @@ function DefaultBranchCard({ token, handle, repoName }: { token: string; handle:
 }
 
 /** "Automatically delete head branches" (#256), under the merge policy. */
+type ToggleField = "hasIssues" | "hasProjects" | "allowAutoMerge" | "autoCloseIssues";
+
+/** One on/off repository setting (#256), saved as soon as it's switched. */
+function SettingToggle({ token, handle, repoName, isOwner, field, title, description }: {
+  token: string; handle: string; repoName: string; isOwner: boolean; field: ToggleField; title: string; description: string;
+}) {
+  const { toast } = useToast();
+  const [on, setOn] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getRepo(token, handle, repoName).then((r) => setOn(r[field] !== false)).catch(() => setOn(null));
+  }, [token, handle, repoName, field]);
+
+  async function toggle(next: boolean) {
+    setOn(next);
+    try {
+      await updateRepo(token, handle, repoName, { [field]: next });
+    } catch (err) {
+      setOn(!next);
+      toast(err instanceof Error ? err.message : "Couldn't save", { tone: "danger" });
+    }
+  }
+
+  if (on === null) return null;
+  return (
+    <label className={cx("flex items-start gap-3 rounded-md border border-fh-border bg-fh-surface p-4", isOwner ? "cursor-pointer" : "opacity-70")}>
+      <input type="checkbox" className="mt-1" checked={on} disabled={!isOwner} onChange={(e) => void toggle(e.target.checked)} />
+      <span>
+        <span className="block text-fh-base font-semibold text-fh-fg">{title}</span>
+        <span className="block text-fh-sm text-fh-fg-muted">{description}</span>
+      </span>
+    </label>
+  );
+}
+
+const MERGE_MESSAGES: Array<{ value: NonNullable<Repo["mergeCommitMessage"]>; label: string }> = [
+  { value: "default", label: "Default message" },
+  { value: "title", label: "Pull request title" },
+  { value: "title_description", label: "Pull request title and description" },
+];
+const SQUASH_MESSAGES: Array<{ value: NonNullable<Repo["squashCommitMessage"]>; label: string }> = [
+  { value: "default", label: "Default message (title and commit list)" },
+  { value: "title", label: "Pull request title" },
+  { value: "title_description", label: "Pull request title and description" },
+];
+
+/** The default commit messages for merge and squash merges (#256). */
+function CommitMessageSettings({ token, handle, repoName, isOwner }: { token: string; handle: string; repoName: string; isOwner: boolean }) {
+  const { toast } = useToast();
+  const [repo, setRepo] = useState<Repo | null>(null);
+
+  useEffect(() => {
+    getRepo(token, handle, repoName).then(setRepo).catch(() => setRepo(null));
+  }, [token, handle, repoName]);
+
+  async function save(patch: { mergeCommitMessage?: Repo["mergeCommitMessage"]; squashCommitMessage?: Repo["squashCommitMessage"] }) {
+    if (!repo) return;
+    const before = repo;
+    setRepo({ ...repo, ...patch });
+    try {
+      await updateRepo(token, handle, repoName, patch);
+      toast("Commit message saved", { tone: "success" });
+    } catch (err) {
+      setRepo(before);
+      toast(err instanceof Error ? err.message : "Couldn't save", { tone: "danger" });
+    }
+  }
+
+  if (!repo) return null;
+  const allowed = repo.allowedMergeMethods ?? ["merge", "squash", "rebase"];
+  return (
+    <div className="mt-4 rounded-md border border-fh-border bg-fh-surface p-4 space-y-3">
+      <p className="text-fh-base font-semibold text-fh-fg">Default commit messages</p>
+      <p className="text-fh-sm text-fh-fg-muted">What the merge box writes when nobody types a message of their own.</p>
+      {allowed.includes("merge") && (
+        <Field label="Merge commits" htmlFor="merge-commit-message">
+          {(id) => (
+            <Select id={id} value={repo.mergeCommitMessage ?? "default"} disabled={!isOwner}
+              onChange={(e) => void save({ mergeCommitMessage: e.target.value as Repo["mergeCommitMessage"] })}>
+              {MERGE_MESSAGES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </Select>
+          )}
+        </Field>
+      )}
+      {allowed.includes("squash") && (
+        <Field label="Squash merges" htmlFor="squash-commit-message">
+          {(id) => (
+            <Select id={id} value={repo.squashCommitMessage ?? "default"} disabled={!isOwner}
+              onChange={(e) => void save({ squashCommitMessage: e.target.value as Repo["squashCommitMessage"] })}>
+              {SQUASH_MESSAGES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </Select>
+          )}
+        </Field>
+      )}
+    </div>
+  );
+}
+
 function HeadBranchCleanup({ token, handle, repoName, isOwner }: { token: string; handle: string; repoName: string; isOwner: boolean }) {
   const { toast } = useToast();
   const [on, setOn] = useState<boolean | null>(null);
@@ -1709,6 +1794,8 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
         </p>
       ) : (
       <div className="rounded-md border border-fh-danger-emphasis/40 divide-y divide-fh-danger-emphasis/20">
+        <VisibilityRow token={token} handle={handle} repoName={repoName} />
+        <TransferRow token={token} handle={handle} repoName={repoName} />
         <ArchiveRow token={token} handle={handle} repoName={repoName} />
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
           <div className="min-w-0">
@@ -1750,6 +1837,118 @@ function DangerSection({ token, handle, repoName, fullName, isOwner }: {
           <Field label="Confirm the repository name" hint={<>Type <span className="font-mono font-semibold text-fh-fg">{repoName}</span> to enable deletion.</>}>
             {(id) => <TextInput id={id} value={typed} onChange={(e) => setTyped(e.target.value)} className="font-mono" autoComplete="off" autoFocus />}
           </Field>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+/** Change visibility (#256): public or private, from the Danger zone as on GitHub. */
+function VisibilityRow({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const [repo, setRepo] = useState<Repo | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    getRepo(token, handle, repoName).then(setRepo).catch(() => setRepo(null));
+  }, [token, handle, repoName]);
+
+  if (!repo) return null;
+  const next = repo.visibility === "public" ? "private" : "public";
+
+  async function change() {
+    setBusy(true);
+    try {
+      const updated = await updateRepo(token, handle, repoName, { visibility: next });
+      setRepo({ ...repo!, visibility: updated.visibility });
+      toast(`${repo!.fullName ?? repoName} is now ${updated.visibility}`, { tone: "success" });
+      setConfirming(false);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't change visibility", { tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
+      <div className="min-w-0">
+        <p className="text-fh-base font-semibold text-fh-fg">Change repository visibility</p>
+        <p className="text-fh-sm text-fh-fg-muted mt-0.5">This repository is currently {repo.visibility}.</p>
+      </div>
+      <Button variant="danger" onClick={() => setConfirming(true)}>Change visibility</Button>
+      {confirming && (
+        <ConfirmDialog
+          title={`Make this repository ${next}?`}
+          message={
+            next === "private"
+              ? "Only you, collaborators and, for an organization, its members with access will see it. Stars and watchers from others are kept but they lose access."
+              : "Anyone will be able to see it, its code, issues and pull requests."
+          }
+          confirmLabel={`Make ${next}`}
+          loading={busy}
+          onConfirm={() => void change()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Transfer ownership (#256): to an organization you own, or to your own account. */
+function TransferRow({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
+  const [open, setOpen] = useState(false);
+  const [newOwner, setNewOwner] = useState("");
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  async function transfer() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await transferRepo(token, handle, repoName, newOwner.trim().replace(/^@/, ""));
+      toast(`Transferred to ${res.fullName}`, { tone: "success" });
+      navigate(`/${res.fullName}/settings`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't transfer");
+      setBusy(false);
+    }
+  }
+
+  const ready = !!newOwner.trim() && typed.trim() === repoName;
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
+      <div className="min-w-0">
+        <p className="text-fh-base font-semibold text-fh-fg">Transfer ownership</p>
+        <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+          Move this repository to an organization you own, or to your own account. Its old address keeps redirecting.
+        </p>
+      </div>
+      <Button variant="danger" onClick={() => setOpen(true)}>Transfer</Button>
+      <Dialog
+        open={open}
+        onClose={busy ? () => {} : () => setOpen(false)}
+        size="sm"
+        title="Transfer this repository"
+        footer={
+          <>
+            <Button variant="default" onClick={() => setOpen(false)} disabled={busy}>Cancel</Button>
+            <Button variant="danger" disabled={!ready} loading={busy} onClick={() => void transfer()}>I understand, transfer this repository</Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <Field label="New owner" hint="An organization you own, or your username.">
+            {(id) => <TextInput id={id} value={newOwner} onChange={(e) => setNewOwner(e.target.value)} autoFocus autoComplete="off" />}
+          </Field>
+          <Field label="Confirm the repository name" hint={<>Type <span className="font-mono font-semibold text-fh-fg">{repoName}</span> to confirm.</>}>
+            {(id) => <TextInput id={id} value={typed} onChange={(e) => setTyped(e.target.value)} className="font-mono" autoComplete="off" />}
+          </Field>
+          {error && <p className="rounded-md bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg">{error}</p>}
         </div>
       </Dialog>
     </div>
@@ -1999,6 +2198,13 @@ export function RepoSettingsTab({ token, handle, repoName, canAdmin }: Props) {
         {section === "pulls" && (
           <>
             <MergePolicySection token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
+            <CommitMessageSettings token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
+            <div className="mt-4 space-y-3">
+              <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="allowAutoMerge" title="Allow auto-merge"
+                description="Let people arm a pull request to merge itself once its checks and reviews pass." />
+              <SettingToggle token={token} handle={handle} repoName={repoName} isOwner={isOwner} field="autoCloseIssues" title="Auto-close linked issues"
+                description="When a pull request that says “Closes #N” merges, close those issues." />
+            </div>
             <HeadBranchCleanup token={token} handle={handle} repoName={repoName} isOwner={isOwner} />
           </>
         )}

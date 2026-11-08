@@ -2,9 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
-import { rmdir } from "node:fs/promises";
-import path from "node:path";
-import { bareRepoPathFromKey, buildStorageKey, moveBareRepo, removeBareRepo } from "../git-storage.js";
+import { buildStorageKey, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { newHandleSchema } from "../validation.js";
 
 /**
@@ -94,7 +92,7 @@ export async function accountRoutes(app: FastifyInstance) {
       }
       throw e;
     }
-    if (moved.length > 0) await removeEmptyHandleDir(moved[0][0]);
+    if (moved.length > 0) await removeEmptyOwnerDir(moved[0][0]);
     return { handle };
   });
 
@@ -185,14 +183,9 @@ export async function accountRoutes(app: FastifyInstance) {
     for (const r of personal) {
       if (r.storageKey) await removeBareRepo(r.storageKey).catch((err: unknown) => app.log.error({ err }, "removing a deleted account's repository failed"));
     }
-    if (personal[0]?.storageKey) await removeEmptyHandleDir(personal[0].storageKey);
+    if (personal[0]?.storageKey) await removeEmptyOwnerDir(personal[0].storageKey);
     return reply.status(204).send();
   });
-}
-
-/** Drop the `<handle>/` folder a storage key lived in, if nothing is left in it. */
-async function removeEmptyHandleDir(storageKey: string): Promise<void> {
-  await rmdir(path.dirname(bareRepoPathFromKey(storageKey))).catch(() => undefined); // not empty, or already gone
 }
 
 /** The ghost account, created on first use; null when a real person holds the name. */

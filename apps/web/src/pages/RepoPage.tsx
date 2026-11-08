@@ -511,9 +511,13 @@ export function RepoPage({ token, user, onLogout }: Props) {
           {/* Tab bar */}
           <TabNav aria-label="Repository" className="mt-4">
             <TabItem to={base} active={activeTab === "code"} icon={<CodeIcon />}>Code</TabItem>
-            <TabItem to={`${base}/issues`} active={activeTab === "issues"} icon={<IssueIcon />} count={openIssueCount ?? undefined}>Issues</TabItem>
+            {repo?.hasIssues !== false && (
+              <TabItem to={`${base}/issues`} active={activeTab === "issues"} icon={<IssueIcon />} count={openIssueCount ?? undefined}>Issues</TabItem>
+            )}
             <TabItem to={`${base}/pulls`} active={activeTab === "pulls"} icon={<PRIcon />} count={openPrCount ?? undefined}>Pull requests</TabItem>
-            <TabItem to={`${base}/projects`} active={activeTab === "projects"} icon={<ProjectIcon />} count={openProjectCount ?? undefined}>Projects</TabItem>
+            {repo?.hasProjects !== false && (
+              <TabItem to={`${base}/projects`} active={activeTab === "projects"} icon={<ProjectIcon />} count={openProjectCount ?? undefined}>Projects</TabItem>
+            )}
             <TabItem to={`${base}/actions`} active={activeTab === "actions"} icon={<ActionsIcon />}>Actions</TabItem>
             <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
             <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
