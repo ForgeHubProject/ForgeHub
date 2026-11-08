@@ -851,6 +851,8 @@ enum NotificationReason {
   REVIEW_REQUESTED
   SUBSCRIBED
   MENTIONED
+  // A team you're on was @mentioned (#253): @org/team.
+  TEAM_MENTIONED
 }
 
 enum NotificationSubjectType {

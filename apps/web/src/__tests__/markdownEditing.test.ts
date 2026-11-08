@@ -48,6 +48,11 @@ describe("applyFormat", () => {
 });
 
 describe("activeTrigger", () => {
+  it("keeps a team mention (@org/team) as one token, and nothing else across a slash", () => {
+    expect(activeTrigger("cc @acme/des", 12)).toEqual({ char: "@", query: "acme/des", start: 3 });
+    expect(activeTrigger("see #a/b", 8)).toBeNull();
+  });
+
   it("finds @, # and : tokens at the caret", () => {
     expect(activeTrigger("cc @ali", 7)).toEqual({ char: "@", query: "ali", start: 3 });
     expect(activeTrigger("fixes #12", 9)).toEqual({ char: "#", query: "12", start: 6 });

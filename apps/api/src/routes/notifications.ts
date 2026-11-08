@@ -90,10 +90,11 @@ async function resolveSubjects(rows: Array<{ subjectType: string; subjectId: str
 }
 
 /** The inbox's reason filters (#258), GitHub's names. */
-const REASON_FILTERS: Record<string, "ASSIGNED" | "COMMENT" | "MENTIONED" | "REVIEW_REQUESTED" | "SUBSCRIBED"> = {
+const REASON_FILTERS: Record<string, "ASSIGNED" | "COMMENT" | "MENTIONED" | "TEAM_MENTIONED" | "REVIEW_REQUESTED" | "SUBSCRIBED"> = {
   assigned: "ASSIGNED",
   participating: "COMMENT",
   mentioned: "MENTIONED",
+  team_mentioned: "TEAM_MENTIONED",
   review_requested: "REVIEW_REQUESTED",
   watching: "SUBSCRIBED",
 };

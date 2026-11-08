@@ -73,10 +73,12 @@ export type Trigger = { char: "@" | "#" | ":"; query: string; start: number };
  */
 export function activeTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
-  const m = /(^|[\s(])([@#:])([\w.+-]*)$/.exec(before);
+  const m = /(^|[\s(])([@#:])([\w.+/-]*)$/.exec(before);
   if (!m) return null;
   const char = m[2] as Trigger["char"];
   const query = m[3];
+  // A slash belongs to team mentions only (#253): @org/team.
+  if (query.includes("/") && char !== "@") return null;
   if (char === ":" && !/^[a-z+-]/i.test(query)) return null;
   if (query.length > 40) return null;
   return { char, query, start: caret - query.length - 1 };
