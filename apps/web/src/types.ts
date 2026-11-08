@@ -192,6 +192,8 @@ export type Repo = {
   autoCloseIssues?: boolean;
   mergeCommitMessage?: "default" | "title" | "title_description";
   squashCommitMessage?: "default" | "title" | "title_commits" | "title_description";
+  isTemplate?: boolean;
+  suggestUpdateBranch?: boolean;
   /** Archived (#256): read-only until an admin unarchives it. */
   archived?: boolean;
   archivedAt?: string | null;
@@ -573,7 +575,11 @@ export type PullRequest = {
     defaultMethod: "merge" | "squash" | "rebase";
     /** Settings (#256): whether the repository lets pull requests arm auto-merge. */
     allowAutoMerge?: boolean;
+    /** Settings (#256): offer "Update branch" whenever the head is behind. */
+    suggestUpdateBranch?: boolean;
   };
+  /** Commits the head is behind its base (#256); 0 when up to date or closed. */
+  behindBy?: number;
   /** Armed auto-merge intent (issue #119); null/absent when not armed. */
   autoMerge?: { method: "merge" | "squash" | "rebase"; by: string } | null;
   mergedAt: string | null;
