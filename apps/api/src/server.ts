@@ -50,6 +50,8 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { peopleRoutes } from "./routes/people.js";
 import { exploreRoutes } from "./routes/explore.js";
 import { accountRoutes } from "./routes/account.js";
+import { userSettingsRoutes } from "./routes/user-settings.js";
+import { registerBlockGuard } from "./blocks.js";
 import { registerArchivedGuard } from "./archived-guard.js";
 import { tagRoutes } from "./routes/tags.js";
 import { tokenRoutes } from "./routes/tokens.js";
@@ -167,6 +169,7 @@ export async function buildServer() {
   await app.register(devUiRoutes);
   // Archived repositories take no writes (#256); registered before the routes it guards.
   registerArchivedGuard(app);
+  registerBlockGuard(app);
 
   await app.register(authRoutes);
   await app.register(sessionRoutes);
@@ -213,6 +216,7 @@ export async function buildServer() {
   await app.register(peopleRoutes);
   await app.register(exploreRoutes);
   await app.register(accountRoutes);
+  await app.register(userSettingsRoutes);
   await app.register(webhookRoutes);
   await app.register(ciRoutes);
   await app.register(userKeyRoutes);

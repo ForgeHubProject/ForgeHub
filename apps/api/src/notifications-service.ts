@@ -14,23 +14,47 @@ export type EventParams = {
   reason: NotificationReason;
 };
 
+/** Whether a reason reaches the inbox and email (#258); a reason with no stored choice is on for both. */
+export function reasonPrefs(raw: string | null | undefined, reason: NotificationReason): { web: boolean; email: boolean } {
+  let stored: unknown;
+  try {
+    stored = raw ? (JSON.parse(raw) as Record<string, unknown>)[reason] : undefined;
+  } catch {
+    stored = undefined;
+  }
+  const pick = (k: "web" | "email") =>
+    stored && typeof stored === "object" && typeof (stored as Record<string, unknown>)[k] === "boolean" ? ((stored as Record<string, boolean>)[k]) : true;
+  return { web: pick("web"), email: pick("email") };
+}
+
 // Upsert: one notification per (user, subject). New activity marks it unread.
 // Email is a second, best-effort sink: we mail only on a transition into unread
 // (brand-new, or previously-read) so a burst of micro-updates on one subject
 // doesn't spam. Delivery is fire-and-forget and can never fail this call.
+// The recipient's preferences pick the sinks per reason, and someone they
+// blocked never reaches them (#258).
 async function notify(userId: string, p: EventParams): Promise<void> {
-  const existing = await prisma.notification.findUnique({
-    where: { userId_subjectId: { userId, subjectId: p.subjectId } },
-    select: { read: true },
+  const recipient = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { notificationPrefs: true, blocking: { where: { blockedId: p.actorId }, select: { blockedId: true } } },
   });
-  await prisma.notification.upsert({
-    where: { userId_subjectId: { userId, subjectId: p.subjectId } },
-    create: { userId, repoId: p.repoId, subjectType: p.subjectType, subjectId: p.subjectId, subjectTitle: p.subjectTitle, reason: p.reason, read: false },
-    update: { read: false, reason: p.reason, subjectTitle: p.subjectTitle, updatedAt: new Date() },
-  });
+  if (recipient?.blocking?.length) return;
+  const prefs = reasonPrefs(recipient?.notificationPrefs, p.reason);
 
-  const transitionedToUnread = !existing || existing.read === true;
-  if (transitionedToUnread) {
+  let transitionedToUnread = true; // email-only: every event mails
+  if (prefs.web) {
+    const existing = await prisma.notification.findUnique({
+      where: { userId_subjectId: { userId, subjectId: p.subjectId } },
+      select: { read: true },
+    });
+    await prisma.notification.upsert({
+      where: { userId_subjectId: { userId, subjectId: p.subjectId } },
+      create: { userId, repoId: p.repoId, subjectType: p.subjectType, subjectId: p.subjectId, subjectTitle: p.subjectTitle, reason: p.reason, read: false },
+      update: { read: false, reason: p.reason, subjectTitle: p.subjectTitle, updatedAt: new Date() },
+    });
+    transitionedToUnread = !existing || existing.read === true;
+  }
+  if (prefs.email && transitionedToUnread) {
     void sendNotificationEmail(userId, p);
   }
 }

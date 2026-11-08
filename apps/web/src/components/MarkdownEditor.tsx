@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listIssues, listPulls, listRepoMembers } from "../api";
 import type { RepoRef } from "../lib/autolink";
 import { activeTrigger, applyFormat, completeTrigger, EMOJI, type Format, type Trigger } from "../lib/markdownEditing";
+import { SavedRepliesMenu } from "./SavedRepliesMenu";
 import { Avatar, cx } from "../ui";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -77,6 +78,17 @@ export function MarkdownEditor({
     const next = applyFormat({ text: value, selStart: el.selectionStart, selEnd: el.selectionEnd }, f);
     pendingSelection.current = [next.selStart, next.selEnd];
     onValueChange(next.text);
+  }
+
+  /** Put text at the caret, replacing any selection (a saved reply, #258). */
+  function insertText(text: string) {
+    const el = ref.current;
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const caret = start + text.length;
+    pendingSelection.current = [caret, caret];
+    onValueChange(value.slice(0, start) + text + value.slice(end));
+    el?.focus();
   }
 
   /** Type a trigger character at the caret and open its list (the toolbar's @ and #). */
@@ -160,6 +172,12 @@ export function MarkdownEditor({
             <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
             <ToolButton label="Mention someone" onClick={() => insertTrigger("@")}><span className="font-semibold">@</span></ToolButton>
             <ToolButton label="Reference an issue or pull request" onClick={() => insertTrigger("#")}><span className="font-semibold">#</span></ToolButton>
+          </div>
+        )}
+        {/* Outside the toolbar: its sideways scroll would clip the menu's panel. */}
+        {mode === "write" && token && (
+          <div className="pb-1">
+            <SavedRepliesMenu token={token} onInsert={insertText} />
           </div>
         )}
       </div>

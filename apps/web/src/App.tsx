@@ -16,6 +16,9 @@ import { SettingsTokensPage } from "./pages/SettingsTokensPage";
 import { SettingsProfilePage } from "./pages/SettingsProfilePage";
 import { SettingsAccountPage } from "./pages/SettingsAccountPage";
 import { SettingsAppearancePage } from "./pages/SettingsAppearancePage";
+import { SettingsNotificationsPage } from "./pages/SettingsNotificationsPage";
+import { SettingsRepliesPage } from "./pages/SettingsRepliesPage";
+import { SettingsBlockedPage } from "./pages/SettingsBlockedPage";
 import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { SettingsSessionsPage } from "./pages/SettingsSessionsPage";
 import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
@@ -170,6 +173,18 @@ function AppRoutes() {
       <Route
         path="/settings/appearance"
         element={authed ? <SettingsAppearancePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/notifications"
+        element={authed ? <SettingsNotificationsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/replies"
+        element={authed ? <SettingsRepliesPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/blocked"
+        element={authed ? <SettingsBlockedPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/settings/tokens"
