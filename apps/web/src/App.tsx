@@ -13,6 +13,9 @@ import { RepoListPage } from "./pages/RepoListPage";
 import { RepoPage } from "./pages/RepoPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsTokensPage } from "./pages/SettingsTokensPage";
+import { SettingsProfilePage } from "./pages/SettingsProfilePage";
+import { SettingsAccountPage } from "./pages/SettingsAccountPage";
+import { SettingsAppearancePage } from "./pages/SettingsAppearancePage";
 import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { SettingsSessionsPage } from "./pages/SettingsSessionsPage";
 import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
@@ -154,6 +157,19 @@ function AppRoutes() {
             <Navigate to="/login" replace />
           )
         }
+      />
+      <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
+      <Route
+        path="/settings/profile"
+        element={authed ? <SettingsProfilePage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/account"
+        element={authed ? <SettingsAccountPage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/settings/appearance"
+        element={authed ? <SettingsAppearancePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/settings/tokens"
