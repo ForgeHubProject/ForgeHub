@@ -1141,7 +1141,7 @@ describe("merge endpoint honors the repo merge policy (issue #119)", () => {
     );
     const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().mergePolicy).toEqual({ allowedMethods: ["merge", "rebase"], defaultMethod: "rebase" });
+    expect(res.json().mergePolicy).toEqual({ allowedMethods: ["merge", "rebase"], defaultMethod: "rebase", allowAutoMerge: true });
   });
 });
 

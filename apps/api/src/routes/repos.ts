@@ -2,7 +2,7 @@ import { sshClientConfig } from "../ssh/config.js";
 import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
-import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
+import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import { canAdmin, canRead, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
@@ -13,6 +13,7 @@ import {
   addCollaboratorBodySchema,
   createRepoBodySchema,
   renameRepoBodySchema,
+  transferRepoBodySchema,
   updateRepoBodySchema,
 } from "../validation.js";
 
@@ -103,6 +104,12 @@ export function repoResponse(
     // Repository settings (#256); absent on narrower selects ⇒ off.
     archivedAt?: Date | null;
     deleteBranchOnMerge?: boolean;
+    hasIssues?: boolean;
+    hasProjects?: boolean;
+    allowAutoMerge?: boolean;
+    autoCloseIssues?: boolean;
+    mergeCommitMessage?: string;
+    squashCommitMessage?: string;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -137,6 +144,12 @@ export function repoResponse(
     archived: !!r.archivedAt,
     archivedAt: r.archivedAt?.toISOString() ?? null,
     deleteBranchOnMerge: r.deleteBranchOnMerge ?? false,
+    hasIssues: r.hasIssues ?? true,
+    hasProjects: r.hasProjects ?? true,
+    allowAutoMerge: r.allowAutoMerge ?? true,
+    autoCloseIssues: r.autoCloseIssues ?? true,
+    mergeCommitMessage: r.mergeCommitMessage ?? "default",
+    squashCommitMessage: r.squashCommitMessage ?? "default",
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -230,7 +243,7 @@ export async function repoRoutes(app: FastifyInstance) {
     body: z.infer<typeof updateRepoBodySchema>,
     reply: FastifyReply,
   ) {
-    const { description, visibility, allowedMergeMethods, defaultMergeMethod, defaultBranch, archived, deleteBranchOnMerge } = body;
+    const { description, visibility, allowedMergeMethods, defaultMergeMethod, defaultBranch, archived, deleteBranchOnMerge, ...flags } = body;
     const descriptionValue =
       description === undefined ? undefined : description === null ? null : description.trim() || null;
 
@@ -241,7 +254,15 @@ export async function repoRoutes(app: FastifyInstance) {
       defaultMergeMethod?: string;
       archivedAt?: Date | null;
       deleteBranchOnMerge?: boolean;
+      hasIssues?: boolean;
+      hasProjects?: boolean;
+      allowAutoMerge?: boolean;
+      autoCloseIssues?: boolean;
+      mergeCommitMessage?: string;
+      squashCommitMessage?: string;
     } = {};
+    // More settings (#256): features, pull request behaviour, merge messages.
+    for (const [k, v] of Object.entries(flags)) if (v !== undefined) (data as Record<string, unknown>)[k] = v;
 
     // An archived repository's settings stay read-only too, apart from unarchiving it.
     if (existing.archivedAt && archived !== false) {
@@ -668,6 +689,78 @@ export async function repoRoutes(app: FastifyInstance) {
         throw e;
       }
       return reply.send({ name: newName, fullName: `${owningHandle}/${newName}` });
+    },
+  );
+
+  // POST /repos/:handle/:name/transfer { newOwner } — transfer ownership (#256)
+  // to an organization the caller owns, or to the caller's own account. Moving
+  // it to another person would need them to accept, which ForgeHub doesn't do
+  // yet. The old address keeps redirecting, like a rename.
+  app.post(
+    "/repos/:handle/:name/transfer",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const parsed = transferRepoBodySchema.safeParse(request.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      if (repo.archivedAt) return reply.status(409).send({ error: "This repository is archived. Unarchive it to transfer it." });
+
+      const userId = request.user.sub;
+      const target = parsed.data.newOwner.toLowerCase();
+      const owner = await prisma.user.findUnique({ where: { id: repo.ownerId }, select: { handle: true } });
+      const currentHandle = (repo.org?.handle ?? owner?.handle ?? "").toLowerCase();
+      if (target === currentHandle) return reply.status(400).send({ error: `${target} already owns this repository` });
+
+      const [org, me, person] = await Promise.all([
+        prisma.organization.findUnique({
+          where: { handle: target },
+          select: { id: true, memberships: { where: { userId, role: "OWNER" }, select: { userId: true } } },
+        }),
+        prisma.user.findUnique({ where: { id: userId }, select: { handle: true } }),
+        prisma.user.findUnique({ where: { handle: target }, select: { id: true } }),
+      ]);
+      let next: { orgId: string | null; ownerId: string };
+      if (org) {
+        if (org.memberships.length === 0) return reply.status(403).send({ error: "You can only transfer repositories to organizations you own" });
+        next = { orgId: org.id, ownerId: repo.ownerId };
+      } else if (me?.handle === target) {
+        next = { orgId: null, ownerId: userId };
+      } else if (person) {
+        return reply.status(400).send({
+          error: "Transferring to another person needs them to accept it, which ForgeHub doesn't support yet. Transfer it to an organization you both own instead.",
+        });
+      } else {
+        return reply.status(404).send({ error: `No user or organization is called ${target}` });
+      }
+
+      const taken = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(target, repo.name), select: { id: true } });
+      if (taken) return reply.status(409).send({ error: `${target}/${repo.name} already exists` });
+
+      const newStorageKey = repo.storageKey ? buildStorageKey(target, repo.name) : null;
+      let moved = false;
+      try {
+        if (repo.storageKey && newStorageKey) {
+          await moveBareRepo(repo.storageKey, newStorageKey);
+          moved = true;
+        }
+        await prisma.$transaction([
+          prisma.repo.update({ where: { id: repo.id }, data: { ...next, storageKey: newStorageKey } }),
+          prisma.repoRedirect.deleteMany({ where: { ownerHandle: target, name: repo.name } }),
+          prisma.repoRedirect.upsert({
+            where: { ownerHandle_name: { ownerHandle: currentHandle, name: repo.name } },
+            create: { ownerHandle: currentHandle, name: repo.name, repoId: repo.id },
+            update: { repoId: repo.id },
+          }),
+        ]);
+      } catch (e: unknown) {
+        if (moved && repo.storageKey && newStorageKey) await moveBareRepo(newStorageKey, repo.storageKey).catch(() => undefined);
+        const code = errorCode(e);
+        if (code === "P2002" || code === "EEXIST") return reply.status(409).send({ error: `${target}/${repo.name} already exists` });
+        throw e;
+      }
+      if (moved && repo.storageKey) await removeEmptyOwnerDir(repo.storageKey);
+      return reply.send({ fullName: `${target}/${repo.name}` });
     },
   );
 

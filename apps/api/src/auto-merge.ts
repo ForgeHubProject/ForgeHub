@@ -122,6 +122,7 @@ export async function maybeAutoMergePr(prId: string, log?: LogLike): Promise<Aut
       include: repoAccessInclude,
     });
     if (!repo?.storageKey) return { fired: false, reason: "no git storage" };
+    if (repo.allowAutoMerge === false) return { fired: false, reason: "auto-merge is turned off for the repository" };
     const storageKey = repo.storageKey;
 
     // The armed method is validated at ARM time against the repo policy, but the
@@ -162,8 +163,8 @@ export async function maybeAutoMergePr(prId: string, log?: LogLike): Promise<Aut
     if (!gate.ready) return { fired: false, reason: gate.reasons.join("; ") };
 
     const outcome = await executePullMerge({
-      repo: { id: repo.id, storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge },
-      pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch },
+      repo: { id: repo.id, storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge, autoCloseIssues: repo.autoCloseIssues, mergeCommitMessage: repo.mergeCommitMessage, squashCommitMessage: repo.squashCommitMessage },
+      pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, description: pr.description },
       actorId: pr.autoMergeById,
       mergeMethod: pr.autoMergeMethod,
       auto: true,

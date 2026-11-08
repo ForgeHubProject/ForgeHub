@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -302,6 +302,11 @@ export async function createBareRepo(storageKey: string): Promise<string> {
 export async function removeBareRepo(storageKey: string): Promise<void> {
   const fullPath = bareRepoPathFromKey(storageKey);
   await rm(fullPath, { recursive: true, force: true });
+}
+
+/** Drop the owner folder a storage key lived in, once nothing is left in it (after a move or delete). */
+export async function removeEmptyOwnerDir(storageKey: string): Promise<void> {
+  await rmdir(path.dirname(bareRepoPathFromKey(storageKey))).catch(() => undefined); // not empty, or already gone
 }
 
 /** Move a bare repo to a new key. Throws with `code: "EEXIST"` if the target exists. */

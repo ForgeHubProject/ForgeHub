@@ -515,7 +515,7 @@ export function MergeBox({
             )}
             {/* Arm auto-merge (issue #119) — most useful exactly while a gate
                 (protection / checks) still blocks the direct merge button. */}
-            {canWrite && !autoMerge && (
+            {canWrite && !autoMerge && pr.mergePolicy?.allowAutoMerge !== false && (
               <Button variant="default" loading={autoMergeBusy} disabled={busy && !autoMergeBusy} onClick={doEnableAutoMerge}>
                 Enable auto-merge
               </Button>

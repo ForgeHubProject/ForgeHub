@@ -185,6 +185,13 @@ export type Repo = {
    * match.
    */
   viewerPermission?: "admin" | "write" | "read" | null;
+  /** More settings (#256); optional so older payloads still parse. */
+  hasIssues?: boolean;
+  hasProjects?: boolean;
+  allowAutoMerge?: boolean;
+  autoCloseIssues?: boolean;
+  mergeCommitMessage?: "default" | "title" | "title_description";
+  squashCommitMessage?: "default" | "title" | "title_commits" | "title_description";
   /** Archived (#256): read-only until an admin unarchives it. */
   archived?: boolean;
   archivedAt?: string | null;
@@ -561,7 +568,12 @@ export type PullRequest = {
   reviewSummary?: ReviewSummary;
   protection?: ProtectionStatus | null;
   /** Owner merge policy (issue #119): which methods the merge box may offer. */
-  mergePolicy?: { allowedMethods: Array<"merge" | "squash" | "rebase">; defaultMethod: "merge" | "squash" | "rebase" };
+  mergePolicy?: {
+    allowedMethods: Array<"merge" | "squash" | "rebase">;
+    defaultMethod: "merge" | "squash" | "rebase";
+    /** Settings (#256): whether the repository lets pull requests arm auto-merge. */
+    allowAutoMerge?: boolean;
+  };
   /** Armed auto-merge intent (issue #119); null/absent when not armed. */
   autoMerge?: { method: "merge" | "squash" | "rebase"; by: string } | null;
   mergedAt: string | null;
