@@ -10,6 +10,7 @@ vi.mock("../prisma.js", () => ({
     repo: { findMany: vi.fn() },
     profilePin: { findMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
     follow: { count: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
+    block: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));

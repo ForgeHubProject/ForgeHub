@@ -116,7 +116,24 @@ export type PublicProfile = {
   viewerFollows?: boolean;
   /** Private profile (#257): activity, stars and followers are hidden from others. */
   privateProfile?: boolean;
+  /** Whether the viewer blocked them (#258). */
+  viewerBlocks?: boolean;
 };
+
+/** A reply saved for reuse in comment boxes (#258). */
+export type SavedReply = { id: string; title: string; body: string; updatedAt: string };
+
+/** Notification reasons, as the API names them. */
+export type NotificationReasonKey = "SUBSCRIBED" | "COMMENT" | "MENTIONED" | "ASSIGNED" | "REVIEW_REQUESTED";
+
+/** Where each reason reaches you (#258); email also needs the master switch. */
+export type NotificationPrefs = {
+  emailNotifications: boolean;
+  reasons: Record<NotificationReasonKey, { web: boolean; email: boolean }>;
+};
+
+/** Someone you blocked (#258). */
+export type BlockedUser = { handle: string; displayName: string | null; avatarKey: string | null; blockedAt: string };
 
 /** A profile's status (#257): an emoji and a short text, until it expires. */
 export type ProfileStatus = { emoji: string | null; text: string | null; expiresAt: string | null };

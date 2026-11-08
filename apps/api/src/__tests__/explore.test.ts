@@ -15,6 +15,7 @@ vi.mock("../prisma.js", () => ({
     pullRequestReview: { findMany: vi.fn() },
     star: { findMany: vi.fn() },
     follow: { findMany: vi.fn(), findUnique: vi.fn() },
+    block: { findUnique: vi.fn().mockResolvedValue(null) },
     $executeRaw: vi.fn(),
   },
 }));

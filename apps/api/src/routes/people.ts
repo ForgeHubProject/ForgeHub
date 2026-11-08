@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canRead, repoAccessInclude } from "../repo-access.js";
 import { repoCardInclude, repoResponse } from "./repos.js";
+import { isBlocked } from "../blocks.js";
 
 /** GitHub's limit on pinned repositories. */
 const MAX_PINS = 6;
@@ -56,6 +57,10 @@ export async function peopleRoutes(app: FastifyInstance) {
     const target = await prisma.user.findUnique({ where: { handle: (request.params as { handle: string }).handle.toLowerCase() }, select: { id: true } });
     if (!target) return reply.status(404).send({ error: "User not found" });
     if (target.id === userId) return reply.status(400).send({ error: "You can't follow yourself" });
+    // Blocked (#258), either way round: no following.
+    if ((await isBlocked(target.id, userId)) || (await isBlocked(userId, target.id))) {
+      return reply.status(403).send({ error: "You can't follow this user" });
+    }
     await prisma.follow.upsert({
       where: { followerId_followingId: { followerId: userId, followingId: target.id } },
       create: { followerId: userId, followingId: target.id },
