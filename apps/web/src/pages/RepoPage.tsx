@@ -17,6 +17,7 @@ import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoForksTab } from "./repo/RepoForksTab";
 import { RepoActivityTab } from "./repo/RepoActivityTab";
+import { RepoInsightsTab } from "./repo/RepoInsightsTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { PULL_DETAIL, RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
@@ -30,7 +31,7 @@ type Props = {
   onLogout: () => void;
 };
 
-type Tab = "code" | "issues" | "pulls" | "projects" | "actions" | "commits" | "releases" | "settings";
+type Tab = "code" | "issues" | "pulls" | "projects" | "actions" | "commits" | "releases" | "insights" | "settings";
 
 function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("issues")) return "issues";
@@ -39,8 +40,17 @@ function tabFromPath(subpath: string): Tab {
   if (subpath.startsWith("actions")) return "actions";
   if (subpath.startsWith("commits")) return "commits";
   if (subpath.startsWith("releases") || subpath.startsWith("tags")) return "releases";
+  if (subpath.startsWith("insights")) return "insights";
   if (subpath.startsWith("settings")) return "settings";
   return "code";
+}
+
+function GraphIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1.5 1.75V13.5h13.75a.75.75 0 010 1.5H.75a.75.75 0 01-.75-.75V1.75a.75.75 0 011.5 0zm14.28 2.53l-5.25 5.25a.75.75 0 01-1.06 0L7 7.06 4.28 9.78a.751.751 0 01-1.042-.018.751.751 0 01-.018-1.042l3.25-3.25a.75.75 0 011.06 0L10 7.94l4.72-4.72a.751.751 0 011.042.018.751.751 0 01.018 1.042z" />
+    </svg>
+  );
 }
 
 function CodeIcon() {
@@ -529,6 +539,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             <TabItem to={`${base}/actions`} active={activeTab === "actions"} icon={<ActionsIcon />}>Actions</TabItem>
             <TabItem to={`${base}/commits`} active={activeTab === "commits"} icon={<CommitIcon />}>Commits</TabItem>
             <TabItem to={`${base}/releases`} active={activeTab === "releases"} icon={<TagIcon />}>Releases</TabItem>
+            <TabItem to={`${base}/insights`} active={activeTab === "insights"} icon={<GraphIcon />}>Insights</TabItem>
             {canAdmin && (
               <TabItem to={`${base}/settings`} active={activeTab === "settings"} icon={<SettingsIcon />}>Settings</TabItem>
             )}
@@ -662,6 +673,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
             splat={splat}
             onProjectsChanged={refreshProjectCount}
           />
+        )}
+        {activeTab === "insights" && (
+          <RepoInsightsTab token={token} handle={h} repoName={r} base={base} splat={splat} />
         )}
         {activeTab === "releases" && (
           <RepoReleasesTab
