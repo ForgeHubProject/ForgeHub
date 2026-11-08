@@ -12,6 +12,7 @@ export const SETTINGS_NAV: Array<{ group?: string; items: Array<{ to: string; la
       { to: "/settings/profile", label: "Public profile" },
       { to: "/settings/account", label: "Account" },
       { to: "/settings/appearance", label: "Appearance" },
+      { to: "/settings/notifications", label: "Notifications" },
     ],
   },
   {
@@ -23,7 +24,14 @@ export const SETTINGS_NAV: Array<{ group?: string; items: Array<{ to: string; la
   },
   {
     group: "Code and review",
-    items: [{ to: "/settings/rendering", label: "Rendering" }],
+    items: [
+      { to: "/settings/replies", label: "Saved replies" },
+      { to: "/settings/rendering", label: "Rendering" },
+    ],
+  },
+  {
+    group: "Moderation",
+    items: [{ to: "/settings/blocked", label: "Blocked users" }],
   },
   {
     group: "Developer settings",

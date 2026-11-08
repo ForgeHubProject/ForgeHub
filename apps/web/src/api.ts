@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, SavedReply, NotificationPrefs, NotificationReasonKey, BlockedUser, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -302,6 +302,44 @@ export async function updateMyProfile(
   },
 ): Promise<{ user: User }> {
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** Notification preferences (#258). */
+export async function getNotificationPrefs(token: string): Promise<NotificationPrefs> {
+  return req("/user/notification-preferences", { token });
+}
+
+export async function setNotificationPrefs(
+  token: string,
+  patch: { emailNotifications?: boolean; reasons?: Partial<Record<NotificationReasonKey, { web?: boolean; email?: boolean }>> },
+): Promise<NotificationPrefs> {
+  return req("/user/notification-preferences", { method: "PUT", token, body: JSON.stringify(patch) });
+}
+
+/** Saved replies (#258). */
+export async function listSavedReplies(token: string): Promise<{ replies: SavedReply[] }> {
+  return req("/user/replies", { token });
+}
+
+export async function createSavedReply(token: string, title: string, body: string): Promise<SavedReply> {
+  return req("/user/replies", { method: "POST", token, body: JSON.stringify({ title, body }) });
+}
+
+export async function updateSavedReply(token: string, id: string, title: string, body: string): Promise<SavedReply> {
+  return req(`/user/replies/${encodeURIComponent(id)}`, { method: "PATCH", token, body: JSON.stringify({ title, body }) });
+}
+
+export async function deleteSavedReply(token: string, id: string): Promise<void> {
+  return req(`/user/replies/${encodeURIComponent(id)}`, { method: "DELETE", token });
+}
+
+/** Blocked users (#258). */
+export async function listBlockedUsers(token: string): Promise<{ users: BlockedUser[] }> {
+  return req("/user/blocks", { token });
+}
+
+export async function setBlocked(token: string, handle: string, blocked: boolean): Promise<{ blocked: boolean }> {
+  return req(`/user/blocks/${encodeURIComponent(handle)}`, { method: blocked ? "PUT" : "DELETE", token });
 }
 
 /** Change your username (#258); your repositories move with you and their old URLs redirect. */

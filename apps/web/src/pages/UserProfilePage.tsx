@@ -8,6 +8,7 @@ import {
   getPublicProfile,
   getReadme,
   getUserRepos,
+  setBlocked,
   setFollowing,
   uploadAvatar,
 } from "../api";
@@ -158,6 +159,17 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   const [repoType, setRepoType] = useState("all");
   const [repoSort, setRepoSort] = useState("updated");
   const [followBusy, setFollowBusy] = useState(false);
+
+  async function toggleBlock() {
+    if (!profile || !handle) return;
+    try {
+      const res = await setBlocked(token, handle, !profile.viewerBlocks);
+      setProfile({ ...profile, viewerBlocks: res.blocked, viewerFollows: res.blocked ? false : profile.viewerFollows });
+      toast(res.blocked ? `Blocked @${profile.handle}` : `Unblocked @${profile.handle}`, { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't update the block", { tone: "danger" });
+    }
+  }
 
   async function toggleFollow() {
     if (!profile || !handle) return;
@@ -360,6 +372,10 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                 <Button variant="default" block className="mt-4" onClick={() => setShowEdit(true)}>
                   Edit profile
                 </Button>
+              ) : profile.viewerBlocks ? (
+                <Button variant="default" block className="mt-4" onClick={() => void toggleBlock()}>
+                  Unblock
+                </Button>
               ) : (
                 <Button variant={profile.viewerFollows ? "default" : "primary"} block className="mt-4" loading={followBusy} onClick={() => void toggleFollow()}>
                   {profile.viewerFollows ? "Unfollow" : "Follow"}
@@ -421,6 +437,12 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                   <span>Joined {joinedLabel(profile.createdAt)}</span>
                 </div>
               </div>
+
+              {!isOwnProfile && !profile.viewerBlocks && (
+                <button type="button" onClick={() => void toggleBlock()} className="mt-4 border-t border-fh-border-muted pt-3 text-fh-sm text-fh-fg-muted hover:text-fh-danger-fg">
+                  Block user
+                </button>
+              )}
             </aside>
 
             {/* Main — GitHub's profile tabs */}
