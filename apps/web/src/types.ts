@@ -138,6 +138,20 @@ export type BlockedUser = { handle: string; displayName: string | null; avatarKe
 /** A profile's status (#257): an emoji and a short text, until it expires. */
 export type ProfileStatus = { emoji: string | null; text: string | null; expiresAt: string | null };
 
+/** One branch update on a repository's Activity page (#256). */
+export type RefActivity = {
+  id: string;
+  ref: string;
+  kind: "push" | "force_push" | "branch_created" | "branch_deleted" | "merge";
+  beforeSha: string | null;
+  afterSha: string | null;
+  prNumber: number | null;
+  actor: { handle: string; displayName: string | null; avatarKey: string | null } | null;
+  /** Commits a push added; null when unknown. */
+  commits: number | null;
+  createdAt: string;
+};
+
 /** A public repository on Explore (#257), with the formats it holds (official FHR handler ids). */
 export type ExploreRepo = Repo & { formats: string[] };
 
