@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   avatarSrc,
   deleteAvatar,
+  getActivity,
   getContributions,
   getPublicProfile,
   getReadme,
@@ -15,7 +16,7 @@ import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { ContributionHeatmap } from "../components/ContributionHeatmap";
 import { MarkdownRenderer } from "../components/MarkdownRenderer";
-import type { Contributions, PublicProfile, Repo, User } from "../types";
+import type { ActivityMonth, Contributions, PublicProfile, Repo, User } from "../types";
 import {
   Avatar,
   Button,
@@ -31,7 +32,7 @@ import {
   Textarea,
   useToast,
 } from "../ui";
-import { PeopleList, PinnedRepos, StarsList } from "./profileParts";
+import { ContributionActivity, PeopleList, PinnedRepos, StarsList } from "./profileParts";
 import { CalendarIcon, LinkIcon, LocationIcon, RepoIcon, RepoRow, RowList } from "./listShared";
 
 type Props = {
@@ -99,6 +100,7 @@ function EditProfileDialog({
   const [statusEmoji, setStatusEmoji] = useState(profile.status?.emoji ?? "");
   const [statusText, setStatusText] = useState(profile.status?.text ?? "");
   const [statusFor, setStatusFor] = useState("never");
+  const [privateProfile, setPrivateProfile] = useState(!!profile.privateProfile);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -110,7 +112,7 @@ function EditProfileDialog({
     try {
       const hours = ({ never: 0, day: 24, week: 24 * 7 } as Record<string, number>)[statusFor] ?? 0;
       const res = await updateMyProfile(token, {
-        displayName, bio, location, website, pronouns, company,
+        displayName, bio, location, website, pronouns, company, privateProfile,
         socialLinks: links.map((l) => l.trim()).filter(Boolean),
         status: statusEmoji.trim() || statusText.trim()
           ? { emoji: statusEmoji, text: statusText, expiresAt: hours ? new Date(Date.now() + hours * 3_600_000).toISOString() : null }
@@ -220,11 +222,27 @@ function EditProfileDialog({
             <option value="week">Clear after a week</option>
           </Select>
         </fieldset>
+        <label className="flex items-start gap-2 text-fh-sm text-fh-fg">
+          <input type="checkbox" className="mt-0.5" checked={privateProfile} onChange={(e) => setPrivateProfile(e.target.checked)} />
+          <span>
+            <span className="font-semibold">Private profile</span>
+            <span className="block text-fh-fg-muted">Hide your activity, stars, followers and status from everyone else.</span>
+          </span>
+        </label>
         {error && (
           <p className="rounded-md bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg">{error}</p>
         )}
       </form>
     </Dialog>
+  );
+}
+
+function PrivateNotice({ handle }: { handle: string }) {
+  return (
+    <div className="rounded-md border border-fh-border bg-fh-surface px-6 py-10 text-center">
+      <p className="text-fh-base font-semibold text-fh-fg">This profile is private</p>
+      <p className="mt-1 text-fh-sm text-fh-fg-muted">@{handle} keeps their activity, stars and followers to themselves.</p>
+    </div>
   );
 }
 
@@ -312,17 +330,27 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
     };
   }, [token, handle]);
 
-  // Contribution calendar (last ~12 months by default). Best-effort.
+  // Contribution calendar and the activity under it: the last ~12 months, or a
+  // calendar year from the picker (#257). Best-effort.
+  const [year, setYear] = useState<number | null>(null);
+  const [activity, setActivity] = useState<ActivityMonth[] | null>(null);
+  useEffect(() => setYear(null), [handle]);
   useEffect(() => {
     if (!handle) return;
     let live = true;
-    getContributions(token, handle)
+    const from = year ? `${year}-01-01T00:00:00.000Z` : undefined;
+    const to = year ? (year === new Date().getUTCFullYear() ? new Date().toISOString() : `${year}-12-31T23:59:59.999Z`) : undefined;
+    setActivity(null);
+    getContributions(token, handle, from, to)
       .then((c) => live && setContrib(c))
       .catch(() => live && setContrib(null));
+    getActivity(token, handle, from, to)
+      .then((a) => live && setActivity(a.months))
+      .catch(() => live && setActivity([]));
     return () => {
       live = false;
     };
-  }, [token, handle]);
+  }, [token, handle, year]);
 
   async function handleAvatarFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -357,6 +385,14 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
   }
 
   const displayName = profile?.displayName || handle || "";
+  // Someone else's private profile (#257): activity, stars and followers stay hidden.
+  const hidden = !!profile?.privateProfile && !isOwnProfile;
+  const years = useMemo(() => {
+    const first = profile ? new Date(profile.createdAt).getUTCFullYear() : new Date().getUTCFullYear();
+    const out: number[] = [];
+    for (let y = new Date().getUTCFullYear(); y >= first; y--) out.push(y);
+    return out;
+  }, [profile]);
 
   const filteredRepos = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -458,7 +494,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                 </Button>
               )}
 
-              <p className="mt-3 text-fh-sm text-fh-fg-muted">
+              {profile.followers != null && <p className="mt-3 text-fh-sm text-fh-fg-muted">
                 <Link to="?tab=followers" className="text-fh-fg-muted no-underline hover:text-fh-accent-fg">
                   <span className="font-semibold text-fh-fg">{profile.followers ?? 0}</span> {profile.followers === 1 ? "follower" : "followers"}
                 </Link>
@@ -466,7 +502,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                 <Link to="?tab=following" className="text-fh-fg-muted no-underline hover:text-fh-accent-fg">
                   <span className="font-semibold text-fh-fg">{profile.following ?? 0}</span> following
                 </Link>
-              </p>
+              </p>}
 
               <div className="mt-4 space-y-2 text-fh-base">
                 {profile.bio && <p className="text-fh-fg">{profile.bio}</p>}
@@ -542,16 +578,47 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
 
                   <PinnedRepos token={token} handle={profile.handle} own={isOwnProfile} candidates={repos} />
 
-                  {/* Contribution calendar heatmap */}
-                  {contrib && (
-                    <section className="mb-6" aria-label="Contribution activity">
-                      <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">
-                        {contrib.total} {contrib.total === 1 ? "contribution" : "contributions"} in the last year
-                      </h2>
-                      <div className="rounded-md border border-fh-border bg-fh-surface p-4">
-                        <ContributionHeatmap data={contrib} />
+                  {/* Contribution calendar, the activity under it, and the year picker */}
+                  {hidden ? (
+                    <PrivateNotice handle={profile.handle} />
+                  ) : (
+                    contrib && (
+                      <div className="flex flex-col gap-4 lg:flex-row">
+                        <div className="min-w-0 flex-1">
+                          <section className="mb-6" aria-label="Contributions">
+                            <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">
+                              {contrib.total} {contrib.total === 1 ? "contribution" : "contributions"} {year ? `in ${year}` : "in the last year"}
+                            </h2>
+                            <div className="rounded-md border border-fh-border bg-fh-surface p-4">
+                              <ContributionHeatmap data={contrib} />
+                            </div>
+                          </section>
+                          <section aria-label="Contribution activity">
+                            <h2 className="mb-3 text-fh-base font-semibold text-fh-fg">Contribution activity</h2>
+                            {activity ? <ContributionActivity key={year ?? "last"} months={activity} /> : <Skeleton width="100%" height={72} />}
+                          </section>
+                        </div>
+                        {years.length > 1 && (
+                          <nav aria-label="Contribution years" className="flex flex-row flex-wrap gap-1 lg:w-24 lg:flex-col">
+                            {years.map((y) => (
+                              <button
+                                key={y}
+                                type="button"
+                                aria-current={year === y ? "true" : undefined}
+                                onClick={() => setYear(year === y ? null : y)}
+                                className={
+                                  year === y
+                                    ? "rounded-md bg-fh-accent-emphasis px-3 py-1.5 text-left text-fh-sm font-semibold text-fh-on-emphasis"
+                                    : "rounded-md px-3 py-1.5 text-left text-fh-sm text-fh-fg-muted hover:bg-fh-surface-muted hover:text-fh-fg"
+                                }
+                              >
+                                {y}
+                              </button>
+                            ))}
+                          </nav>
+                        )}
                       </div>
-                    </section>
+                    )
                   )}
 
                 </>
@@ -635,8 +702,9 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                 </>
               )}
 
-              {tab === "stars" && <StarsList token={token} handle={profile.handle} />}
-              {(tab === "followers" || tab === "following") && (
+              {tab === "stars" && (hidden ? <PrivateNotice handle={profile.handle} /> : <StarsList token={token} handle={profile.handle} />)}
+              {(tab === "followers" || tab === "following") && hidden && <PrivateNotice handle={profile.handle} />}
+              {(tab === "followers" || tab === "following") && !hidden && (
                 <>
                   <h2 className="mb-3 text-fh-lg font-semibold text-fh-fg">{tab === "followers" ? "Followers" : "Following"}</h2>
                   <PeopleList token={token} handle={profile.handle} kind={tab} />

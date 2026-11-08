@@ -103,6 +103,57 @@ function resolveRange(fromQ?: string, toQ?: string): { from: Date; to: Date } {
   return { from: new Date(fromMs), to: new Date(toMs) };
 }
 
+// Repo-visibility predicate pushed into every query, mirroring
+// repo-access.ts `canRead`'s FULL readable set (issue #114). A repo is
+// readable when it is:
+//   - PUBLIC (everyone, incl. guests), OR — for a signed-in viewer —
+//   - owned/created by the viewer, OR
+//   - one the viewer is a direct RepoCollaborator on, OR
+//   - owned by an org the viewer is an OWNER of, OR
+//   - granted to a team the viewer belongs to (READER *or* WRITER — both
+//     confer read; matches `teamRoleFor` returning non-null in canRead).
+// Guests see PUBLIC only. Private activity the viewer can't read never leaves
+// the DB — and a bare org MEMBER with no team grant still sees nothing, so
+// org-repo authorship stays hidden from strangers exactly as before.
+function readableRepoWhere(viewerId: string | undefined) {
+  return {
+    OR: [
+      { visibility: "PUBLIC" as const },
+      ...(viewerId
+        ? [
+            { ownerId: viewerId },
+            { collaborators: { some: { userId: viewerId } } },
+            { org: { memberships: { some: { userId: viewerId, role: "OWNER" } } } },
+            { teamAccess: { some: { team: { memberships: { some: { userId: viewerId } } } } } },
+          ]
+        : []),
+    ],
+  };
+}
+
+/** "YYYY-MM" in UTC. */
+const monthOf = (d: Date) => d.toISOString().slice(0, 7);
+
+type RepoRef = { name: string; owner: { handle: string }; org: { handle: string } | null };
+const repoRefSelect = { name: true, owner: { select: { handle: true } }, org: { select: { handle: true } } } as const;
+const fullNameOf = (r: RepoRef) => `${r.org?.handle ?? r.owner.handle}/${r.name}`;
+
+/** Count `rows` per month and repository, keeping a few per-row tallies. */
+function tally<T>(rows: T[], when: (r: T) => Date, repo: (r: T) => RepoRef, keys: (r: T) => Record<string, boolean>) {
+  const out = new Map<string, Map<string, Record<string, number>>>();
+  for (const r of rows) {
+    const month = monthOf(when(r));
+    const perRepo = out.get(month) ?? new Map<string, Record<string, number>>();
+    out.set(month, perRepo);
+    const name = fullNameOf(repo(r));
+    const t = perRepo.get(name) ?? { count: 0 };
+    t.count++;
+    for (const [k, on] of Object.entries(keys(r))) if (on) t[k] = (t[k] ?? 0) + 1;
+    perRepo.set(name, t);
+  }
+  return out;
+}
+
 export async function profileRoutes(app: FastifyInstance) {
   // ── POST /users/me/avatar (multipart image upload) ──────────────────────────
   app.post("/users/me/avatar", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -182,37 +233,17 @@ export async function profileRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({
       where: { handle: handle.toLowerCase() },
-      select: { id: true },
+      select: { id: true, privateProfile: true },
     });
     if (!user) return reply.status(404).send({ error: "User not found" });
 
     const { from, to } = resolveRange(fromQ, toQ);
+    // A private profile (#257) shows its activity to its owner only.
+    if (user.privateProfile && viewerId !== user.id) {
+      return { days: [], total: 0, from: from.toISOString(), to: to.toISOString(), private: true };
+    }
 
-    // Repo-visibility predicate pushed into every query, mirroring
-    // repo-access.ts `canRead`'s FULL readable set (issue #114). A repo is
-    // readable when it is:
-    //   - PUBLIC (everyone, incl. guests), OR — for a signed-in viewer —
-    //   - owned/created by the viewer, OR
-    //   - one the viewer is a direct RepoCollaborator on, OR
-    //   - owned by an org the viewer is an OWNER of, OR
-    //   - granted to a team the viewer belongs to (READER *or* WRITER — both
-    //     confer read; matches `teamRoleFor` returning non-null in canRead).
-    // Guests see PUBLIC only. Private activity the viewer can't read never leaves
-    // the DB — and a bare org MEMBER with no team grant still sees nothing, so
-    // org-repo authorship stays hidden from strangers exactly as before.
-    const readableRepo = {
-      OR: [
-        { visibility: "PUBLIC" as const },
-        ...(viewerId
-          ? [
-              { ownerId: viewerId },
-              { collaborators: { some: { userId: viewerId } } },
-              { org: { memberships: { some: { userId: viewerId, role: "OWNER" } } } },
-              { teamAccess: { some: { team: { memberships: { some: { userId: viewerId } } } } } },
-            ]
-          : []),
-      ],
-    };
+    const readableRepo = readableRepoWhere(viewerId);
 
     const range = { gte: from, lte: to };
     const [issues, pulls, issueComments, prComments, prReviews] = await Promise.all([
@@ -248,5 +279,59 @@ export async function profileRoutes(app: FastifyInstance) {
 
     const { days, total } = bucketContributions(timestamps);
     return { days, total, from: from.toISOString(), to: to.toISOString() };
+  });
+
+  // ── GET /users/:handle/activity?from=&to= ───────────────────────────────────
+  // GitHub's "Contribution activity" under the graph (#257): per month, the
+  // repositories created and the pull requests, issues and reviews per repo.
+  app.get("/users/:handle/activity", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const { from: fromQ, to: toQ } = request.query as { from?: string; to?: string };
+    const viewerId = (request as { user?: { sub: string } }).user?.sub;
+    const user = await prisma.user.findUnique({ where: { handle: handle.toLowerCase() }, select: { id: true, privateProfile: true } });
+    if (!user) return reply.status(404).send({ error: "User not found" });
+    if (user.privateProfile && viewerId !== user.id) return { months: [], private: true };
+
+    const { from, to } = resolveRange(fromQ, toQ);
+    const range = { gte: from, lte: to };
+    const readableRepo = readableRepoWhere(viewerId);
+    const [created, pulls, issues, reviews] = await Promise.all([
+      prisma.repo.findMany({
+        where: { ownerId: user.id, createdAt: range, AND: [readableRepo] },
+        select: { createdAt: true, ...repoRefSelect },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.pullRequest.findMany({
+        where: { authorId: user.id, createdAt: range, repo: readableRepo },
+        select: { createdAt: true, state: true, repo: { select: repoRefSelect } },
+      }),
+      prisma.issue.findMany({
+        where: { authorId: user.id, createdAt: range, repo: readableRepo },
+        select: { createdAt: true, state: true, repo: { select: repoRefSelect } },
+      }),
+      prisma.pullRequestReview.findMany({
+        where: { authorId: user.id, submittedAt: range, pullRequest: { repo: readableRepo } },
+        select: { submittedAt: true, pullRequest: { select: { repo: { select: repoRefSelect } } } },
+      }),
+    ]);
+
+    const pullsBy = tally(pulls, (p) => p.createdAt, (p) => p.repo, (p) => ({ merged: p.state === "MERGED", open: p.state === "OPEN" }));
+    const issuesBy = tally(issues, (i) => i.createdAt, (i) => i.repo, (i) => ({ closed: i.state === "CLOSED", open: i.state === "OPEN" }));
+    const reviewsBy = tally(reviews, (r) => r.submittedAt!, (r) => r.pullRequest.repo, () => ({}));
+    const months = new Set([...created.map((r) => monthOf(r.createdAt)), ...pullsBy.keys(), ...issuesBy.keys(), ...reviewsBy.keys()]);
+    const list = (m: Map<string, Record<string, number>> | undefined) =>
+      [...(m ?? new Map<string, Record<string, number>>())]
+        .map(([repo, t]) => ({ ...t, repo, count: t.count }))
+        .sort((a, b) => b.count - a.count || a.repo.localeCompare(b.repo));
+
+    return {
+      months: [...months].sort().reverse().map((month) => ({
+        month,
+        created: created.filter((r) => monthOf(r.createdAt) === month).map((r) => ({ repo: fullNameOf(r), createdAt: r.createdAt.toISOString() })),
+        pulls: list(pullsBy.get(month)),
+        issues: list(issuesBy.get(month)),
+        reviews: list(reviewsBy.get(month)),
+      })),
+    };
   });
 }

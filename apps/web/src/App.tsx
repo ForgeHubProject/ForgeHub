@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { ApiError, getPublicProfile } from "./api";
+import { ExplorePage } from "./pages/ExplorePage";
 import { FeedPage } from "./pages/FeedPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NewOrgPage } from "./pages/NewOrgPage";
@@ -18,6 +19,7 @@ import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
 import { YourWorkPage } from "./pages/YourWorkPage";
 import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
+import { HovercardLayer } from "./components/Hovercard";
 import { DEFAULT_TITLE } from "./pages/useDocumentTitle";
 import type { User } from "./types";
 
@@ -100,6 +102,7 @@ function AppRoutes() {
     <>
       <DefaultTitle />
       {authed && <KeyboardShortcuts />}
+      {authed && <HovercardLayer token={token!} selfHandle={user!.handle} />}
       <Routes>
       <Route
         path="/login"
@@ -199,6 +202,14 @@ function AppRoutes() {
       <Route
         path="/pulls"
         element={authed ? <YourWorkPage kind="pulls" token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/explore"
+        element={authed ? <ExplorePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+      />
+      <Route
+        path="/topics/:topic"
+        element={authed ? <ExplorePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
       />
       <Route
         path="/organizations/new"

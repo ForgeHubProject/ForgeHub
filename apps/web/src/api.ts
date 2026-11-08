@@ -2,7 +2,7 @@ import type {
   BlameHunk, BranchInfo, BranchProtection, BranchProtectionRules, CheckSummary, CommitDetail,
   CommitInfo, Composition, Constraint, Contributions, Contributors, DeployKey, Design, DesignCompareResult,
   DesignVersion, DiffChange, FeedPage, FileDiff, ForkSummary, Issue, IssueComment,
-  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, PRFileEntry, PatScope,
+  Label, Milestone, Notification, OrgProfile, OrgRole, Organization, PersonCard, ExploreRepo, ActivityMonth, PRFileEntry, PatScope,
   PersonalAccessToken, ProjectColumn, ProjectDetail, ProjectItem, ProjectSubjectType,
   ProjectSummary, ProtectedTag, PublicProfile, PullRequest, ReactionEmoji, ReactionState,
   RefCompareResult, Release, ReleaseAsset, Repo, RepoSocial, RepoTemplates, RequestedReviewer,
@@ -298,9 +298,44 @@ export async function updateMyProfile(
     /** Profile (#257). */
     pronouns?: string; company?: string; socialLinks?: string[];
     status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
+    privateProfile?: boolean;
   },
 ): Promise<{ user: User }> {
   return req("/users/me", { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** Explore (#257): public repositories, popular or recently updated, by format family and topic. */
+export async function exploreRepos(
+  token: string | null,
+  opts: { sort?: "stars" | "updated"; format?: string; topic?: string; page?: number },
+): Promise<{ repos: ExploreRepo[]; total: number; hasMore: boolean }> {
+  const qs = new URLSearchParams();
+  if (opts.sort) qs.set("sort", opts.sort);
+  if (opts.format) qs.set("format", opts.format);
+  if (opts.topic) qs.set("topic", opts.topic);
+  if (opts.page && opts.page > 1) qs.set("page", String(opts.page));
+  return req(`/explore/repos${qs.toString() ? `?${qs}` : ""}`, { token: token ?? undefined });
+}
+
+export async function exploreTopics(token: string | null): Promise<{ topics: Array<{ topic: string; count: number }> }> {
+  return req("/explore/topics", { token: token ?? undefined });
+}
+
+export async function exploreFormats(token: string | null): Promise<{ formats: Array<{ id: string; count: number }> }> {
+  return req("/explore/formats", { token: token ?? undefined });
+}
+
+/** A profile's contribution activity by month (#257); `private` when hidden from the viewer. */
+export async function getActivity(
+  token: string | null,
+  handle: string,
+  from?: string,
+  to?: string,
+): Promise<{ months: ActivityMonth[]; private?: boolean }> {
+  const qs = new URLSearchParams();
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  return req(`/users/${handle}/activity${qs.toString() ? `?${qs}` : ""}`, { token: token ?? undefined });
 }
 
 /** A profile's pinned repositories, in order, as the viewer may see them (#257). */

@@ -110,13 +110,29 @@ export type PublicProfile = {
   company?: string | null;
   socialLinks?: string[];
   status?: ProfileStatus | null;
-  followers?: number;
-  following?: number;
+  /** Null on someone else's private profile. */
+  followers?: number | null;
+  following?: number | null;
   viewerFollows?: boolean;
+  /** Private profile (#257): activity, stars and followers are hidden from others. */
+  privateProfile?: boolean;
 };
 
 /** A profile's status (#257): an emoji and a short text, until it expires. */
 export type ProfileStatus = { emoji: string | null; text: string | null; expiresAt: string | null };
+
+/** A public repository on Explore (#257), with the formats it holds (official FHR handler ids). */
+export type ExploreRepo = Repo & { formats: string[] };
+
+/** One month of a profile's contribution activity (#257). */
+export type ActivityMonth = {
+  month: string; // "YYYY-MM"
+  created: Array<{ repo: string; createdAt: string }>;
+  pulls: ActivityRow[];
+  issues: ActivityRow[];
+  reviews: ActivityRow[];
+};
+export type ActivityRow = { repo: string; count: number; merged?: number; open?: number; closed?: number };
 
 /** Someone in a followers or following list (#257). */
 export type PersonCard = { handle: string; displayName: string | null; avatarKey: string | null; bio: string | null };
