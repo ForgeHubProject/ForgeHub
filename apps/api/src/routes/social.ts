@@ -158,6 +158,8 @@ export async function socialRoutes(app: FastifyInstance) {
     if (!user) return reply.status(404).send({ error: "User not found" });
 
     const vid = viewerId(request as { user?: { sub: string } });
+    // A private profile (#257) keeps its stars to itself.
+    if (user.privateProfile && vid !== user.id) return { repos: [], page, perPage, hasMore: false, private: true };
     const stars = await prisma.star.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },

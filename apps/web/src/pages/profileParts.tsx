@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { avatarSrc, getPins, listPeople, listStarredRepos, setPins } from "../api";
-import type { PersonCard, Repo } from "../types";
+import type { ActivityMonth, ActivityRow, PersonCard, Repo } from "../types";
 import { Avatar, Badge, Button, Dialog, EmptyState, Skeleton, TextInput, useToast } from "../ui";
 import { RepoIcon, RepoRow, RowList } from "./listShared";
 
@@ -177,5 +177,92 @@ export function PeopleList({ token, handle, kind }: { token: string; handle: str
         </li>
       ))}
     </ul>
+  );
+}
+
+const monthName = (ym: string) =>
+  new Date(`${ym}-01T00:00:00Z`).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+const repoCount = (n: number) => `${n} ${n === 1 ? "repository" : "repositories"}`;
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * GitHub's "Contribution activity" under the graph (#257): month by month, the
+ * repositories created and the pull requests, issues and reviews per repository.
+ */
+export function ContributionActivity({ months }: { months: ActivityMonth[] }) {
+  const [shown, setShown] = useState(2);
+  if (months.length === 0) {
+    return <p className="rounded-md border border-dashed border-fh-border px-4 py-6 text-center text-fh-sm text-fh-fg-muted">No activity in this period.</p>;
+  }
+  return (
+    <div>
+      {months.slice(0, shown).map((m) => {
+        const sum = (rows: ActivityRow[]) => rows.reduce((n, r) => n + r.count, 0);
+        return (
+          <section key={m.month} className="mb-6" aria-label={monthName(m.month)}>
+            <h3 className="mb-3 flex items-center gap-3 text-fh-sm font-semibold text-fh-fg">
+              {monthName(m.month)}
+              <span aria-hidden className="h-px flex-1 bg-fh-border" />
+            </h3>
+            <ul className="space-y-4 border-l-2 border-fh-border-muted pl-4">
+              {m.created.length > 0 && (
+                <ActivityGroup title={`Created ${repoCount(m.created.length)}`}>
+                  {m.created.map((c) => (
+                    <ActivityRepoLine key={c.repo} repo={c.repo} />
+                  ))}
+                </ActivityGroup>
+              )}
+              {m.pulls.length > 0 && (
+                <ActivityGroup title={`Opened ${plural(sum(m.pulls), "pull request")} in ${repoCount(m.pulls.length)}`}>
+                  {m.pulls.map((r) => (
+                    <ActivityRepoLine key={r.repo} repo={r.repo} count={r.count} detail={[r.merged && `${r.merged} merged`, r.open && `${r.open} open`]} />
+                  ))}
+                </ActivityGroup>
+              )}
+              {m.issues.length > 0 && (
+                <ActivityGroup title={`Opened ${plural(sum(m.issues), "issue")} in ${repoCount(m.issues.length)}`}>
+                  {m.issues.map((r) => (
+                    <ActivityRepoLine key={r.repo} repo={r.repo} count={r.count} detail={[r.open && `${r.open} open`, r.closed && `${r.closed} closed`]} />
+                  ))}
+                </ActivityGroup>
+              )}
+              {m.reviews.length > 0 && (
+                <ActivityGroup title={`Reviewed ${plural(sum(m.reviews), "pull request")} in ${repoCount(m.reviews.length)}`}>
+                  {m.reviews.map((r) => (
+                    <ActivityRepoLine key={r.repo} repo={r.repo} count={r.count} />
+                  ))}
+                </ActivityGroup>
+              )}
+            </ul>
+          </section>
+        );
+      })}
+      {shown < months.length && (
+        <Button variant="default" block onClick={() => setShown(shown + 3)}>
+          Show more activity
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ActivityGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <li>
+      <p className="text-fh-base text-fh-fg">{title}</p>
+      <ul className="mt-1 space-y-1">{children}</ul>
+    </li>
+  );
+}
+
+function ActivityRepoLine({ repo, count, detail = [] }: { repo: string; count?: number; detail?: Array<string | number | false | undefined> }) {
+  const notes = detail.filter((d): d is string => typeof d === "string");
+  return (
+    <li className="flex items-center gap-2 text-fh-sm">
+      <RepoIcon size={14} className="shrink-0 text-fh-fg-muted" />
+      <Link to={`/${repo}`} className="truncate text-fh-accent-fg hover:underline">{repo}</Link>
+      {count != null && <span className="text-fh-fg-muted">{count}</span>}
+      {notes.length > 0 && <span className="text-fh-xs text-fh-fg-subtle">{notes.join(" · ")}</span>}
+    </li>
   );
 }

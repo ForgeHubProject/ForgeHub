@@ -28,6 +28,7 @@ type DbUser = {
   // Profile (#257); optional so narrower rows and mocks still format.
   pronouns?: string | null; company?: string | null; socialLinks?: string | null;
   statusEmoji?: string | null; statusText?: string | null; statusExpiresAt?: Date | null;
+  privateProfile?: boolean;
 };
 
 /** The profile fields #257 added, as the API shows them; an expired status reads as none. */
@@ -76,6 +77,7 @@ function publicUser(u: DbUser) {
     emailNotifications: u.emailNotifications,
     avatarKey: u.avatarKey,
     ...profileExtras(u),
+    privateProfile: u.privateProfile ?? false,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -147,21 +149,26 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user) return reply.status(404).send({ error: "User not found" });
     // Following (#257): the counts, and whether the viewer follows them.
     const viewer = (request as { user?: { sub: string } }).user?.sub;
-    const [followers, following, viewerFollows] = await Promise.all([
+    const viewerFollows = viewer && viewer !== user.id
+      ? await prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer, followingId: user.id } } }).then(Boolean)
+      : false;
+    // A private profile (#257) hides its status and follow counts from everyone
+    // else; whether the viewer follows them is the viewer's own to know.
+    if (user.privateProfile && viewer !== user.id) {
+      return { ...publicProfile(user), status: null, privateProfile: true, followers: null, following: null, viewerFollows };
+    }
+    const [followers, following] = await Promise.all([
       prisma.follow.count({ where: { followingId: user.id } }),
       prisma.follow.count({ where: { followerId: user.id } }),
-      viewer && viewer !== user.id
-        ? prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer, followingId: user.id } } }).then(Boolean)
-        : Promise.resolve(false),
     ]);
-    return { ...publicProfile(user), followers, following, viewerFollows };
+    return { ...publicProfile(user), privateProfile: user.privateProfile ?? false, followers, following, viewerFollows };
   });
 
   // Update own profile
   app.patch("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { displayName, bio, location, website, emailNotifications, pronouns, company, socialLinks, status } = request.body as {
+    const { displayName, bio, location, website, emailNotifications, pronouns, company, socialLinks, status, privateProfile } = request.body as {
       displayName?: string; bio?: string; location?: string; website?: string; emailNotifications?: boolean;
-      pronouns?: string; company?: string; socialLinks?: unknown;
+      pronouns?: string; company?: string; socialLinks?: unknown; privateProfile?: boolean;
       status?: { emoji?: string | null; text?: string | null; expiresAt?: string | null } | null;
     };
 
@@ -188,6 +195,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (location !== undefined) data.location = location.trim() || null;
     if (website !== undefined) data.website = website.trim() || null;
     if (emailNotifications !== undefined) data.emailNotifications = Boolean(emailNotifications);
+    if (privateProfile !== undefined) data.privateProfile = Boolean(privateProfile);
 
     if (Object.keys(data).length === 0) {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user.sub } });
