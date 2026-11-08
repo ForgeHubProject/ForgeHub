@@ -11,6 +11,7 @@ import { installPreReceiveHook } from "./git-hooks.js";
 import { syncProtectionConfig } from "./branch-protection.js";
 import { syncProtectedTagsConfig } from "./protected-tags.js";
 import { markFormatsStale } from "./repo-formats.js";
+import { recordRefUpdates } from "./activity-log.js";
 
 const execFile = promisify(execFileCb);
 
@@ -85,10 +86,12 @@ export async function runPostReceiveEffects(
     );
     const repoId = repo.id;
     const changed: Array<{ branch: string; oldSha: string; newSha: string }> = [];
+    const after = new Map<string, string>();
     for (const line of stdout.trim().split("\n").filter(Boolean)) {
       const sep = line.indexOf("|");
       const branchName = line.slice(0, sep);
       const newSha = line.slice(sep + 1);
+      after.set(branchName, newSha);
       const oldSha = shasBefore.get(branchName) ?? "0".repeat(40);
       if (newSha !== oldSha) {
         changed.push({ branch: branchName, oldSha, newSha });
@@ -100,6 +103,10 @@ export async function runPostReceiveEffects(
     if (changed.length > 0) {
       markFormatsStale(repoId).catch((err: unknown) => app.log.error({ err }, "post-push format reset failed"));
     }
+    // The Activity page's log (#256): pushes, force pushes, branches made and deleted.
+    recordRefUpdates(repoId, repoPath, actorId, shasBefore, after).catch((err: unknown) =>
+      app.log.error({ err }, "post-push activity log failed"),
+    );
     emitHeadPushedForPush(repoId, actorId, changed).catch((err: unknown) =>
       app.log.error({ err }, "post-push head_pushed events failed"),
     );

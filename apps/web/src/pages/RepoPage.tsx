@@ -16,6 +16,7 @@ import { RepoCommitsTab, commitShaFromSplat } from "./repo/RepoCommitsTab";
 import { RepoActionsTab } from "./repo/ci/RepoActionsTab";
 import { RepoCompareTab } from "./repo/RepoCompareTab";
 import { RepoForksTab } from "./repo/RepoForksTab";
+import { RepoActivityTab } from "./repo/RepoActivityTab";
 import { RepoIssuesTab } from "./repo/RepoIssuesTab";
 import { PULL_DETAIL, RepoPullsTab } from "./repo/RepoPullsTab";
 import { RepoReleasesTab } from "./repo/RepoReleasesTab";
@@ -584,6 +585,9 @@ export function RepoPage({ token, user, onLogout }: Props) {
         {activeTab === "code" && splat.startsWith("forks") && (
           <RepoForksTab token={token} handle={h} repoName={r} />
         )}
+        {activeTab === "code" && splat.startsWith("activity") && (
+          <RepoActivityTab token={token} handle={h} repoName={r} branches={branches} base={base} />
+        )}
         {activeTab === "code" && splat.startsWith("branches") && (
           <RepoBranchesTab token={token} handle={h} repoName={r} user={user} base={base} />
         )}
@@ -599,7 +603,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
             base={base}
           />
         )}
-        {activeTab === "code" && !splat.startsWith("branches") && !splat.startsWith("compare") && !splat.startsWith("forks") && (
+        {activeTab === "code" && !splat.startsWith("branches") && !splat.startsWith("compare") && !splat.startsWith("forks") && !splat.startsWith("activity") && (
           <RepoCodeTab
             token={token}
             handle={h}
