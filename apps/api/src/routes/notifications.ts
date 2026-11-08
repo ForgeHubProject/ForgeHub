@@ -156,7 +156,7 @@ export async function notificationRoutes(app: FastifyInstance) {
   // whole inbox with all=true.
   app.get("/notifications", { preHandler: [app.authenticate] }, async (request, reply) => {
     const userId = request.user.sub;
-    const q = request.query as { all?: string; view?: string; reason?: string; repo?: string; unread?: string };
+    const q = request.query as { all?: string; view?: string; reason?: string; repo?: string; unread?: string; sort?: string };
     const view = q.view === "saved" || q.view === "done" ? q.view : "inbox";
     const base: Prisma.NotificationWhereInput = {
       userId,
@@ -172,7 +172,7 @@ export async function notificationRoutes(app: FastifyInstance) {
     }
 
     const [rows, byRepo] = await Promise.all([
-      prisma.notification.findMany({ where, include: notifInclude, orderBy: { updatedAt: "desc" }, take: 300 }),
+      prisma.notification.findMany({ where, include: notifInclude, orderBy: { updatedAt: q.sort === "oldest" ? "asc" : "desc" }, take: 300 }),
       // The sidebar's repositories: everything in this view, whatever the other filters.
       prisma.notification.groupBy({ by: ["repoId"], where: base, _count: { _all: true } }),
     ]);
@@ -247,6 +247,22 @@ export async function notificationRoutes(app: FastifyInstance) {
     if (!notif) return reply.status(404).send({ error: "Notification not found" });
     await prisma.threadMute.deleteMany({ where: { userId, subjectId: notif.subjectId } });
     return reply.status(204).send();
+  });
+
+  // GET /user/subscriptions — the conversations reaching your inbox (#258), and
+  // the ones you unsubscribed from. ForgeHub subscribes you by taking part
+  // (authoring, commenting, being mentioned, assigned or asked to review), so
+  // a conversation that has notified you is one you're subscribed to.
+  app.get("/user/subscriptions", { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const [rows, mutes] = await Promise.all([
+      prisma.notification.findMany({ where: { userId }, include: notifInclude, orderBy: { updatedAt: "desc" }, take: 300 }),
+      prisma.threadMute.findMany({ where: { userId }, select: { subjectId: true } }),
+    ]);
+    const muted = new Set(mutes.map((m) => m.subjectId));
+    const subjects = await resolveSubjects(rows);
+    const all = rows.map((n) => ({ ...formatNotification(n, subjects.get(n.subjectId)), subscribed: !muted.has(n.subjectId) }));
+    return { subscriptions: all.filter((n) => n.subscribed), unsubscribed: all.filter((n) => !n.subscribed) };
   });
 
   // GET /user/watching — the repositories whose activity reaches you: an explicit
