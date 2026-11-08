@@ -181,6 +181,10 @@ model Repo {
   autoCloseIssues     Boolean   @default(true)
   mergeCommitMessage  String    @default("default")
   squashCommitMessage String    @default("default")
+  // A template repository (#256): "Use this template" starts new repositories from it.
+  isTemplate          Boolean   @default(false)
+  // Offer "Update branch" whenever a pull request's head is behind its base (#256).
+  suggestUpdateBranch Boolean   @default(false)
 
   // Formats on the default branch (#257, Explore's format filter): a JSON array of
   // official FHR handler ids, most files first. Refreshed on push; null until then.

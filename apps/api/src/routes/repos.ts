@@ -2,7 +2,10 @@ import { sshClientConfig } from "../ssh/config.js";
 import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
-import { buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
+import { bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
+import { seedFromTemplate } from "../repo-template.js";
+import { resolveActorIdentity } from "../pull-merge.js";
+import { runPostReceiveEffects } from "../git-push-shared.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
 import { canAdmin, canRead, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
@@ -110,6 +113,8 @@ export function repoResponse(
     autoCloseIssues?: boolean;
     mergeCommitMessage?: string;
     squashCommitMessage?: string;
+    isTemplate?: boolean;
+    suggestUpdateBranch?: boolean;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -150,6 +155,8 @@ export function repoResponse(
     autoCloseIssues: r.autoCloseIssues ?? true,
     mergeCommitMessage: r.mergeCommitMessage ?? "default",
     squashCommitMessage: r.squashCommitMessage ?? "default",
+    isTemplate: r.isTemplate ?? false,
+    suggestUpdateBranch: r.suggestUpdateBranch ?? false,
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -260,6 +267,8 @@ export async function repoRoutes(app: FastifyInstance) {
       autoCloseIssues?: boolean;
       mergeCommitMessage?: string;
       squashCommitMessage?: string;
+      isTemplate?: boolean;
+      suggestUpdateBranch?: boolean;
     } = {};
     // More settings (#256): features, pull request behaviour, merge messages.
     for (const [k, v] of Object.entries(flags)) if (v !== undefined) (data as Record<string, unknown>)[k] = v;
@@ -450,6 +459,17 @@ export async function repoRoutes(app: FastifyInstance) {
         namespaceHandle = org.handle;
       }
 
+      // Starting from a template (#256): one the caller can read and that is marked as a template.
+      let templateKey: string | null = null;
+      if (parsed.data.template) {
+        const [th, tn] = parsed.data.template.split("/");
+        const template = await resolveRepo(th, tn);
+        if (!template || !canRead(template, ownerId) || !template.isTemplate || !template.storageKey) {
+          return reply.status(404).send({ error: "Template repository not found" });
+        }
+        templateKey = template.storageKey;
+      }
+
       const storageKey = buildStorageKey(namespaceHandle, name);
       const nameTaken = orgId
         ? "This organization already has a repository with this name"
@@ -494,6 +514,15 @@ export async function repoRoutes(app: FastifyInstance) {
       }
       // The creator implicitly watches their new repo at ALL (issue #88).
       await ensureImplicitWatch(repo.id, ownerId);
+      if (templateKey) {
+        try {
+          await seedFromTemplate(storageKey, templateKey, await resolveActorIdentity(ownerId));
+          // The first commit counts like a push: ingestion, feed, CI.
+          await runPostReceiveEffects(app, { id: repo.id, storageKey }, ownerId, bareRepoPathFromKey(storageKey), new Map());
+        } catch (err) {
+          request.log.error({ err }, "starting a repository from its template failed");
+        }
+      }
       return reply.status(201).send(repoResponse(repo));
     },
   );

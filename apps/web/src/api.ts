@@ -458,12 +458,19 @@ export async function createRepo(
   visibility: "public" | "private",
   /** Optional owning namespace (issue #114): an org handle to create the repo in. */
   owner?: string,
+  /** Start from a template repository (#256): "owner/name". */
+  template?: string,
 ): Promise<Repo> {
   return req("/repos", {
     method: "POST",
     token,
-    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined }),
+    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined }),
   });
+}
+
+/** "Update branch" (#256): merge a pull request's base into its head. */
+export async function updatePullBranch(token: string, handle: string, repoName: string, number: number): Promise<{ sha: string }> {
+  return req(`/repos/${handle}/${repoName}/pulls/${number}/update-branch`, { method: "POST", token });
 }
 
 /**
@@ -493,6 +500,8 @@ export async function updateRepo(
     autoCloseIssues?: boolean;
     mergeCommitMessage?: Repo["mergeCommitMessage"];
     squashCommitMessage?: Repo["squashCommitMessage"];
+    isTemplate?: boolean;
+    suggestUpdateBranch?: boolean;
   },
 ): Promise<Repo> {
   return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });

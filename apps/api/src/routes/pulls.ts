@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { canAdmin, canRead, canWrite, resolveRepo } from "../repo-access.js";
-import { branchExists, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
+import { branchExists, countAheadBehind, defaultBranch, getMergeBaseDiff, getMergeBaseFileList, listMergeBaseCommits, performMerge, performRevert, resolveBranchSha, type MergeMethod } from "../git-utils.js";
+import { runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 import { notifySubscribers, notifyUser } from "../notifications-service.js";
 import { recordEvent } from "../timeline-service.js";
 import { emitRepoEvent } from "../webhook-service.js";
@@ -319,6 +320,10 @@ export async function pullRoutes(app: FastifyInstance) {
     }
 
     const reviewSummary = await computeReviewSummary(pr.id, headSha);
+    // How far the head is behind its base (#256), for "Update branch".
+    const behindBy = pr.state === "OPEN" && repo.storageKey
+      ? (await countAheadBehind(repo.storageKey, pr.toBranch, pr.fromBranch)).behind
+      : 0;
 
     // Branch-protection status for the merge box (issue #85): the active
     // merge-gate rules and whether each is satisfied. Null when the target
@@ -345,7 +350,8 @@ export async function pullRoutes(app: FastifyInstance) {
       reviewSummary,
       protection,
       // Owner merge policy (issue #119): which methods the merge box may offer.
-      mergePolicy: { ...repoMergePolicy(repo), allowAutoMerge: repo.allowAutoMerge !== false },
+      mergePolicy: { ...repoMergePolicy(repo), allowAutoMerge: repo.allowAutoMerge !== false, suggestUpdateBranch: repo.suggestUpdateBranch === true },
+      behindBy,
       // Armed auto-merge intent (issue #119); null when not armed.
       autoMerge: await autoMergePayload(pr),
       mergedAt: pr.mergedAt?.toISOString() ?? null,
@@ -636,6 +642,38 @@ export async function pullRoutes(app: FastifyInstance) {
   // gates once: a PR whose review gate and check summary are ALREADY green
   // merges on the spot (there would be no later signal to fire on). Otherwise
   // the PR stays armed and fires from the review-submit / CI-completion hooks.
+  // POST /repos/:handle/:name/pulls/:number/update-branch — merge the base into
+  // the head (#256), GitHub's "Update branch". It counts as a push to the head:
+  // CI reruns and the timeline notes it. A head branch that only takes pull
+  // requests is left alone.
+  app.post("/repos/:handle/:name/pulls/:number/update-branch", { preHandler: [app.authenticate, write] }, async (request, reply) => {
+    const { handle, name, number } = request.params as { handle: string; name: string; number: string };
+    const userId = request.user.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Not found" });
+    if (!canWrite(repo, userId)) return reply.status(403).send({ error: "Write access required" });
+    if (!repo.storageKey) return reply.status(400).send({ error: "No git storage" });
+    const storageKey = repo.storageKey;
+
+    const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
+    if (!pr) return reply.status(404).send({ error: "Pull request not found" });
+    if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    const rule = await prisma.protectedBranch.findFirst({ where: { repoId: repo.id, branch: pr.fromBranch }, select: { requirePullRequest: true } });
+    if (rule?.requirePullRequest) return reply.status(409).send({ error: `${pr.fromBranch} is protected: changes reach it through pull requests only` });
+    if ((await countAheadBehind(storageKey, pr.toBranch, pr.fromBranch)).behind === 0) {
+      return reply.status(409).send({ error: "This branch is already up to date" });
+    }
+
+    const repoPath = bareRepoPathFromKey(storageKey);
+    const before = await snapshotHeadShas(repoPath);
+    const result = await performMerge(storageKey, pr.toBranch, pr.fromBranch, `Merge branch '${pr.toBranch}' into ${pr.fromBranch}`);
+    if (!result.ok) {
+      return reply.status(409).send({ error: "alreadyMerged" in result ? "This branch is already up to date" : "Merging the base branch conflicts; resolve it on your machine" });
+    }
+    await runPostReceiveEffects(app, { id: repo.id, storageKey }, userId, repoPath, before);
+    return { sha: result.sha };
+  });
+
   app.post("/repos/:handle/:name/pulls/:number/auto-merge", { preHandler: [app.authenticate, write] }, async (request, reply) => {
     const { handle, name, number } = request.params as { handle: string; name: string; number: string };
     const userId = request.user.sub;
