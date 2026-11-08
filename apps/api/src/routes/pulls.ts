@@ -345,7 +345,7 @@ export async function pullRoutes(app: FastifyInstance) {
       reviewSummary,
       protection,
       // Owner merge policy (issue #119): which methods the merge box may offer.
-      mergePolicy: repoMergePolicy(repo),
+      mergePolicy: { ...repoMergePolicy(repo), allowAutoMerge: repo.allowAutoMerge !== false },
       // Armed auto-merge intent (issue #119); null when not armed.
       autoMerge: await autoMergePayload(pr),
       mergedAt: pr.mergedAt?.toISOString() ?? null,
@@ -605,8 +605,8 @@ export async function pullRoutes(app: FastifyInstance) {
     // Execution + merge side effects live in the shared executor (issue #119),
     // so the interactive endpoint and auto-merge can never drift apart.
     const outcome = await executePullMerge({
-      repo: { id: repo.id, storageKey: repo.storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge },
-      pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch },
+      repo: { id: repo.id, storageKey: repo.storageKey, deleteBranchOnMerge: repo.deleteBranchOnMerge, autoCloseIssues: repo.autoCloseIssues, mergeCommitMessage: repo.mergeCommitMessage, squashCommitMessage: repo.squashCommitMessage },
+      pr: { id: pr.id, number: pr.number, title: pr.title, fromBranch: pr.fromBranch, toBranch: pr.toBranch, description: pr.description },
       actorId: userId,
       mergeMethod,
       commitMessage,
@@ -648,6 +648,7 @@ export async function pullRoutes(app: FastifyInstance) {
     const pr = await prisma.pullRequest.findFirst({ where: { repoId: repo.id, number: Number(number) } });
     if (!pr) return reply.status(404).send({ error: "Pull request not found" });
     if (pr.state !== "OPEN") return reply.status(409).send({ error: `Pull request is ${pr.state.toLowerCase()}` });
+    if (repo.allowAutoMerge === false) return reply.status(409).send({ error: "Auto-merge is turned off for this repository" });
 
     const policy = repoMergePolicy(repo);
     const { mergeMethod: rawMethod } = (request.body ?? {}) as { mergeMethod?: string };

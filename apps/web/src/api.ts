@@ -487,9 +487,20 @@ export async function updateRepo(
     defaultBranch?: string;
     archived?: boolean;
     deleteBranchOnMerge?: boolean;
+    hasIssues?: boolean;
+    hasProjects?: boolean;
+    allowAutoMerge?: boolean;
+    autoCloseIssues?: boolean;
+    mergeCommitMessage?: Repo["mergeCommitMessage"];
+    squashCommitMessage?: Repo["squashCommitMessage"];
   },
 ): Promise<Repo> {
   return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** Transfer ownership (#256) to an organization you own, or to your own account. */
+export async function transferRepo(token: string, owner: string, repoName: string, newOwner: string): Promise<{ fullName: string }> {
+  return req(`/repos/${owner}/${repoName}/transfer`, { method: "POST", token, body: JSON.stringify({ newOwner }) });
 }
 
 /** Rename a repository (#256); the old name keeps redirecting, for the web and for git. */
