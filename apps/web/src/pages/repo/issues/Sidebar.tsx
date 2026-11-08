@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Avatar, Button, cx, DropdownMenu, LabelChip, TextInput } from "../../../ui";
 import { CheckIcon, XIcon } from "../../../ui/icons";
-import type { Label, Milestone, MilestoneRef } from "../../../types";
+import type { Label, Milestone, MilestoneRef, ProjectSummary } from "../../../types";
 import type { RepoMember } from "../../../api";
 import { LabelOptionRow, MemberOptionRow, Popover, SidebarGearTrigger, SidebarHeader } from "./pickers";
 import { MilestoneIcon } from "./icons";
@@ -283,6 +283,52 @@ export function SidebarMilestone({
         <SidebarHeader title="Milestone" />
       )}
       <div className="mt-2">{applied}</div>
+    </section>
+  );
+}
+
+// ─── Projects (#253) ──────────────────────────────────────────────────────────
+
+/** Pick the project a new issue joins (its first column), like GitHub's Projects box. */
+export function SidebarProjects({
+  projects,
+  selected,
+  onSelect,
+  base,
+}: {
+  projects: ProjectSummary[];
+  selected: number | null;
+  onSelect: (projectNumber: number | null) => void;
+  base: string;
+}) {
+  const chosen = projects.find((p) => p.number === selected) ?? null;
+  return (
+    <section className="pb-4 mb-4 border-b border-fh-border-muted">
+      <Popover align="start" trigger={(_open, toggle) => <SidebarHeader title="Projects" onEdit={toggle} />}>
+        {projects.map((p) => {
+          const checked = p.number === selected;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={checked}
+              onClick={() => onSelect(checked ? null : p.number)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-fh-surface-muted transition-colors"
+            >
+              <span className="w-4 shrink-0 text-fh-accent-fg">{checked && <CheckIcon size={14} />}</span>
+              <span className="min-w-0 flex-1 truncate text-fh-sm text-fh-fg">{p.name}</span>
+            </button>
+          );
+        })}
+      </Popover>
+      <div className="mt-2">
+        {chosen ? (
+          <Link to={`${base}/projects/${chosen.number}`} className="text-fh-sm text-fh-fg hover:text-fh-accent-fg">{chosen.name}</Link>
+        ) : (
+          <p className="text-fh-sm text-fh-fg-muted">None yet</p>
+        )}
+      </div>
     </section>
   );
 }
