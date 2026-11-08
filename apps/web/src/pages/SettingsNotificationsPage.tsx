@@ -9,6 +9,7 @@ const ROWS: Array<{ reason: NotificationReasonKey; label: string; hint: string }
   { reason: "SUBSCRIBED", label: "Watching", hint: "Activity in repositories you watch." },
   { reason: "COMMENT", label: "Participating", hint: "New comments in conversations you're part of." },
   { reason: "MENTIONED", label: "@mentions", hint: "Someone mentions you." },
+  { reason: "TEAM_MENTIONED", label: "Team mentions", hint: "Someone mentions a team you're on." },
   { reason: "ASSIGNED", label: "Assigned", hint: "An issue or pull request is assigned to you." },
   { reason: "REVIEW_REQUESTED", label: "Review requests", hint: "Someone asks you to review a pull request." },
 ];

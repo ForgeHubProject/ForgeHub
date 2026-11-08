@@ -1073,7 +1073,13 @@ export async function repoRoutes(app: FastifyInstance) {
           }
         }
       }
-      return { members: [...byId.values()] };
+      // Teams to @mention (#253): the owning organization's, for its own members.
+      const mentionableTeams =
+        repo.org && viewerId && repo.org.memberships.some((m) => m.userId === viewerId)
+          ? (await prisma.team.findMany({ where: { orgId: repo.org.id }, select: { slug: true, name: true }, orderBy: { slug: "asc" } }))
+              .map((t) => ({ handle: `${repo.org!.handle}/${t.slug}`, name: t.name }))
+          : [];
+      return { members: [...byId.values()], teams: mentionableTeams };
     },
   );
 

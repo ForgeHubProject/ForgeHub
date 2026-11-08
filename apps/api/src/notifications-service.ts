@@ -3,7 +3,7 @@ import { canRead, repoAccessInclude, type RepoAccessInput } from "./repo-access.
 import { sendNotificationEmail } from "./email-notify.js";
 
 export type NotificationSubjectType = "ISSUE" | "PULL_REQUEST" | "RELEASE";
-export type NotificationReason = "ASSIGNED" | "COMMENT" | "REVIEW_REQUESTED" | "SUBSCRIBED" | "MENTIONED";
+export type NotificationReason = "ASSIGNED" | "COMMENT" | "REVIEW_REQUESTED" | "SUBSCRIBED" | "MENTIONED" | "TEAM_MENTIONED";
 
 export type EventParams = {
   actorId: string;
