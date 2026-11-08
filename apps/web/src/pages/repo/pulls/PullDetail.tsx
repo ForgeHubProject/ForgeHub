@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  ApiError, applySuggestion, createPullComment, createReview, createReviewComment, deleteReview, getIssue, getPull,
+  ApiError, applySuggestion, createPullComment, createReview, createReviewComment, deleteComment, deleteReview, getIssue, getPull,
   listPRCommits, listPRFiles, listPullComments, listPullTimeline, listReviewComments,
-  listReviews, listWorkflowRuns, replyToReviewThread, setPRFileViewed, setReviewThreadResolved, submitReview, updatePull,
+  listReviews, listWorkflowRuns, replyToReviewThread, setPRFileViewed, setReviewThreadResolved, submitReview, updateComment, updatePull,
 } from "../../../api";
+import { CommentMenu, EditableBody, quoteReply } from "../../../components/CommentActions";
 import { MarkdownEditor } from "../../../components/MarkdownEditor";
-import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import type {
   CommitInfo, IssueComment, PRFileEntry, PullRequest, Review, ReviewComment,
   ReviewCommentPosition, TimelineEvent, User,
 } from "../../../types";
-import { Avatar, Button, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput, cx } from "../../../ui";
+import { Avatar, Button, ConfirmDialog, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput, cx, useToast } from "../../../ui";
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
 import { Popover } from "../issues/pickers";
@@ -67,6 +67,10 @@ export function PullDetail({
   const [error, setError] = useState<string | null>(null);
 
   const [comments, setComments] = useState<IssueComment[]>([]);
+  // Editing (#253): "body" for the description, else a comment id.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingComment, setDeletingComment] = useState<IssueComment | null>(null);
+  const { toast } = useToast();
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -139,6 +143,26 @@ export function PullDetail({
     listPullTimeline(token, handle, repoName, number)
       .then((tl) => setEvents(tl.events))
       .catch(() => { /* keep prior events on failure */ });
+  }
+
+  /** Quote reply (#253): quote into the comment box and go there. */
+  function quote(text: string) {
+    setCommentBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n` : "") + quoteReply(text));
+    const box = document.getElementById("new-comment");
+    box?.scrollIntoView({ block: "center" });
+    box?.focus();
+  }
+
+  async function removeComment() {
+    if (!deletingComment) return;
+    try {
+      await deleteComment(token, handle, repoName, "pulls", number, deletingComment.id);
+      setComments((prev) => prev.filter((c) => c.id !== deletingComment.id));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't delete the comment", { tone: "danger" });
+    } finally {
+      setDeletingComment(null);
+    }
   }
 
   async function submitComment(e?: React.FormEvent) {
@@ -498,7 +522,7 @@ export function PullDetail({
         <div className="flex flex-col lg:flex-row gap-6">
           <div className="flex-1 min-w-0 space-y-4">
             {/* Opening comment */}
-            <div className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+            <div id="pr-body" className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
               <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas">
                 <Avatar name={pr.author} size={24} />
                 <span className="text-fh-sm">
@@ -507,13 +531,26 @@ export function PullDetail({
                     opened <RelativeTime date={pr.createdAt} />
                   </span>
                 </span>
+                <CommentMenu
+                  anchor="pr-body"
+                  onQuote={pr.description ? () => quote(pr.description!) : undefined}
+                  onEdit={isAuthor || canWrite ? () => setEditingId("body") : undefined}
+                />
               </div>
               <div className="px-5 py-4">
-                {pr.description ? (
-                  <MarkdownRenderer content={pr.description} repo={repoRef} />
-                ) : (
-                  <p className="text-fh-sm text-fh-fg-subtle italic">No description provided.</p>
-                )}
+                <EditableBody
+                  token={token}
+                  repo={repoRef}
+                  body={pr.description}
+                  editing={editingId === "body"}
+                  onCancel={() => setEditingId(null)}
+                  onSave={async (description) => {
+                    const updated = await updatePull(token, handle, repoName, number, { description });
+                    setPr((prev) => (prev ? { ...prev, description: updated.description } : prev));
+                    setEditingId(null);
+                  }}
+                  empty="No description provided."
+                />
                 {/* Emoji reactions on the PR body (#90). */}
                 <ReactionBar
                   token={token}
@@ -531,14 +568,31 @@ export function PullDetail({
             {/* Conversation: comments, submitted reviews, and timeline events */}
             {stream.map((item) =>
               item.kind === "comment" ? (
-                <div key={`c-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
+                <div key={`c-${item.comment.id}`} id={`issuecomment-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
                   <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
                     <Avatar name={item.comment.author} size={22} />
                     <span className="font-semibold text-fh-fg">{item.comment.author}</span>
                     <span className="text-fh-fg-muted">commented <RelativeTime date={item.comment.createdAt} /></span>
+                    <CommentMenu
+                      anchor={`issuecomment-${item.comment.id}`}
+                      onQuote={() => quote(item.comment.body)}
+                      onEdit={item.comment.author === user.handle ? () => setEditingId(item.comment.id) : undefined}
+                      onDelete={item.comment.author === user.handle || canAdmin ? () => setDeletingComment(item.comment) : undefined}
+                    />
                   </div>
                   <div className="px-5 py-4">
-                    <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+                    <EditableBody
+                      token={token}
+                      repo={repoRef}
+                      body={item.comment.body}
+                      editing={editingId === item.comment.id}
+                      onCancel={() => setEditingId(null)}
+                      onSave={async (body) => {
+                        const updated = await updateComment(token, handle, repoName, "pulls", number, item.comment.id, body);
+                        setComments((prev) => prev.map((c) => (c.id === updated.id ? { ...c, body: updated.body } : c)));
+                        setEditingId(null);
+                      }}
+                    />
                     <ReactionBar
                       token={token}
                       handle={handle}
@@ -572,6 +626,8 @@ export function PullDetail({
               <div className="flex-1 min-w-0">
                 <p className="mb-2 text-fh-base font-semibold text-fh-fg">Add a comment</p>
                 <MarkdownEditor
+                  id="new-comment"
+                  draftKey={`${handle}/${repoName}#${number}`}
                   value={commentBody}
                   onValueChange={setCommentBody}
                   onSubmit={() => void submitComment()}
@@ -799,6 +855,14 @@ export function PullDetail({
             </div>
           </div>
         ))}
+      {deletingComment && (
+        <ConfirmDialog
+          title="Delete this comment?"
+          message="This can't be undone."
+          onConfirm={() => void removeComment()}
+          onCancel={() => setDeletingComment(null)}
+        />
+      )}
     </div>
   );
 }

@@ -18,6 +18,8 @@ export function MarkdownEditor({
   value,
   onValueChange,
   onSubmit,
+  onCancel,
+  draftKey,
   token,
   repo,
   placeholder = "Leave a comment",
@@ -31,6 +33,13 @@ export function MarkdownEditor({
   onValueChange: (value: string) => void;
   /** Ctrl/⌘+Enter. Omit where the box has no single submit action. */
   onSubmit?: () => void;
+  /** Escape, when no suggestion list is open: cancel an edit (#253). */
+  onCancel?: () => void;
+  /**
+   * Keep unsent text for this box in the tab's session storage (#253), so a
+   * mis-click or a trip to another tab doesn't lose it. Cleared when the box empties.
+   */
+  draftKey?: string;
   token?: string | null;
   /** The repo `#N` and `@name` refer to: autolinks in Preview, and the autocomplete's source. */
   repo?: RepoRef;
@@ -43,6 +52,7 @@ export function MarkdownEditor({
   className?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  useDraft(draftKey, value, onValueChange);
   const [mode, setMode] = useState<"write" | "preview">("write");
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [active, setActive] = useState(0);
@@ -133,6 +143,11 @@ export function MarkdownEditor({
         setTrigger(null);
         return;
       }
+    }
+    if (e.key === "Escape" && onCancel) {
+      e.preventDefault();
+      onCancel();
+      return;
     }
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key === "Enter" && onSubmit) {
@@ -270,6 +285,42 @@ function EditorTab({ active, onClick, children }: { active: boolean; onClick: ()
       {children}
     </button>
   );
+}
+
+/** Forget a kept draft: a form that leaves the page on success can't rely on emptying its box. */
+export function clearDraft(key: string): void {
+  try {
+    sessionStorage.removeItem(`fh-draft:${key}`);
+  } catch {
+    /* storage blocked: no drafts */
+  }
+}
+
+/** Restore a kept draft once, then keep it in step with the box (`draftKey`). */
+function useDraft(key: string | undefined, value: string, onValueChange: (v: string) => void) {
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!key || restored.current) return;
+    restored.current = true;
+    if (value) return; // the page brought its own text
+    try {
+      const kept = sessionStorage.getItem(`fh-draft:${key}`);
+      if (kept) onValueChange(kept);
+    } catch {
+      /* storage blocked: no drafts */
+    }
+    // Restore on mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  useEffect(() => {
+    if (!key || !restored.current) return;
+    try {
+      if (value.trim()) sessionStorage.setItem(`fh-draft:${key}`, value);
+      else sessionStorage.removeItem(`fh-draft:${key}`);
+    } catch {
+      /* storage blocked: no drafts */
+    }
+  }, [key, value]);
 }
 
 function ToolButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {

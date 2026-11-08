@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  Avatar, Badge, Button, Dialog, DropdownMenu, DropdownItem, DropdownSeparator,
+  Avatar, Badge, Button, ConfirmDialog, Dialog, DropdownMenu, DropdownItem, DropdownSeparator,
   EmptyState, RelativeTime, Skeleton, TextInput, useToast,
 } from "../../../ui";
 import {
-  addIssueLabel, ApiError, createIssueCommentWithActions, getIssue, getPull, listIssueComments, listIssueTimeline,
+  addIssueLabel, ApiError, createIssueCommentWithActions, deleteComment, getIssue, getPull, listIssueComments, listIssueTimeline,
   listLabels, listMilestones, listRepoMembers, lockIssue, pinIssue, removeIssueLabel, RepoMember,
-  setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateIssue,
+  setIssueEstimate, setIssueMilestone, setIssueSpent, transferIssue, unlockIssue, unpinIssue, updateComment, updateIssue,
 } from "../../../api";
+import { CommentMenu, EditableBody, quoteReply } from "../../../components/CommentActions";
 import { MarkdownEditor } from "../../../components/MarkdownEditor";
 import { MarkdownRenderer } from "../../../components/MarkdownRenderer";
 import { ReactionBar } from "../../../components/ReactionBar";
@@ -25,23 +26,30 @@ import { useRepoPermission } from "../permission";
 
 /** One timeline entry: an author header bar over a rendered-markdown body. */
 function TimelineCard({
+  id,
   author,
   date,
   badge,
+  menu,
   children,
 }: {
+  /** Element id, for links to this comment. */
+  id?: string;
   author: string;
   date: string;
   badge?: React.ReactNode;
+  /** The comment's "…" menu (#253). */
+  menu?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <div className="border border-fh-border rounded-md overflow-hidden">
+    <div id={id} className="border border-fh-border rounded-md overflow-hidden scroll-mt-20">
       <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border text-fh-sm">
         <Avatar name={author} size={20} />
         <UserLink handle={author} />
         <span className="text-fh-fg-muted">commented <RelativeTime date={date} /></span>
         {badge && <span className="ml-1">{badge}</span>}
+        {menu}
       </div>
       <div className="px-4 py-4 bg-fh-surface">{children}</div>
     </div>
@@ -56,7 +64,10 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
   const repoRef = { owner: handle, name: repoName };
 
   const [issue, setIssue] = useState<Issue | null>(null);
-  const { canWrite } = useRepoPermission();
+  const { canWrite, canAdmin } = useRepoPermission();
+  // Editing (#253): "body" for the description, else a comment id.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingComment, setDeletingComment] = useState<IssueComment | null>(null);
   const [comments, setComments] = useState<IssueComment[]>([]);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [allLabels, setAllLabels] = useState<Label[]>([]);
@@ -125,6 +136,26 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
     listIssueTimeline(token, handle, repoName, number)
       .then((tl) => setEvents(tl.events))
       .catch(() => { /* keep prior events on failure */ });
+  }
+
+  /** Quote reply (#253): quote into the comment box and go there. */
+  function quote(text: string) {
+    setCommentBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n` : "") + quoteReply(text));
+    const box = document.getElementById("new-comment");
+    box?.scrollIntoView({ block: "center" });
+    box?.focus();
+  }
+
+  async function removeComment() {
+    if (!deletingComment) return;
+    try {
+      await deleteComment(token, handle, repoName, "issues", number, deletingComment.id);
+      setComments((prev) => prev.filter((c) => c.id !== deletingComment.id));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't delete the comment", { tone: "danger" });
+    } finally {
+      setDeletingComment(null);
+    }
   }
 
   async function submitComment(e?: React.FormEvent) {
@@ -408,15 +439,31 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
         {/* Timeline */}
         <div className="flex-1 min-w-0 space-y-4">
           <TimelineCard
+            id="issue-body"
             author={issue.author}
             date={issue.createdAt}
             badge={<Badge tone="neutral">Author</Badge>}
+            menu={
+              <CommentMenu
+                anchor="issue-body"
+                onQuote={issue.body ? () => quote(issue.body!) : undefined}
+                onEdit={issue.author === user.handle || canWrite ? () => setEditingId("body") : undefined}
+              />
+            }
           >
-            {issue.body ? (
-              <MarkdownRenderer content={issue.body} repo={repoRef} />
-            ) : (
-              <p className="text-fh-sm text-fh-fg-muted italic">No description provided.</p>
-            )}
+            <EditableBody
+              token={token}
+              repo={repoRef}
+              body={issue.body}
+              editing={editingId === "body"}
+              onCancel={() => setEditingId(null)}
+              onSave={async (body) => {
+                const updated = await updateIssue(token, handle, repoName, number, { body });
+                setIssue((prev) => (prev ? { ...prev, body: updated.body } : prev));
+                setEditingId(null);
+              }}
+              empty="No description provided."
+            />
             {/* Emoji reactions on the issue body (#90). */}
             <ReactionBar
               token={token}
@@ -443,8 +490,32 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
 
           {stream.map((item) =>
             item.kind === "comment" ? (
-              <TimelineCard key={`c-${item.comment.id}`} author={item.comment.author} date={item.comment.createdAt}>
-                <MarkdownRenderer content={item.comment.body} repo={repoRef} />
+              <TimelineCard
+                key={`c-${item.comment.id}`}
+                id={`issuecomment-${item.comment.id}`}
+                author={item.comment.author}
+                date={item.comment.createdAt}
+                menu={
+                  <CommentMenu
+                    anchor={`issuecomment-${item.comment.id}`}
+                    onQuote={() => quote(item.comment.body)}
+                    onEdit={item.comment.author === user.handle ? () => setEditingId(item.comment.id) : undefined}
+                    onDelete={item.comment.author === user.handle || canAdmin ? () => setDeletingComment(item.comment) : undefined}
+                  />
+                }
+              >
+                <EditableBody
+                  token={token}
+                  repo={repoRef}
+                  body={item.comment.body}
+                  editing={editingId === item.comment.id}
+                  onCancel={() => setEditingId(null)}
+                  onSave={async (body) => {
+                    const updated = await updateComment(token, handle, repoName, "issues", number, item.comment.id, body);
+                    setComments((prev) => prev.map((c) => (c.id === updated.id ? { ...c, body: updated.body } : c)));
+                    setEditingId(null);
+                  }}
+                />
                 <ReactionBar
                   token={token}
                   handle={handle}
@@ -486,6 +557,8 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
                   </div>
                 )}
                 <MarkdownEditor
+                  id="new-comment"
+                  draftKey={`${handle}/${repoName}#${number}`}
                   rows={5}
                   value={commentBody}
                   onValueChange={setCommentBody}
@@ -583,6 +656,14 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
           {transferError && <p className="mt-2 text-fh-sm text-fh-danger-fg">{transferError}</p>}
         </form>
       </Dialog>
+      {deletingComment && (
+        <ConfirmDialog
+          title="Delete this comment?"
+          message="This can't be undone."
+          onConfirm={() => void removeComment()}
+          onCancel={() => setDeletingComment(null)}
+        />
+      )}
     </div>
   );
 }
