@@ -7,15 +7,17 @@
 import { vi, describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { FastifyInstance } from "fastify";
 
 const routes = vi.hoisted(() => [] as string[]);
 vi.mock("fastify", async (orig) => {
   const mod = await orig<typeof import("fastify")>();
-  const fastify = ((...args: Parameters<typeof mod.default>) => {
-    const app = mod.default(...args);
+  const create = mod.default as unknown as (...args: unknown[]) => FastifyInstance;
+  const fastify = (...args: unknown[]) => {
+    const app = create(...args);
     app.addHook("onRoute", (route) => void routes.push(route.url));
     return app;
-  }) as typeof mod.default;
+  };
   return { ...mod, default: fastify };
 });
 
