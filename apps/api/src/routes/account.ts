@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
+import { ident } from "../sql.js";
 import { buildStorageKey, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { newHandleSchema } from "../validation.js";
 
@@ -174,10 +175,10 @@ export async function accountRoutes(app: FastifyInstance) {
     const personal = await prisma.repo.findMany({ where: { ownerId: user.id, orgId: null }, select: { storageKey: true } });
     await prisma.$transaction([
       ...AUTHORED.map(([table, column]) =>
-        prisma.$executeRawUnsafe(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`, ghost.id, user.id),
+        prisma.$executeRaw`UPDATE ${ident(table)} SET ${ident(column)} = ${ghost.id} WHERE ${ident(column)} = ${user.id}`,
       ),
       // Organization repositories they created stay with the organization.
-      prisma.$executeRawUnsafe(`UPDATE "Repo" SET "ownerId" = ? WHERE "ownerId" = ? AND "orgId" IS NOT NULL`, ghost.id, user.id),
+      prisma.$executeRaw`UPDATE ${ident("Repo")} SET ${ident("ownerId")} = ${ghost.id} WHERE ${ident("ownerId")} = ${user.id} AND ${ident("orgId")} IS NOT NULL`,
       prisma.user.delete({ where: { id: user.id } }),
     ]);
     for (const r of personal) {
