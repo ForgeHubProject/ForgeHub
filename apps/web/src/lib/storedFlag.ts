@@ -24,3 +24,16 @@ export function useStoredFlag(key: string, initial: boolean): [boolean, (on: boo
   };
   return [value, set];
 }
+
+/**
+ * Whether the window is at least tablet-wide. The file pages' trees start open
+ * there and closed on a phone, where they would fill the first screen and push
+ * the file itself out of sight (a remembered choice still wins).
+ */
+export function wideViewport(): boolean {
+  try {
+    return globalThis.matchMedia?.("(min-width: 768px)").matches ?? true;
+  } catch {
+    return true;
+  }
+}
