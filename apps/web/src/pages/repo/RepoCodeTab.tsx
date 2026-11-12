@@ -28,7 +28,7 @@ import { FileEditor } from "./FileEditor";
 import { useRepoPermission } from "./permission";
 import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSidebar";
 import { FileIcon, FolderIcon } from "./fileIcons";
-import { useStoredFlag } from "../../lib/storedFlag";
+import { useStoredFlag, wideViewport } from "../../lib/storedFlag";
 import { FileTreePane } from "./FileTreePane";
 import { QuickSetup } from "./QuickSetup";
 import { GoToFile } from "./GoToFile";
@@ -375,7 +375,7 @@ function FilePage({ token, handle, repoName, base, gitRef, path, branches, onCre
 }) {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [treeShown, setTreeShown] = useStoredFlag(FILE_PAGE_TREE_KEY, true);
+  const [treeShown, setTreeShown] = useStoredFlag(FILE_PAGE_TREE_KEY, wideViewport());
 
   // Switching branch keeps the file when it exists there, and says so when not.
   async function switchRef(next: string) {
