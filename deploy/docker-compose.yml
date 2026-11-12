@@ -55,6 +55,9 @@ services:
       # its holder act as any registered key: publish the SSH port on loopback only.
       FORGEHUB_SSH_PUBLIC_PORT: "${FORGEHUB_SSH_PUBLIC_PORT:-}"
       FORGEHUB_SSH_FORWARD_KEY: "${FORGEHUB_SSH_FORWARD_KEY:-}"
+      # The host sshd's fingerprints (install.sh prints them): what Settings > SSH
+      # keys shows, since clients on port 22 meet that sshd, not ForgeHub's key.
+      FORGEHUB_SSH_HOST_FINGERPRINTS: "${FORGEHUB_SSH_HOST_FINGERPRINTS:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"

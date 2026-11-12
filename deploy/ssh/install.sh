@@ -86,6 +86,12 @@ if [ "$reloaded" -ne 1 ]; then
   echo "reload or restart sshd yourself (e.g. systemctl reload sshd) to apply it." >&2
 fi
 
+# Clients meet THIS host's sshd on 22, so these are the fingerprints ForgeHub
+# should show them (Settings > SSH keys), not its own listener's.
+host_fps=$(for f in /etc/ssh/ssh_host_*_key.pub; do
+  [ -f "$f" ] && ssh-keygen -lf "$f" | awk '{ t = $NF; gsub(/[()]/, "", t); print t " " $2 }'
+done | paste -sd, - | sed 's/,/, /g')
+
 cat <<OUT
 
 Host side is ready. Now configure ForgeHub (e.g. in .env):
@@ -94,6 +100,7 @@ Host side is ready. Now configure ForgeHub (e.g. in .env):
   FORGEHUB_SSH_PUBLIC_PORT=22
   FORGEHUB_SSH_BIND=127.0.0.1
   FORGEHUB_SSH_FORWARD_KEY="$(cat /etc/forgehub/forward_key.pub)"
+  FORGEHUB_SSH_HOST_FINGERPRINTS="$host_fps"
 
 then restart ForgeHub. Test from another machine:
 

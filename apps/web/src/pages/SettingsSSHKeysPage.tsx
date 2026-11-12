@@ -98,6 +98,10 @@ export function SettingsSSHKeysPage({ token, user, onLogout }: Props) {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const { toast } = useToast();
 
+  const hostFingerprints =
+    serverInfo?.sshFingerprints ??
+    (serverInfo?.sshFingerprint ? [{ type: null, fingerprint: serverInfo.sshFingerprint }] : []);
+
   function load() {
     setLoading(true);
     Promise.all([
@@ -145,16 +149,25 @@ export function SettingsSSHKeysPage({ token, user, onLogout }: Props) {
 
         {/* Server SSH host-key fingerprint (issue #154) — shown when SSH is enabled so
             users can verify the fingerprint in their known_hosts on first connect. */}
-        {serverInfo?.sshEnabled && serverInfo.sshFingerprint && (
+        {serverInfo?.sshEnabled && hostFingerprints.length > 0 && (
           <div className="mb-6 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-fh-sm">
-            <p className="font-semibold text-fh-fg mb-1">Server SSH host key fingerprint</p>
-            <p className="text-fh-fg-muted text-fh-xs mb-2">
-              Verify this fingerprint when connecting for the first time to confirm you're talking to the right server.
-              Run <code className="font-mono text-fh-fg-muted">ssh-keygen -lf ~/.ssh/known_hosts</code> to see stored entries.
+            <p className="font-semibold text-fh-fg mb-1">
+              {hostFingerprints.length > 1 ? "Server SSH host key fingerprints" : "Server SSH host key fingerprint"}
             </p>
-            <code className="font-mono text-fh-xs text-fh-fg bg-fh-surface-inset border border-fh-border rounded px-2 py-1 break-all block">
-              {serverInfo.sshFingerprint}
-            </code>
+            <p className="text-fh-fg-muted text-fh-xs mb-2">
+              The first time you connect, ssh shows the server's key fingerprint and asks whether to continue.
+              Answer yes only if it matches one of these.
+            </p>
+            <ul className="space-y-1">
+              {hostFingerprints.map((k) => (
+                <li key={k.fingerprint} className="flex items-center gap-2">
+                  {k.type && <span className="w-16 shrink-0 text-fh-xs font-semibold text-fh-fg-muted">{k.type}</span>}
+                  <code className="font-mono text-fh-xs text-fh-fg bg-fh-surface-inset border border-fh-border rounded px-2 py-1 break-all">
+                    {k.fingerprint}
+                  </code>
+                </li>
+              ))}
+            </ul>
             {serverInfo.sshPort && (
               <p className="mt-2 text-fh-xs text-fh-fg-subtle">
                 SSH port: <code className="font-mono text-fh-fg-muted">{serverInfo.sshPort}</code>
