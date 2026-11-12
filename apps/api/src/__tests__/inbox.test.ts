@@ -24,6 +24,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { notifyUser, type EventParams } from "../notifications-service.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
+import { rawSql } from "./helpers/raw-sql.js";
 
 const ME = "user-me";
 let app: FastifyInstance;
@@ -43,12 +44,7 @@ beforeEach(() => {
 
 const get = (url: string) => app.inject({ method: "GET", url, headers: { authorization: token } });
 const lastWhere = () => vi.mocked(prisma.notification.findMany).mock.calls.at(-1)![0]!.where;
-/** The SQL a $executeRaw call ran, nested Prisma.sql fragments inlined. */
-const sqlOf = (i = -1) => {
-  const [parts, ...values] = vi.mocked(prisma.$executeRaw).mock.calls.at(i)! as unknown as [TemplateStringsArray, ...unknown[]];
-  const text = parts.reduce((acc, part, j) => acc + part + (j < values.length ? ((values[j] as { sql?: string })?.sql ?? "?") : ""), "");
-  return { text, values };
-};
+const sqlOf = (i = -1) => rawSql(prisma.$executeRaw, i);
 
 describe("listing", () => {
   it("keeps the bell's unread inbox, and filters by view, reason, repository and unread", async () => {
@@ -106,7 +102,7 @@ describe("actions", () => {
     expect(res.statusCode).toBe(204);
     const { text, values } = sqlOf();
     expect(text).toBe('UPDATE "Notification" SET "done" = true, "read" = true WHERE "userId" = ? AND "id" IN (?,?)');
-    expect(values[1]).toBe(ME);
+    expect(values).toEqual([ME, "a", "b"]);
     expect((await app.inject({ method: "POST", url: "/notifications/bulk", headers: { authorization: token }, payload: { ids: ["a"], action: "nuke" } })).statusCode).toBe(400);
   });
 
