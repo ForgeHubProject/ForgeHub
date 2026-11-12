@@ -29,10 +29,10 @@ const CONFIGS = ["docker/nginx.conf", "apps/web/nginx.conf"];
 const OWN_LOCATION = new Set(["git", "ui"]);
 
 function rules(config: string) {
-  const apiList = /location ~ \^\/\(([^)]+)\)\(\/\|\$\) \{/.exec(config)?.[1];
+  const apiLocation = /location ~ \^\/\(([^)]+)\)\(\/\|\$\) \{([^}]*)\}/.exec(config);
   const pages = /location ~ (\^\/\(notifications.*\)\$) \{/.exec(config)?.[1];
-  if (!apiList || !pages) throw new Error("nginx config without the API and page locations");
-  return { api: new Set(apiList.split("|")), pages: new RegExp(pages) };
+  if (!apiLocation || !pages) throw new Error("nginx config without the API and page locations");
+  return { api: new Set(apiLocation[1].split("|")), apiBlock: apiLocation[2], pages: new RegExp(pages) };
 }
 
 beforeAll(async () => {
@@ -42,7 +42,11 @@ beforeAll(async () => {
 });
 
 describe.each(CONFIGS)("%s", (file) => {
-  const { api, pages } = rules(repoFile(file));
+  const { api, apiBlock, pages } = rules(repoFile(file));
+
+  it("leaves upload limits to the API", () => {
+    expect(apiBlock).toMatch(/client_max_body_size 0;/);
+  });
 
   it("sends every API route to the API", () => {
     const prefixes = new Set(routes.map((url) => url.split("/")[1]).filter((p) => p && !OWN_LOCATION.has(p)));
