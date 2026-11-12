@@ -12,7 +12,8 @@ type Props = {
 type Mode = "login" | "register";
 
 export function LoginPage({ onAuth }: Props) {
-  const [mode, setMode] = useState<Mode>("login");
+  // Signed-out "Sign up" links open the form in register mode.
+  const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(window.location.search).get("mode") === "register" ? "register" : "login"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [handle, setHandle] = useState("");

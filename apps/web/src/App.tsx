@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { GUEST, safeNext, signInPath } from "./lib/guest";
 import { ApiError, getPublicProfile } from "./api";
 import { ExplorePage } from "./pages/ExplorePage";
 import { FeedPage } from "./pages/FeedPage";
@@ -83,13 +84,14 @@ function AppRoutes() {
     return raw ? (JSON.parse(raw) as User) : null;
   });
   const navigate = useNavigate();
+  const location = useLocation();
 
   function handleAuth(t: string, u: User) {
     localStorage.setItem("fh_token", t);
     localStorage.setItem("fh_user", JSON.stringify(u));
     setToken(t);
     setUser(u);
-    navigate("/");
+    navigate(safeNext(new URLSearchParams(location.search).get("next")));
   }
 
   function handleLogout() {
@@ -106,6 +108,10 @@ function AppRoutes() {
   }
 
   const authed = !!token && !!user;
+  // Public pages (repositories, profiles, Explore, search) open signed out too.
+  const viewer = authed ? { token: token!, user: user! } : { token: "", user: GUEST };
+  // Everything else asks a signed-out visitor to sign in, then comes back.
+  const signIn = <Navigate to={signInPath(`${location.pathname}${location.search}`)} replace />;
 
   return (
     <>
@@ -115,7 +121,7 @@ function AppRoutes() {
       <Routes>
       <Route
         path="/login"
-        element={authed ? <Navigate to="/" replace /> : <LoginPage onAuth={handleAuth} />}
+        element={authed ? <Navigate to={safeNext(new URLSearchParams(location.search).get("next"))} replace /> : <LoginPage onAuth={handleAuth} />}
       />
       <Route
         path="/"
@@ -130,7 +136,7 @@ function AppRoutes() {
               onLogout={handleLogout}
             />
           ) : (
-            <Navigate to="/login" replace />
+            <Navigate to="/explore" replace />
           )
         }
       />
@@ -140,17 +146,17 @@ function AppRoutes() {
           authed ? (
             <FeedPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
       <Route
         path="/notifications/subscriptions"
-        element={authed ? <SubscriptionsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SubscriptionsPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/notifications/watching"
-        element={authed ? <WatchingPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <WatchingPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/notifications"
@@ -158,48 +164,44 @@ function AppRoutes() {
           authed ? (
             <NotificationsPage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
       <Route
         path="/search"
         element={
-          authed ? (
-            <SearchPage token={token!} user={user!} onLogout={handleLogout} />
-          ) : (
-            <Navigate to="/login" replace />
-          )
+          <SearchPage token={viewer.token} user={viewer.user} onLogout={handleLogout} />
         }
       />
       <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
       <Route
         path="/settings/profile"
-        element={authed ? <SettingsProfilePage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsProfilePage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : signIn}
       />
       <Route
         path="/settings/account"
-        element={authed ? <SettingsAccountPage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsAccountPage token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} /> : signIn}
       />
       <Route
         path="/settings/appearance"
-        element={authed ? <SettingsAppearancePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsAppearancePage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/notifications"
-        element={authed ? <SettingsNotificationsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsNotificationsPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/replies"
-        element={authed ? <SettingsRepliesPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsRepliesPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/organizations"
-        element={authed ? <SettingsOrganizationsPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsOrganizationsPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/blocked"
-        element={authed ? <SettingsBlockedPage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <SettingsBlockedPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/tokens"
@@ -207,7 +209,7 @@ function AppRoutes() {
           authed ? (
             <SettingsTokensPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
@@ -217,7 +219,7 @@ function AppRoutes() {
           authed ? (
             <SettingsSSHKeysPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
@@ -227,7 +229,7 @@ function AppRoutes() {
           authed ? (
             <SettingsSessionsPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
@@ -237,25 +239,25 @@ function AppRoutes() {
           authed ? (
             <SettingsRenderingPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
       <Route
         path="/issues"
-        element={authed ? <YourWorkPage kind="issues" token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <YourWorkPage kind="issues" token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/pulls"
-        element={authed ? <YourWorkPage kind="pulls" token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={authed ? <YourWorkPage kind="pulls" token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/explore"
-        element={authed ? <ExplorePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={<ExplorePage token={viewer.token} user={viewer.user} onLogout={handleLogout} />}
       />
       <Route
         path="/topics/:topic"
-        element={authed ? <ExplorePage token={token!} user={user!} onLogout={handleLogout} /> : <Navigate to="/login" replace />}
+        element={<ExplorePage token={viewer.token} user={viewer.user} onLogout={handleLogout} />}
       />
       <Route
         path="/organizations/new"
@@ -263,7 +265,7 @@ function AppRoutes() {
           authed ? (
             <NewOrgPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
@@ -273,28 +275,20 @@ function AppRoutes() {
           authed ? (
             <OrgSettingsPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
-            <Navigate to="/login" replace />
+            signIn
           )
         }
       />
       <Route
         path="/:handle/:repoName/*"
         element={
-          authed ? (
-            <RepoPage token={token!} user={user!} onLogout={handleLogout} />
-          ) : (
-            <Navigate to="/login" replace />
-          )
+          <RepoPage token={viewer.token} user={viewer.user} onLogout={handleLogout} />
         }
       />
       <Route
         path="/:handle"
         element={
-          authed ? (
-            <ProfileRoute token={token!} user={user!} onLogout={handleLogout} onUserChange={handleUserChange} />
-          ) : (
-            <Navigate to="/login" replace />
-          )
+          <ProfileRoute token={viewer.token} user={viewer.user} onLogout={handleLogout} onUserChange={handleUserChange} />
         }
       />
       <Route path="*" element={<NotFoundPage />} />

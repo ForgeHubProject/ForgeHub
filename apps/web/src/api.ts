@@ -10,6 +10,7 @@ import type {
   SessionInfo, Snapshot, SyncForkResult, Team, TimelineEvent,
   TreeCommits, TreeEntry, User, WatchLevel, Webhook, WebhookDelivery, WebhookEvent, WorkflowRun,
 } from "./types";
+import { signInPath } from "./lib/guest";
 
 /**
  * An error carrying the HTTP status of a failed API response, so callers can
@@ -264,6 +265,12 @@ async function req<T>(
   opts: RequestInit & { token?: string } = {},
 ): Promise<T> {
   const { token, ...rest } = opts;
+  // A signed-out visitor (an empty token) trying to change something — star,
+  // comment, fork — goes to sign in and comes back here, like GitHub.
+  if ("token" in opts && !token && rest.method && rest.method !== "GET") {
+    window.location.assign(signInPath());
+    throw new ApiError(401, "Sign in to continue");
+  }
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
     headers: {
