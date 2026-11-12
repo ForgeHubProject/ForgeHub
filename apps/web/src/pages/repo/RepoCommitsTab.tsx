@@ -21,7 +21,7 @@ import {
   SignatureBadge,
   formatDayHeading,
 } from "./commitUi";
-import { useStoredFlag } from "../../lib/storedFlag";
+import { useStoredFlag, wideViewport } from "../../lib/storedFlag";
 import { SidebarToggle } from "./SidebarToggle";
 import { COMMITS_PER_PAGE, commitListQuery, commitListUrl } from "./commitHistory";
 
@@ -196,7 +196,7 @@ function CommitDetailView({
   const [loading, setLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [treeShown, setTreeShown] = useStoredFlag(FILE_TREE_KEY, true);
+  const [treeShown, setTreeShown] = useStoredFlag(FILE_TREE_KEY, wideViewport());
   const [fileFilter, setFileFilter] = useState("");
 
   useEffect(() => {
