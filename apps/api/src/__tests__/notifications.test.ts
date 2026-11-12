@@ -71,6 +71,7 @@ vi.mock("../notifications-service.js", () => ({
 
 import { prisma } from "../prisma.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
+import { rawSql } from "./helpers/raw-sql.js";
 import type { FastifyInstance } from "fastify";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -169,8 +170,7 @@ describe("PATCH /notifications (mark all read)", () => {
     });
     expect(res.statusCode).toBe(204);
     // Raw SQL: setting read must not bump updatedAt, which orders the inbox.
-    const [sql] = vi.mocked(prisma.$executeRaw).mock.calls.at(-1)! as unknown as [TemplateStringsArray];
-    expect(sql.join("?")).toContain('SET "read" = true');
+    expect(rawSql(prisma.$executeRaw).text).toContain('SET "read" = true');
   });
 
   it("returns 401 for unauthenticated request", async () => {

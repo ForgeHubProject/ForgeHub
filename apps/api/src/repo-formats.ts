@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { officialFormats } from "./fhr/manifest.js";
 import { bareRepoPathFromKey } from "./git-storage.js";
 import { prisma } from "./prisma.js";
+import { ident } from "./sql.js";
 
 const execFile = promisify(execFileCb);
 
@@ -84,5 +85,5 @@ export async function markFormatsStale(repoId: string): Promise<void> {
 // Raw SQL on purpose: a Prisma update would bump the @updatedAt column, and a
 // background scan must not make every repository read "Updated just now".
 async function setFormats(repoId: string, formats: string | null): Promise<void> {
-  await prisma.$executeRaw`UPDATE "Repo" SET "formats" = ${formats} WHERE "id" = ${repoId}`;
+  await prisma.$executeRaw`UPDATE ${ident("Repo")} SET ${ident("formats")} = ${formats} WHERE ${ident("id")} = ${repoId}`;
 }

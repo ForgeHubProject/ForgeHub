@@ -25,6 +25,7 @@ import { prisma } from "../prisma.js";
 import { __resetManifest, __setManifestForTests } from "../fhr/manifest.js";
 import { scanRepoFormats } from "../repo-formats.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
+import { rawSql } from "./helpers/raw-sql.js";
 import { createTestRepo, makeCommit } from "./helpers/git.js";
 
 const ME = "user-me";
@@ -72,9 +73,7 @@ describe("Explore", () => {
     await app.inject({ method: "GET", url: "/explore/repos" });
     // An unreadable repo is recorded as holding nothing, so it isn't rescanned every
     // time; raw SQL, so the scan leaves the repo's "Updated" time alone.
-    const [sql, ...values] = vi.mocked(prisma.$executeRaw).mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
-    expect(sql.join("?")).toBe('UPDATE "Repo" SET "formats" = ? WHERE "id" = ?');
-    expect(values).toEqual(["[]", "r1"]);
+    expect(rawSql(prisma.$executeRaw, 0)).toEqual({ text: 'UPDATE "Repo" SET "formats" = ? WHERE "id" = ?', values: ["[]", "r1"] });
   });
 
   it("counts public repositories per format family", async () => {

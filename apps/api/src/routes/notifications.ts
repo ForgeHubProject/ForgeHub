@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
+import { ident } from "../sql.js";
 import { Prisma } from "@prisma/client";
 import { canRead, repoAccessInclude, repoByOwningHandleWhere, resolveRepo } from "../repo-access.js";
 import { verifyUnsubscribeToken } from "../unsubscribe.js";
@@ -110,12 +111,12 @@ type BulkAction = (typeof BULK_ACTIONS)[number];
 async function applyAction(userId: string, ids: string[], action: BulkAction): Promise<void> {
   if (ids.length === 0) return;
   const set: Record<Exclude<BulkAction, "unsubscribe">, Prisma.Sql> = {
-    read: Prisma.sql`"read" = true`,
-    unread: Prisma.sql`"read" = false`,
-    done: Prisma.sql`"done" = true, "read" = true`,
-    undone: Prisma.sql`"done" = false`,
-    save: Prisma.sql`"saved" = true`,
-    unsave: Prisma.sql`"saved" = false`,
+    read: Prisma.sql`${ident("read")} = true`,
+    unread: Prisma.sql`${ident("read")} = false`,
+    done: Prisma.sql`${ident("done")} = true, ${ident("read")} = true`,
+    undone: Prisma.sql`${ident("done")} = false`,
+    save: Prisma.sql`${ident("saved")} = true`,
+    unsave: Prisma.sql`${ident("saved")} = false`,
   };
   if (action === "unsubscribe") {
     const rows = await prisma.notification.findMany({ where: { id: { in: ids }, userId }, select: { subjectId: true } });
@@ -130,7 +131,7 @@ async function applyAction(userId: string, ids: string[], action: BulkAction): P
     ]);
     return applyAction(userId, ids, "done");
   }
-  await prisma.$executeRaw`UPDATE "Notification" SET ${set[action]} WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})`;
+  await prisma.$executeRaw`UPDATE ${ident("Notification")} SET ${set[action]} WHERE ${ident("userId")} = ${userId} AND ${ident("id")} IN (${Prisma.join(ids)})`;
 }
 
 export async function notificationRoutes(app: FastifyInstance) {
@@ -195,7 +196,7 @@ export async function notificationRoutes(app: FastifyInstance) {
   // PATCH /notifications — mark the whole inbox read.
   app.patch("/notifications", { preHandler: [app.authenticate] }, async (request, reply) => {
     const userId = request.user.sub;
-    await prisma.$executeRaw`UPDATE "Notification" SET "read" = true WHERE "userId" = ${userId} AND "read" = false AND "done" = false`;
+    await prisma.$executeRaw`UPDATE ${ident("Notification")} SET ${ident("read")} = true WHERE ${ident("userId")} = ${userId} AND ${ident("read")} = false AND ${ident("done")} = false`;
     return reply.status(204).send();
   });
 

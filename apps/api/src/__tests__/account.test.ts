@@ -21,7 +21,7 @@ vi.mock("../prisma.js", () => ({
     pullRequestComment: { findMany: vi.fn() },
     sSHKey: { findMany: vi.fn() },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
-    $executeRawUnsafe: vi.fn(),
+    $executeRaw: vi.fn(),
   },
 }));
 vi.mock("../git-storage.js", async (orig) => ({
@@ -34,6 +34,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
+import { rawSql } from "./helpers/raw-sql.js";
 
 const ME = "user-me";
 let app: FastifyInstance;
@@ -121,9 +122,9 @@ describe("delete account", () => {
     const res = await call("DELETE", "/users/me", { confirm: "ada", password: "hunter22" });
     expect(res.statusCode).toBe(204);
     expect(vi.mocked(prisma.user.create).mock.calls[0][0].data).toMatchObject({ handle: "ghost", passwordHash: "!" });
-    const updates = vi.mocked(prisma.$executeRawUnsafe).mock.calls;
-    expect(updates).toContainEqual(['UPDATE "Issue" SET "authorId" = ? WHERE "authorId" = ?', "ghost-id", ME]);
-    expect(updates).toContainEqual(['UPDATE "Repo" SET "ownerId" = ? WHERE "ownerId" = ? AND "orgId" IS NOT NULL', "ghost-id", ME]);
+    const updates = vi.mocked(prisma.$executeRaw).mock.calls.map((_, i) => rawSql(prisma.$executeRaw, i));
+    expect(updates).toContainEqual({ text: 'UPDATE "Issue" SET "authorId" = ? WHERE "authorId" = ?', values: ["ghost-id", ME] });
+    expect(updates).toContainEqual({ text: 'UPDATE "Repo" SET "ownerId" = ? WHERE "ownerId" = ? AND "orgId" IS NOT NULL', values: ["ghost-id", ME] });
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: ME } });
     expect(removeBareRepo).toHaveBeenCalledWith("ada/poster.git");
   });
