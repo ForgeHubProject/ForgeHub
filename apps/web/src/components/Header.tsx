@@ -8,6 +8,7 @@ import { DropdownItem, DropdownMenu, DropdownSeparator } from "../ui/DropdownMen
 import { BellIcon, ChevronDownIcon, SearchIcon } from "../ui/icons";
 import { DropdownLabel } from "../ui/DropdownMenu";
 import { repoFromPath } from "../lib/shortcuts";
+import { signInPath } from "../lib/guest";
 
 type Props = {
   user: User;
@@ -28,7 +29,8 @@ export function Header({ user, onLogout, token }: Props) {
   const [searchParams] = useSearchParams();
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // Inside a repository, "+" offers its New issue / New pull request (#255).
-  const here = repoFromPath(useLocation().pathname);
+  const location = useLocation();
+  const here = repoFromPath(location.pathname);
 
   useEffect(() => {
     if (!token) return;
@@ -62,6 +64,7 @@ export function Header({ user, onLogout, token }: Props) {
       </Link>
 
       {/* Owner crumb (the feed is a tab on the dashboard, #255) */}
+      {token && (
       <nav className="hidden md:flex items-center flex-shrink-0">
         <Link
           to={`/${user.handle}`}
@@ -70,6 +73,7 @@ export function Header({ user, onLogout, token }: Props) {
           {user.handle}
         </Link>
       </nav>
+      )}
 
       {/* Search */}
       <form onSubmit={handleSearch} className="flex-1 max-w-md hidden sm:block">
@@ -90,7 +94,23 @@ export function Header({ user, onLogout, token }: Props) {
         </div>
       </form>
 
-      {/* Actions */}
+      {/* Signed out: public pages are open, and changing anything asks to sign in. */}
+      {!token ? (
+        <div className="flex items-center gap-2 ml-auto sm:ml-0">
+          <Link
+            to={signInPath(`${location.pathname}${location.search}`)}
+            className="h-8 px-3 inline-flex items-center rounded-md text-fh-sm font-medium text-fh-header-text/90 hover:bg-white/10 transition-colors"
+          >
+            Sign in
+          </Link>
+          <Link
+            to={signInPath(`${location.pathname}${location.search}`, "register")}
+            className="h-8 px-3 inline-flex items-center rounded-md text-fh-sm font-medium border border-fh-header-border text-fh-header-text hover:bg-white/10 transition-colors"
+          >
+            Sign up
+          </Link>
+        </div>
+      ) : (
       <div className="flex items-center gap-0.5 ml-auto sm:ml-0">
         {/* Create something new (#255) */}
         <DropdownMenu
@@ -193,6 +213,7 @@ export function Header({ user, onLogout, token }: Props) {
           <DropdownItem onSelect={onLogout}>Sign out</DropdownItem>
         </DropdownMenu>
       </div>
+      )}
     </header>
   );
 }
