@@ -30,6 +30,7 @@ import { AboutSection, ContributorsSection, ReleasesSection } from "./RepoSideba
 import { FileIcon, FolderIcon } from "./fileIcons";
 import { useStoredFlag } from "../../lib/storedFlag";
 import { FileTreePane } from "./FileTreePane";
+import { QuickSetup } from "./QuickSetup";
 import { GoToFile } from "./GoToFile";
 import { SidebarToggle } from "./SidebarToggle";
 import { HistoryGlyph, LatestCommitBar, historyUrl } from "./LatestCommitBar";
@@ -694,6 +695,15 @@ function TreeView({ token, handle, repoName, repo, branches, defaultBranch, curr
             </div>
           ))}
         </div>
+      ) : branches.length === 0 && pathParts.length === 0 ? (
+        <QuickSetup
+          handle={handle}
+          repoName={repoName}
+          defaultBranch={defaultBranch}
+          sshPort={repo.sshPort}
+          sshHost={repo.sshHost}
+          canPush={canWrite}
+        />
       ) : error ? (
         <div className="border border-fh-border rounded-md bg-fh-surface p-12 text-center">
           <p className="text-fh-danger-fg font-medium">{error}</p>
