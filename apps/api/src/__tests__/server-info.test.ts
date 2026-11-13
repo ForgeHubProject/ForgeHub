@@ -37,6 +37,8 @@ describe("GET /server/info", () => {
   afterEach(() => {
     delete process.env["FORGEHUB_SSH_PORT"];
     delete process.env["FORGEHUB_SSH_HOST"];
+    delete process.env["FORGEHUB_SSH_PUBLIC_PORT"];
+    delete process.env["FORGEHUB_SSH_HOST_FINGERPRINTS"];
     delete process.env["FORGEHUB_REGISTRATION"];
   });
 
@@ -106,5 +108,33 @@ describe("GET /server/info", () => {
     // No auth header — should still 200 (public endpoint).
     const res = await app.inject({ method: "GET", url: "/server/info" });
     expect(res.statusCode).toBe(200);
+  });
+
+  // Behind the host's sshd on 22 (deploy/ssh/install.sh), clients meet that
+  // sshd's host keys, not ForgeHub's: showing ForgeHub's would make every
+  // careful user see a mismatch.
+  it("shows the forwarding sshd's fingerprints, never ForgeHub's own, behind port 22", async () => {
+    process.env["FORGEHUB_SSH_PORT"] = "2222";
+    process.env["FORGEHUB_SSH_PUBLIC_PORT"] = "22";
+    vi.mocked(readFile).mockResolvedValue(ED_PUB as never);
+
+    const unset = (await app.inject({ method: "GET", url: "/server/info" })).json();
+    expect(unset).toMatchObject({ sshEnabled: true, sshPort: 22, sshFingerprint: null, sshFingerprints: [] });
+
+    process.env["FORGEHUB_SSH_HOST_FINGERPRINTS"] = "ED25519 SHA256:RwADWwFy923vNMD/SKFT3sjtTfyafVnJ1fQqSWXI5FM, (rsa) SHA256:qBHPup5Cva3SUY+oTA5HQaUbNYVm8S4CmMnBcbs9RuQ";
+    const set = (await app.inject({ method: "GET", url: "/server/info" })).json();
+    expect(set.sshFingerprints).toEqual([
+      { type: "ED25519", fingerprint: "SHA256:RwADWwFy923vNMD/SKFT3sjtTfyafVnJ1fQqSWXI5FM" },
+      { type: "RSA", fingerprint: "SHA256:qBHPup5Cva3SUY+oTA5HQaUbNYVm8S4CmMnBcbs9RuQ" },
+    ]);
+    expect(set.sshFingerprint).toBe("SHA256:RwADWwFy923vNMD/SKFT3sjtTfyafVnJ1fQqSWXI5FM");
+  });
+
+  it("lists ForgeHub's own key when clients connect to it directly", async () => {
+    process.env["FORGEHUB_SSH_PORT"] = "2222";
+    process.env["FORGEHUB_SSH_HOST_FINGERPRINTS"] = "ED25519 SHA256:ignoredWhenNotForwarded";
+    vi.mocked(readFile).mockResolvedValue(ED_PUB as never);
+    const body = (await app.inject({ method: "GET", url: "/server/info" })).json();
+    expect(body.sshFingerprints).toEqual([{ type: "ED25519", fingerprint: ED_FP }]);
   });
 });

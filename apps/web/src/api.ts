@@ -2874,6 +2874,12 @@ export type ServerInfo = {
   sshHost: string | null;
   /** SHA256 fingerprint of the server's SSH host key, for known_hosts verification. Null when SSH is off or key not yet generated. */
   sshFingerprint: string | null;
+  /**
+   * Every host key a client meets on the advertised port, by type: ForgeHub's own,
+   * or the forwarding sshd's when SSH arrives through the host's port 22.
+   * Absent from older servers.
+   */
+  sshFingerprints?: { type: string | null; fingerprint: string }[];
   /** Sign-up policy (FORGEHUB_REGISTRATION). "closed" means POST /auth/register is rejected. */
   registration: "open" | "closed";
 };
