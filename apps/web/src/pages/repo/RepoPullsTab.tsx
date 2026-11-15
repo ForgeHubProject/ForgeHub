@@ -2,6 +2,8 @@ import type { BranchInfo, User } from "../../types";
 import { PullCreate } from "./pulls/PullCreate";
 import { PullDetail, type TabKey } from "./pulls/PullDetail";
 import { PullsList } from "./pulls/PullsList";
+import { Navigate } from "react-router-dom";
+import { isGuest, signInPath } from "../../lib/guest";
 
 /** `pulls/:number`, or with `/commits`, `/checks` or `/files` for those tabs (#252). */
 export const PULL_DETAIL = /^pulls\/(\d+)(?:\/(commits|checks|files))?$/;
@@ -44,6 +46,7 @@ export function RepoPullsTab({ token, handle, repoName, user, branches, defaultB
     );
   }
   if (splat === "pulls/new") {
+    if (isGuest(user)) return <Navigate to={signInPath()} replace />;
     return (
       <PullCreate
         token={token}
