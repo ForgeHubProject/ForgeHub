@@ -23,6 +23,8 @@ import {
   PencilIcon, PinIcon, TransferIcon, UnlockIcon,
 } from "./icons";
 import { useRepoPermission } from "../permission";
+import { isGuest } from "../../../lib/guest";
+import { SignInToComment } from "../../../components/SignInToComment";
 
 /** One timeline entry: an author header bar over a rendered-markdown body. */
 function TimelineCard({
@@ -486,6 +488,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
             viewerHandle={user.handle}
             canManageRepo={canManage}
             onChanged={refreshTimeline}
+            canUpload={!isGuest(user)}
           />
 
           {stream.map((item) =>
@@ -545,6 +548,8 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
                 </p>
               </div>
             </div>
+          ) : isGuest(user) ? (
+            <SignInToComment />
           ) : (
             <form onSubmit={submitComment} className="flex gap-3 pt-4 border-t border-fh-border">
               <Avatar name={user.displayName ?? user.handle} size={32} className="hidden sm:inline-flex mt-7" />

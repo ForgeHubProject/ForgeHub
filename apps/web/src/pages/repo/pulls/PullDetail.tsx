@@ -37,6 +37,8 @@ import {
   StatePill,
 } from "./prShared";
 import { useRepoPermission } from "../permission";
+import { isGuest } from "../../../lib/guest";
+import { SignInToComment } from "../../../components/SignInToComment";
 
 /** The page's tabs, GitHub's (#252): each is its own URL under `pulls/:number`. */
 export type TabKey = "conversation" | "commits" | "checks" | "files";
@@ -287,7 +289,7 @@ export function PullDetail({
   const hasPendingReview = pendingReview != null;
   const pendingCount = reviewComments.filter((c) => c.pending).length;
   const submittedReviews = reviews.filter((r) => r.state !== "pending" && r.submittedAt);
-  const canComment = !isAuthor && pr.state === "open";
+  const canComment = !isAuthor && pr.state === "open" && !isGuest(user);
 
   async function onCreateReviewComment(
     filePath: string,
@@ -620,27 +622,31 @@ export function PullDetail({
             {/* Merge box */}
             <MergeBox token={token} handle={handle} repoName={repoName} pr={pr} canMarkReady={isAuthor || canAdmin} canClose={isAuthor || canAdmin} onUpdate={(p) => { setPr(p); refreshTimeline(); refreshReviews(); }} />
 
-            {/* Comment composer, last, as on GitHub */}
-            <form onSubmit={submitComment} className="flex gap-3 pt-4 border-t border-fh-border">
-              <Avatar name={user.displayName ?? user.handle} size={32} className="hidden sm:inline-flex mt-7" />
-              <div className="flex-1 min-w-0">
-                <p className="mb-2 text-fh-base font-semibold text-fh-fg">Add a comment</p>
-                <MarkdownEditor
-                  id="new-comment"
-                  draftKey={`${handle}/${repoName}#${number}`}
-                  value={commentBody}
-                  onValueChange={setCommentBody}
-                  onSubmit={() => void submitComment()}
-                  token={token}
-                  repo={repoRef}
-                />
-                <div className="flex items-center justify-end mt-3">
-                  <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
-                    Comment
-                  </Button>
+            {/* Comment composer, last, as on GitHub; signed out, an invitation instead */}
+            {isGuest(user) ? (
+              <SignInToComment />
+            ) : (
+              <form onSubmit={submitComment} className="flex gap-3 pt-4 border-t border-fh-border">
+                <Avatar name={user.displayName ?? user.handle} size={32} className="hidden sm:inline-flex mt-7" />
+                <div className="flex-1 min-w-0">
+                  <p className="mb-2 text-fh-base font-semibold text-fh-fg">Add a comment</p>
+                  <MarkdownEditor
+                    id="new-comment"
+                    draftKey={`${handle}/${repoName}#${number}`}
+                    value={commentBody}
+                    onValueChange={setCommentBody}
+                    onSubmit={() => void submitComment()}
+                    token={token}
+                    repo={repoRef}
+                  />
+                  <div className="flex items-center justify-end mt-3">
+                    <Button type="submit" variant="primary" loading={submitting} disabled={!commentBody.trim()}>
+                      Comment
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </form>
+              </form>
+            )}
           </div>
 
           <PullSidebar
@@ -791,7 +797,7 @@ export function PullDetail({
                   </span>
                 )}
                 {/* Submit review, in the toolbar as on GitHub */}
-                {pr.state === "open" && (
+                {pr.state === "open" && !isGuest(user) && (
                   <Popover
                     align="end"
                     width={420}
@@ -847,7 +853,7 @@ export function PullDetail({
                     comments={reviewComments}
                     // One commit's diff is read-only: review comments anchor to the whole PR's lines.
                     review={commitSha ? { ...reviewInteraction, canComment: false } : reviewInteraction}
-                    onToggleViewed={commitSha ? undefined : onToggleViewed}
+                    onToggleViewed={commitSha || isGuest(user) ? undefined : onToggleViewed}
                     options={{ view: diffView, hideWhitespace, commit: commitSha, headSha: commitSha ?? prHead ?? pr.headSha ?? null }}
                   />
                 ))}
