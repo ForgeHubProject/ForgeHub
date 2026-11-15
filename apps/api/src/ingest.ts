@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { loadActiveFormats } from "./forge-formats.js";
 import { officialHandlerId } from "./fhr/official-handlers.js";
 import { ingestSceneSnapshot } from "./fhr-entities.js";
+import { gitDirArgs } from "./git-storage.js";
 
 const execFile = promisify(execFileCb);
 
@@ -31,7 +32,7 @@ export async function ingestCommitRange(
 
   const { stdout: logOut } = await execFile(
     "git",
-    ["log", "--format=%H|%s", "--reverse", revRange],
+    [...gitDirArgs(repoPath), "log", "--format=%H|%s", "--reverse", revRange],
     { cwd: repoPath },
   );
 
@@ -58,7 +59,7 @@ export async function ingestCommitRange(
       "git",
       // --root: a first commit lists everything it added. --diff-filter=d: a
       // deleted file has nothing left to read.
-      ["diff-tree", "--no-commit-id", "-r", "--name-only", "--root", "--diff-merges=first-parent", "--diff-filter=d", commit.sha],
+      [...gitDirArgs(repoPath), "diff-tree", "--no-commit-id", "-r", "--name-only", "--root", "--diff-merges=first-parent", "--diff-filter=d", commit.sha],
       { cwd: repoPath },
     );
     const paths = changedOut
@@ -73,7 +74,7 @@ export async function ingestCommitRange(
         // Bytes, not text: a UTF-8 decode would corrupt binary formats (.glb).
         const { stdout: content } = await execFile(
           "git",
-          ["show", `${commit.sha}:${file}`],
+          [...gitDirArgs(repoPath), "show", `${commit.sha}:${file}`],
           { cwd: repoPath, maxBuffer: 50 * 1024 * 1024, encoding: "buffer" },
         );
         await ingestSceneSnapshot({

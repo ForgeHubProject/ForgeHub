@@ -1,7 +1,7 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
 import { access, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
-import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import path from "node:path";
@@ -359,4 +359,14 @@ export async function inspectBareRepo(storageKey: string): Promise<BareRepoInspe
       isBare: false,
     };
   }
+}
+
+/**
+ * git's arguments for running in `dir`. A work tree (a merge's temporary clone)
+ * is found as usual; a bare repository is named outright, because git refuses
+ * to discover one from the working directory where `safe.bareRepository` is
+ * `explicit`, a hardening some hosts turn on.
+ */
+export function gitDirArgs(dir: string): string[] {
+  return existsSync(path.join(dir, ".git")) ? [] : ["--git-dir", dir];
 }

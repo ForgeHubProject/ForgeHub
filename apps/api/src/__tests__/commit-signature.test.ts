@@ -116,7 +116,7 @@ describe("signature status on real commits", () => {
     // Craft a REAL signed commit object: reuse the init commit's tree, add a
     // gpgsig header, and write it with `git hash-object` (no gpg needed). Point a
     // branch at it so listCommits/getCommit read it back.
-    const tree = (await execFile("git", ["-C", repo.bareRepoPath, "rev-parse", "HEAD^{tree}"])).stdout.trim();
+    const tree = (await execFile("git", ["--git-dir", repo.bareRepoPath, "rev-parse", "HEAD^{tree}"])).stdout.trim();
     const body = [
       `tree ${tree}`,
       `parent ${unsignedSha}`,
@@ -132,8 +132,8 @@ describe("signature status on real commits", () => {
     ].join("\n");
     const objFile = join(repo.workDir, "commit-object.txt");
     await writeFile(objFile, body, "utf8");
-    signedSha = (await execFile("git", ["-C", repo.bareRepoPath, "hash-object", "-w", "-t", "commit", objFile])).stdout.trim();
-    await execFile("git", ["-C", repo.bareRepoPath, "update-ref", "refs/heads/signed", signedSha]);
+    signedSha = (await execFile("git", ["--git-dir", repo.bareRepoPath, "hash-object", "-w", "-t", "commit", objFile])).stdout.trim();
+    await execFile("git", ["--git-dir", repo.bareRepoPath, "update-ref", "refs/heads/signed", signedSha]);
   }, 30_000);
 
   afterAll(async () => { await repo.cleanup(); });

@@ -128,7 +128,7 @@ describe("syncForkBranch (real bare repos)", () => {
     expect(result.newSha).toBe(newTip);
 
     // The fork's branch ref actually moved to the upstream tip.
-    const { stdout } = await execFile("git", ["rev-parse", "refs/heads/main"], { cwd: bareRepoPathFromKey(FORK_KEY) });
+    const { stdout } = await execFile("git", ["--git-dir", bareRepoPathFromKey(FORK_KEY), "rev-parse", "refs/heads/main"], { cwd: bareRepoPathFromKey(FORK_KEY) });
     expect(stdout.trim()).toBe(newTip);
   });
 
@@ -146,7 +146,7 @@ describe("syncForkBranch (real bare repos)", () => {
     expect(result.ahead).toBe(1);
 
     // The fork's branch is untouched — still at its own tip.
-    const { stdout } = await execFile("git", ["rev-parse", "refs/heads/main"], { cwd: bareRepoPathFromKey(FORK_KEY) });
+    const { stdout } = await execFile("git", ["--git-dir", bareRepoPathFromKey(FORK_KEY), "rev-parse", "refs/heads/main"], { cwd: bareRepoPathFromKey(FORK_KEY) });
     expect(stdout.trim()).toBe(forkTip);
   }, 30_000);
 });
@@ -210,7 +210,7 @@ describe("fork routes", () => {
         expect(res.statusCode).toBe(500);
         const { readdir } = await import("node:fs/promises");
         expect(await readdir(join(parent.storageRoot, "forks"))).toEqual([]);
-        const { stdout } = await execFile("git", ["rev-parse", "refs/heads/main"], { cwd: parent.bareRepoPath });
+        const { stdout } = await execFile("git", ["--git-dir", parent.bareRepoPath, "rev-parse", "refs/heads/main"], { cwd: parent.bareRepoPath });
         expect(stdout.trim()).toBe(sha);
       } finally {
         await parent.cleanup();

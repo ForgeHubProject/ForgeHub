@@ -106,7 +106,7 @@ describe("DELETE /repos/:h/:r/tags/:tag protected-tag enforcement", () => {
 
   it("409s when overwriting an existing protected tag via POST", async () => {
     vi.mocked(prisma.protectedTag.findMany).mockResolvedValue([{ pattern: "v*" }] as never);
-    const head = (await execFile("git", ["-C", repo.bareRepoPath, "rev-parse", "HEAD"])).stdout.trim();
+    const head = (await execFile("git", ["--git-dir", repo.bareRepoPath, "rev-parse", "HEAD"])).stdout.trim();
     const res = await app.inject({
       method: "POST", url: "/repos/alice/my-repo/tags",
       headers: { authorization: auth },

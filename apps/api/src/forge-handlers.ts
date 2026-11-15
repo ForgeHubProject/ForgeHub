@@ -1,5 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
+import { gitDirArgs } from "./git-storage.js";
 
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
@@ -39,7 +40,7 @@ export function parseForgeHandlers(raw: string): Map<string, string | null> {
 export async function loadHandlerPins(gitDir: string, commitIsh: string): Promise<Map<string, string | null>> {
   for (const path of FORGE_HANDLERS_PATHS) {
     try {
-      const { stdout } = await execFile("git", ["show", `${commitIsh}:${path}`], {
+      const { stdout } = await execFile("git", [...gitDirArgs(gitDir), "show", `${commitIsh}:${path}`], {
         cwd: gitDir,
         maxBuffer: MAX,
       });

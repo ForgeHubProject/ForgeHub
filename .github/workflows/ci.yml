@@ -26,10 +26,13 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate -w @forgehub/api
 
-      - name: Configure git identity for integration tests
+      - name: Configure git for integration tests
         run: |
           git config --global user.email "ci-test@forgehub.io"
           git config --global user.name "ForgeHub CI"
+          # Hardened hosts refuse to discover bare repositories from the working
+          # directory; ForgeHub must name them (--git-dir) to work there too.
+          git config --global safe.bareRepository explicit
 
       - name: Run API tests
         run: npm run test -w @forgehub/api

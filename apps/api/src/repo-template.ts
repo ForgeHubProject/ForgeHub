@@ -17,12 +17,12 @@ export async function seedFromTemplate(
   const repo = bareRepoPathFromKey(newStorageKey);
   const template = bareRepoPathFromKey(templateStorageKey);
   const git = (args: string[], env?: Record<string, string>) =>
-    execFile("git", args, { cwd: repo, env: { ...process.env, ...env }, maxBuffer: 16 * 1024 * 1024 }).then((r) => r.stdout.trim());
+    execFile("git", ["--git-dir", repo, ...args], { cwd: repo, env: { ...process.env, ...env }, maxBuffer: 16 * 1024 * 1024 }).then((r) => r.stdout.trim());
 
   let branch: string;
   try {
-    branch = (await execFile("git", ["symbolic-ref", "--short", "HEAD"], { cwd: template })).stdout.trim();
-    await execFile("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], { cwd: template });
+    branch = (await execFile("git", ["--git-dir", template, "symbolic-ref", "--short", "HEAD"], { cwd: template })).stdout.trim();
+    await execFile("git", ["--git-dir", template, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], { cwd: template });
   } catch {
     return null; // nothing committed yet
   }
