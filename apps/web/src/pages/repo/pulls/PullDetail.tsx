@@ -41,6 +41,13 @@ import { useRepoPermission } from "../permission";
 /** The page's tabs, GitHub's (#252): each is its own URL under `pulls/:number`. */
 export type TabKey = "conversation" | "commits" | "checks" | "files";
 
+/**
+ * Up to this many changed files, Files changed opens every card, as GitHub
+ * does; each loads its diff as it nears the screen. Larger PRs start collapsed
+ * (browsers keep only about 16 3D views alive at once).
+ */
+const AUTO_OPEN_FILES = 20;
+
 export function PullDetail({
   token,
   handle,
@@ -833,6 +840,7 @@ export function PullDetail({
                 )}
                 {shownFiles.map((file) => (
                   <PRFileRow
+                    autoOpen={(prFiles?.length ?? 0) <= AUTO_OPEN_FILES}
                     // A different commit, view or whitespace setting is a different diff: start fresh.
                     key={`${file.path}|${commitSha ?? ""}|${hideWhitespace ? "w" : ""}|${diffView}`}
                     token={token}

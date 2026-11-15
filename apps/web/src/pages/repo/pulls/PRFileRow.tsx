@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchRawBlob, getPRFileDiff } from "../../../api";
 import type { FileDiff, PRFileEntry } from "../../../types";
@@ -11,6 +11,7 @@ import { Badge, Skeleton, cx } from "../../../ui";
 import { ChevronRightIcon } from "./prShared";
 import { CommentableTextDiff } from "./CommentableTextDiff";
 import { fileAnchorId } from "./fileTree";
+import { useNearScreen } from "../../../lib/nearScreen";
 import { FileThreadList, groupThreads, type ReviewInteraction } from "./reviewShared";
 import type { ReviewComment } from "../../../types";
 import { CommentIcon } from "./reviewShared";
@@ -33,6 +34,7 @@ export function PRFileRow({
   comments,
   review,
   onToggleViewed,
+  autoOpen = false,
   options = {},
 }: {
   token: string;
@@ -50,6 +52,12 @@ export function PRFileRow({
   /** Set when the viewer is signed in — enables the per-file Viewed tick (issue #119). */
   onToggleViewed?: (path: string, viewed: boolean) => void;
   /**
+   * Start open, as GitHub does on a PR of modest size. The diff still loads
+   * only once the card nears the screen, so a PR full of models doesn't fetch
+   * (or open a 3D view for) every file at once.
+   */
+  autoOpen?: boolean;
+  /**
    * The Files changed toolbar (#252): unified or split, hide whitespace, one
    * commit on its own, and the head commit the hidden lines are read from.
    */
@@ -58,9 +66,12 @@ export function PRFileRow({
   const fileComments = comments.filter((c) => c.filePath === file.path);
   const threads = groupThreads(fileComments);
   const openThreadCount = threads.filter((t) => !t.root.resolved).length;
-  // Auto-expand when a file carries review conversation — unless the viewer
-  // already ticked it Viewed (a viewed file starts collapsed, GitHub-style).
-  const [expanded, setExpanded] = useState(threads.length > 0 && !file.viewed);
+  // Open from the start on a PR of modest size, or when a file carries review
+  // conversation — unless the viewer already ticked it Viewed (a viewed file
+  // starts collapsed, GitHub-style).
+  const [expanded, setExpanded] = useState((autoOpen || threads.length > 0) && !file.viewed);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const nearScreen = useNearScreen(cardRef, expanded);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -116,8 +127,9 @@ export function PRFileRow({
     setExpanded((e) => !e);
   }
 
-  // Load the diff up-front when the card starts expanded (has threads).
-  if (expanded && !loaded && !diffLoading) void loadDiff();
+  // An open card loads its diff right away when it carries review threads,
+  // otherwise once it nears the screen.
+  if (expanded && !loaded && !diffLoading && (threads.length > 0 || nearScreen)) void loadDiff();
 
   const displayPath =
     file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
@@ -139,7 +151,7 @@ export function PRFileRow({
   }
 
   return (
-    <div id={fileAnchorId(file.path)} className="border border-fh-border rounded-md bg-fh-surface overflow-hidden scroll-mt-16">
+    <div ref={cardRef} id={fileAnchorId(file.path)} className="border border-fh-border rounded-md bg-fh-surface overflow-hidden scroll-mt-16">
       <div
         className={cx(
           "flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-fh-canvas hover:bg-fh-surface-muted transition-colors",
@@ -204,7 +216,7 @@ export function PRFileRow({
         </div>
       </div>
       {expanded &&
-        (diffLoading ? (
+        (diffLoading || !loaded ? (
           <div className="px-4 py-4 space-y-1.5">
             {[0, 1, 2, 3, 4].map((i) => (
               <Skeleton key={i} variant="text" width={`${50 + i * 10}%`} />
