@@ -30,7 +30,7 @@ const GENERIC = new Set(["json", "toml"]);
 export async function scanRepoFormats(repoPath: string): Promise<string[]> {
   let listing: string;
   try {
-    ({ stdout: listing } = await execFile("git", ["ls-tree", "-r", "-z", "--name-only", "HEAD"], {
+    ({ stdout: listing } = await execFile("git", ["--git-dir", repoPath, "ls-tree", "-r", "-z", "--name-only", "HEAD"], {
       cwd: repoPath,
       maxBuffer: 64 * 1024 * 1024,
     }));

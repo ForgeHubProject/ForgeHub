@@ -112,7 +112,7 @@ export async function createDeepHistoryRepo(
 /** Stream a fast-import script into a fresh bare repo under the storage root. */
 async function fastImport(bareRepoPath: string, stream: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", ["fast-import", "--quiet"], { cwd: bareRepoPath });
+    const child = spawn("git", ["--git-dir", bareRepoPath, "fast-import", "--quiet"], { cwd: bareRepoPath });
     child.on("error", reject);
     child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`git fast-import exited ${code}`))));
     child.stdin.on("error", reject);

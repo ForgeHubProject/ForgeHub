@@ -218,7 +218,7 @@ export async function runCodeGrep(
   } = opts;
 
   const cwd = bareRepoPathFromKey(storageKey);
-  const args = ["grep", "-n", "-I", "-z", "--no-color", "--full-name"];
+  const args = ["--git-dir", cwd, "grep", "-n", "-I", "-z", "--no-color", "--full-name"];
   if (!caseSensitive) args.push("-i");
   args.push(regex ? "-E" : "-F");
   // `--` terminates flags so a pattern starting with `-` is never mistaken for one.

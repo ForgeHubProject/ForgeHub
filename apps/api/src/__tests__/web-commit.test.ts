@@ -15,7 +15,7 @@ let repo: TestRepo;
 let tip: string;
 
 async function bare(args: string[]): Promise<string> {
-  const { stdout } = await execFile("git", args, { cwd: repo.bareRepoPath, maxBuffer: 1 << 24, encoding: "buffer" });
+  const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, ...args], { cwd: repo.bareRepoPath, maxBuffer: 1 << 24, encoding: "buffer" });
   return stdout.toString("utf8").trim();
 }
 const files = (ref: string) => bare(["ls-tree", "-r", "--name-only", ref]).then((s) => s.split("\n").filter(Boolean));
@@ -59,7 +59,7 @@ describe("commitChanges", () => {
       changes: [{ path: "assets/img/logo.png", content: png }], author: AUTHOR,
     });
     expect(r.ok).toBe(true);
-    const { stdout } = await execFile("git", ["show", "main:assets/img/logo.png"], { cwd: repo.bareRepoPath, encoding: "buffer" });
+    const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, "show", "main:assets/img/logo.png"], { cwd: repo.bareRepoPath, encoding: "buffer" });
     expect(Buffer.compare(stdout, png)).toBe(0);
   });
 
@@ -102,7 +102,7 @@ describe("commitChanges", () => {
   });
 
   it("refuses an existing branch name, a missing file, and a change that changes nothing", async () => {
-    await execFile("git", ["branch", "taken", "main"], { cwd: repo.bareRepoPath });
+    await execFile("git", ["--git-dir", repo.bareRepoPath, "branch", "taken", "main"], { cwd: repo.bareRepoPath });
     const taken = await commitChanges(repo.storageKey, {
       base: "main", target: "taken", message: "x", changes: [{ path: "x", content: Buffer.from("x") }], author: AUTHOR,
     });

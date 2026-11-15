@@ -33,7 +33,7 @@ export async function snapshotHeadShas(repoPath: string): Promise<Map<string, st
   try {
     const { stdout } = await execFile(
       "git",
-      ["for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)"],
+      ["--git-dir", repoPath, "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)"],
       { cwd: repoPath },
     );
     for (const line of stdout.trim().split("\n").filter(Boolean)) {
@@ -81,7 +81,7 @@ export async function runPostReceiveEffects(
   try {
     const { stdout } = await execFile(
       "git",
-      ["for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)"],
+      ["--git-dir", repoPath, "for-each-ref", "refs/heads/", "--format=%(refname:short)|%(objectname)"],
       { cwd: repoPath },
     );
     const repoId = repo.id;

@@ -33,7 +33,7 @@ import { authHeader, createTestServer } from "./helpers/server.js";
 import { createTestRepo, makeCommit } from "./helpers/git.js";
 
 const execFile = promisify(execFileCb);
-const git = (cwd: string, ...args: string[]) => execFile("git", args, { cwd }).then((r) => r.stdout.trim());
+const git = (bare: string, ...args: string[]) => execFile("git", ["--git-dir", bare, ...args], { cwd: bare }).then((r) => r.stdout.trim());
 
 describe("seedFromTemplate", () => {
   let template: Awaited<ReturnType<typeof createTestRepo>>;

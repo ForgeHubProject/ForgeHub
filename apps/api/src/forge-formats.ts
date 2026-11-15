@@ -1,5 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
+import { gitDirArgs } from "./git-storage.js";
 
 const execFile = promisify(execFileCb);
 const MAX = 10 * 1024 * 1024;
@@ -24,7 +25,7 @@ export function parseForgeFormats(raw: string): Set<string> {
 export async function loadActiveFormats(gitDir: string, commitIsh: string): Promise<Set<string>> {
   for (const path of FORGE_FORMATS_PATHS) {
     try {
-      const { stdout } = await execFile("git", ["show", `${commitIsh}:${path}`], {
+      const { stdout } = await execFile("git", [...gitDirArgs(gitDir), "show", `${commitIsh}:${path}`], {
         cwd: gitDir,
         maxBuffer: MAX,
       });
