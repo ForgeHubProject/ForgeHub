@@ -825,7 +825,7 @@ export function PullDetail({
             {/* File-tree navigator (issue #119) beside the diff cards. */}
             <div className="flex flex-col md:flex-row gap-4 items-start">
               <div className="w-full md:w-56 shrink-0 md:sticky md:top-16 rounded-md border border-fh-border bg-fh-surface p-2 max-h-[70vh] overflow-y-auto">
-                <PRFileTree files={shownFiles} />
+                <PRFileTree files={shownFiles} showViewed={!isGuest(user)} />
               </div>
               <div className="flex-1 min-w-0 space-y-2">
                 {commitSha && (
