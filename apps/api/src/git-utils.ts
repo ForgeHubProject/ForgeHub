@@ -22,7 +22,7 @@ const INTERNAL_PUSH_ENV = { ...process.env, FORGEHUB_INTERNAL_PUSH: "1" };
 
 export async function git(storageKey: string, args: string[]): Promise<string> {
   const cwd = bareRepoPathFromKey(storageKey);
-  const { stdout } = await execFile("git", args, { cwd, maxBuffer: MAX });
+  const { stdout } = await execFile("git", ["--git-dir", cwd, ...args], { cwd, maxBuffer: MAX });
   return stdout.trim();
 }
 
@@ -665,7 +665,7 @@ export async function readFileAtBranchExact(
 ): Promise<string | null> {
   try {
     const cwd = bareRepoPathFromKey(storageKey);
-    const { stdout } = await execFile("git", ["show", `${branch}:${filePath}`], {
+    const { stdout } = await execFile("git", ["--git-dir", cwd, "show", `${branch}:${filePath}`], {
       cwd, maxBuffer: MAX, encoding: "buffer",
     });
     return stdout.toString("utf8");
@@ -691,7 +691,7 @@ export async function readFileAtRefExact(
 ): Promise<string | null> {
   const cwd = bareRepoPathFromKey(storageKey);
   try {
-    const { stdout } = await execFile("git", ["show", `${ref}:${filePath}`], { cwd, maxBuffer: MAX });
+    const { stdout } = await execFile("git", ["--git-dir", cwd, "show", `${ref}:${filePath}`], { cwd, maxBuffer: MAX });
     return stdout;
   } catch {
     return null;
@@ -796,7 +796,7 @@ async function rawSignedShaSet(storageKey: string, shas: string[]): Promise<Set<
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn("git", ["cat-file", "--batch"], { cwd });
+      child = spawn("git", ["--git-dir", cwd, "cat-file", "--batch"], { cwd });
     } catch {
       resolve(new Set());
       return;
@@ -904,7 +904,7 @@ async function pathFilteredCommitLines(
   const cwd = bareRepoPathFromKey(storageKey);
   const { stdout } = await execFile(
     "git",
-    ["log", ref, ...filters, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
+    ["--git-dir", cwd, "log", ref, ...filters, `--skip=${skip}`, "-n", String(perPage), `--format=${format}`, "--", pathspec],
     { cwd, maxBuffer: MAX, timeout: pathHistoryTimeoutMs(), killSignal: "SIGKILL" },
   );
   return stdout.trim().split("\n").filter(Boolean);
@@ -1571,7 +1571,7 @@ export function statBlob(
   }
   const cwd = bareRepoPathFromKey(storageKey);
   return new Promise((resolve) => {
-    const child = spawn("git", ["cat-file", "--batch-check", "-z"], { cwd });
+    const child = spawn("git", ["--git-dir", cwd, "cat-file", "--batch-check", "-z"], { cwd });
     let out = "";
     let err = "";
     let settled = false;
@@ -1653,7 +1653,7 @@ export function openBlobStream(
   onFailure: (reason: Error) => void,
 ) {
   const cwd = bareRepoPathFromKey(storageKey);
-  const child = spawn("git", ["cat-file", "blob", oid], { cwd });
+  const child = spawn("git", ["--git-dir", cwd, "cat-file", "blob", oid], { cwd });
   child.stderr.resume();
   let reported = false;
   const fail = (reason: Error) => {
@@ -1720,7 +1720,7 @@ export async function readBlobAsBuffer(
   return new Promise((resolve) => {
     execFileCb(
       "git",
-      ["cat-file", "blob", stat.oid],
+      ["--git-dir", cwd, "cat-file", "blob", stat.oid],
       { cwd, maxBuffer: DIFF_BUFFER_MAX, encoding: "buffer" },
       (err, stdout) => {
         resolve(err ? { kind: "error" } : { kind: "ok", buf: stdout as unknown as Buffer });

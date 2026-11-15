@@ -179,7 +179,7 @@ describe("listCommits()", () => {
 
 const execFile = promisify(execFileCb);
 const gitSays = async (bare: string, args: string[]): Promise<string> => {
-  const { stdout } = await execFile("git", ["-C", bare, ...args]);
+  const { stdout } = await execFile("git", ["--git-dir", bare, ...args]);
   return stdout.trim();
 };
 

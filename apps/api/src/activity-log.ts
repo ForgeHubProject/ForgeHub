@@ -9,7 +9,7 @@ export const REF_KINDS: RefKind[] = ["push", "force_push", "branch_created", "br
 
 async function isAncestor(repoPath: string, older: string, newer: string): Promise<boolean> {
   try {
-    await execFile("git", ["merge-base", "--is-ancestor", older, newer], { cwd: repoPath });
+    await execFile("git", ["--git-dir", repoPath, "merge-base", "--is-ancestor", older, newer], { cwd: repoPath });
     return true;
   } catch {
     return false;

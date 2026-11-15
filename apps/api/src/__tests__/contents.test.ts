@@ -55,7 +55,7 @@ beforeEach(() => {
 const post = (payload: object, auth: string | null = token) =>
   app.inject({ method: "POST", url: "/repos/acme/site/contents", headers: auth ? { authorization: auth } : {}, payload });
 const show = async (ref: string, p: string) =>
-  (await execFile("git", ["show", `${ref}:${p}`], { cwd: repo.bareRepoPath })).stdout;
+  (await execFile("git", ["--git-dir", repo.bareRepoPath, "show", `${ref}:${p}`], { cwd: repo.bareRepoPath })).stdout;
 
 describe("POST /repos/:handle/:name/contents", () => {
   it("commits a new file to the branch and runs the push follow-ups", async () => {
@@ -67,7 +67,7 @@ describe("POST /repos/:handle/:name/contents", () => {
     expect(res.json()).toMatchObject({ branch: "main", parent: tip });
     tip = res.json().sha;
     expect(await show("main", "docs/intro.md")).toBe("Hello\n");
-    const { stdout } = await execFile("git", ["log", "-1", "--format=%an|%B", "main"], { cwd: repo.bareRepoPath });
+    const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, "log", "-1", "--format=%an|%B", "main"], { cwd: repo.bareRepoPath });
     expect(stdout.trim()).toBe("Olive Owner|Create docs/intro.md\n\nFirst page");
     expect(runPostReceiveEffects).toHaveBeenCalledWith(
       expect.anything(), { id: "repo-1", storageKey: "acme/site.git" }, OWNER, repo.bareRepoPath, expect.any(Map),
@@ -80,7 +80,7 @@ describe("POST /repos/:handle/:name/contents", () => {
       branch: "main", message: "Upload", changes: [{ path: "bin/data.bin", content: bytes.toString("base64"), encoding: "base64" }],
     });
     expect(res.statusCode).toBe(201);
-    const { stdout } = await execFile("git", ["show", "main:bin/data.bin"], { cwd: repo.bareRepoPath, encoding: "buffer" });
+    const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, "show", "main:bin/data.bin"], { cwd: repo.bareRepoPath, encoding: "buffer" });
     expect(Buffer.compare(stdout, bytes)).toBe(0);
   });
 

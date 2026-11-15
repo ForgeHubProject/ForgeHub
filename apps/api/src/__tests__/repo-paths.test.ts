@@ -40,7 +40,7 @@ afterAll(async () => { await repo.cleanup(); });
 beforeEach(() => { __resetRepoPathsCache(); });
 
 async function gitPaths(ref: string): Promise<string[]> {
-  const { stdout } = await execFile("git", ["-C", repo.bareRepoPath, "ls-tree", "-r", "-z", "--name-only", ref]);
+  const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, "ls-tree", "-r", "-z", "--name-only", ref]);
   return stdout.split("\0").filter(Boolean);
 }
 
