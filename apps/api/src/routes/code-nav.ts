@@ -69,7 +69,7 @@ export async function codeNavRoutes(app: FastifyInstance) {
     const contentType = format === "tar.gz" ? "application/gzip" : "application/zip";
 
     const gitFormat = format === "tar.gz" ? "tar.gz" : "zip";
-    const child = spawn("git", ["archive", `--format=${gitFormat}`, `--prefix=${name}-${refLabel}/`, ref], { cwd: repoPath });
+    const child = spawn("git", ["--git-dir", repoPath, "archive", `--format=${gitFormat}`, `--prefix=${name}-${refLabel}/`, ref], { cwd: repoPath });
 
     reply.raw.statusCode = 200;
     reply.raw.setHeader("Content-Type", contentType);

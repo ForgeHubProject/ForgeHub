@@ -64,18 +64,16 @@ describe("entryFor", () => {
 
 /** `git log -1 --format=%H <ref> -- <path>` in the bare repo: what every entry must match. */
 async function reference(storageKey: string, ref: string, path: string): Promise<string> {
-  const { stdout } = await execFile("git", ["--literal-pathspecs", "log", "-1", "--format=%H", ref, "--", path], {
-    cwd: bareRepoPathFromKey(storageKey),
-  });
+  const bare = bareRepoPathFromKey(storageKey);
+  const { stdout } = await execFile("git", ["--git-dir", bare, "--literal-pathspecs", "log", "-1", "--format=%H", ref, "--", path], { cwd: bare });
   return stdout.trim();
 }
 
 async function expectMatchesGit(storageKey: string, ref: string, dir: string) {
   const result = await getTreeCommits(storageKey, dir, ref);
   expect(result).not.toBeNull();
-  const { stdout } = await execFile("git", ["ls-tree", "--name-only", ref, ...(dir ? [`${dir}/`] : [])], {
-    cwd: bareRepoPathFromKey(storageKey),
-  });
+  const bare = bareRepoPathFromKey(storageKey);
+  const { stdout } = await execFile("git", ["--git-dir", bare, "ls-tree", "--name-only", ref, ...(dir ? [`${dir}/`] : [])], { cwd: bare });
   const names = stdout.split("\n").filter(Boolean).map((p) => (dir ? p.slice(dir.length + 1) : p));
   expect(Object.keys(result!.commits).sort()).toEqual([...names].sort());
   for (const n of names) {
@@ -155,7 +153,7 @@ describe("getTreeCommits — every entry is what `git log -1 -- <entry>` says", 
 
   it("counts the commits the ref reaches", async () => {
     const r = await getTreeCommits(repo.storageKey, "", main);
-    const { stdout } = await execFile("git", ["rev-list", "--count", main], { cwd: repo.bareRepoPath });
+    const { stdout } = await execFile("git", ["--git-dir", repo.bareRepoPath, "rev-list", "--count", main], { cwd: repo.bareRepoPath });
     expect(r?.totalCommits).toBe(Number(stdout.trim()));
   });
 

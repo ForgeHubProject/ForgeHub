@@ -15,7 +15,9 @@ const BINARY_SNIFF = 8000;
  */
 function isBinaryBlob(storageKey: string, sha: string, path: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["cat-file", "blob", `${sha}:${path}`], { cwd: bareRepoPathFromKey(storageKey) });
+    const child = spawn("git", ["--git-dir", bareRepoPathFromKey(storageKey), "cat-file", "blob", `${sha}:${path}`], {
+      cwd: bareRepoPathFromKey(storageKey),
+    });
     let seen = 0;
     let done = false;
     const finish = (binary: boolean) => {

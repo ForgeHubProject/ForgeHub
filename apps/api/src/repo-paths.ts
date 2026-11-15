@@ -30,7 +30,9 @@ export function __resetRepoPathsCache(): void {
  */
 function lsTreePaths(storageKey: string, sha: string, limit: number): Promise<{ paths: string[]; truncated: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["ls-tree", "-r", "-z", "--name-only", sha], { cwd: bareRepoPathFromKey(storageKey) });
+    const child = spawn("git", ["--git-dir", bareRepoPathFromKey(storageKey), "ls-tree", "-r", "-z", "--name-only", sha], {
+      cwd: bareRepoPathFromKey(storageKey),
+    });
     const paths: string[] = [];
     let rest = "";
     let truncated = false;

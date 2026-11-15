@@ -103,7 +103,8 @@ function walk(
   else if (dir) args.push("--", dir);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd: bareRepoPathFromKey(storageKey), stdio: ["ignore", "pipe", "ignore"] });
+    const repo = bareRepoPathFromKey(storageKey);
+    const child = spawn("git", ["--git-dir", repo, ...args], { cwd: repo, stdio: ["ignore", "pipe", "ignore"] });
     let buffer = "";
     let done = false;
     const finish = () => {

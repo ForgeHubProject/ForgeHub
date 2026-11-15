@@ -58,7 +58,7 @@ export function cleanPath(input: string): string | null {
 export async function commitChanges(storageKey: string, input: WebCommitInput): Promise<WebCommitResult> {
   const repoPath = bareRepoPathFromKey(storageKey);
   const git = (args: string[], env?: NodeJS.ProcessEnv) =>
-    execFile("git", args, { cwd: repoPath, maxBuffer: MAX, env: env ? { ...process.env, ...env } : process.env })
+    execFile("git", ["--git-dir", repoPath, ...args], { cwd: repoPath, maxBuffer: MAX, env: env ? { ...process.env, ...env } : process.env })
       .then((r) => r.stdout.trim());
 
   const parent = await git(["rev-parse", "--verify", "--quiet", `refs/heads/${input.base}^{commit}`]).catch(() => "");
