@@ -1,17 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteWebhook,
-  getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
+  addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteSocialPreview, deleteWebhook,
+  fetchSocialPreview, getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
   putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, transferRepo, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
-  type MergeMethod,
+  uploadSocialPreview, type MergeMethod,
 } from "../../api";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type {
   BranchInfo, BranchProtectionRules, DeployKey, Label, ProtectedTag, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
 } from "../../types";
 import {
-  Avatar, Badge, Button, ConfirmDialog, Dialog, EmptyState, Field, LabelChip,
+  Avatar, Badge, Button, ConfirmDialog, Dialog, DropdownItem, DropdownMenu, EmptyState, Field, Icons, LabelChip,
   RelativeTime, Select, Skeleton, Spinner, TextInput, Textarea, cx, useToast,
 } from "../../ui";
 import { LockIcon, RepoIcon } from "../listShared";
@@ -181,6 +181,7 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
             <>
               <RenameCard token={token} handle={handle} repo={repo} />
               <DefaultBranchCard token={token} handle={handle} repoName={repoName} />
+              <SocialPreviewCard token={token} handle={handle} repo={repo} />
               <div>
                 <h3 className="mb-2 mt-6 text-fh-base font-semibold text-fh-fg">Features</h3>
                 <div className="space-y-3">
@@ -203,6 +204,112 @@ function GeneralSection({ token, handle, repoName, isOwner }: { token: string; h
       ) : (
         <p className="text-fh-sm text-fh-fg-muted">Could not load repository details.</p>
       )}
+    </div>
+  );
+}
+
+const PENCIL = "M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 000-.354l-1.086-1.086zM11.189 6.25L9.75 4.81l-6.286 6.287a.25.25 0 00-.064.108l-.558 1.953 1.953-.558a.249.249 0 00.108-.064l6.286-6.286z";
+
+/** GitHub's "Social preview" (#256): the image a shared link to the repository shows. */
+function SocialPreviewCard({ token, handle, repo }: { token: string; handle: string; repo: Repo }) {
+  const { toast } = useToast();
+  const [key, setKey] = useState<string | null>(repo.socialPreviewKey ?? null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const picker = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!key) {
+      setSrc(null);
+      return;
+    }
+    let live = true;
+    let url: string | null = null;
+    fetchSocialPreview(token, handle, repo.name, key)
+      .then((u) => {
+        url = u;
+        if (live) setSrc(u);
+        else URL.revokeObjectURL(u);
+      })
+      .catch(() => live && setSrc(null));
+    return () => {
+      live = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [token, handle, repo.name, key]);
+
+  async function upload(file: File) {
+    setError(null);
+    if (!/^image\/(png|jpeg|gif)$/.test(file.type)) return setError("The image must be a PNG, JPG or GIF.");
+    if (file.size >= 1024 * 1024) return setError("The image must be under 1 MB.");
+    setBusy(true);
+    try {
+      setKey((await uploadSocialPreview(token, handle, repo.name, file)).socialPreviewKey);
+      toast("Social preview updated", { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setError(null);
+    setBusy(true);
+    try {
+      await deleteSocialPreview(token, handle, repo.name);
+      setKey(null);
+      toast("Social preview removed", { tone: "success" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the image");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <h3 className="mb-2 mt-6 text-fh-base font-semibold text-fh-fg">Social preview</h3>
+      <p className="text-fh-sm text-fh-fg-muted">Upload an image to customize your repository's social media preview.</p>
+      <p className="text-fh-sm text-fh-fg-muted">Images should be at least 640×320px (1280×640px for best display).</p>
+      <div className="relative mt-3 w-full max-w-[400px] aspect-[2/1] rounded-md border border-fh-border overflow-hidden bg-fh-surface">
+        {src ? (
+          <img src={src} alt={`Social preview for ${repo.fullName ?? repo.name}`} className="w-full h-full object-cover" />
+        ) : (
+          <div className="h-full flex flex-col justify-center gap-1 px-6 pb-8">
+            <p className="text-fh-lg font-semibold text-fh-fg truncate">{repo.fullName ?? repo.name}</p>
+            {repo.description && <p className="text-fh-sm text-fh-fg-muted line-clamp-2">{repo.description}</p>}
+          </div>
+        )}
+        <div className="absolute left-2 bottom-2">
+          <DropdownMenu
+            align="start"
+            width={180}
+            trigger={
+              <Button size="sm" loading={busy} leadingIcon={<Icon path={PENCIL} size={14} />} trailingIcon={<Icons.ChevronDownIcon size={10} />}>
+                Edit
+              </Button>
+            }
+          >
+            <DropdownItem onSelect={() => picker.current?.click()}>Upload an image…</DropdownItem>
+            {key && <DropdownItem danger onSelect={() => void remove()}>Remove image</DropdownItem>}
+          </DropdownMenu>
+        </div>
+      </div>
+      <input
+        ref={picker}
+        type="file"
+        accept="image/png,image/jpeg,image/gif"
+        className="hidden"
+        aria-label="Social preview image"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void upload(file);
+        }}
+      />
+      {error && <p className="mt-2 text-fh-sm text-fh-danger-fg">{error}</p>}
     </div>
   );
 }

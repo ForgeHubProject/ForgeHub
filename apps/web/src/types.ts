@@ -233,6 +233,8 @@ export type Repo = {
   mergeCommitMessage?: "default" | "title" | "title_description";
   squashCommitMessage?: "default" | "title" | "title_commits" | "title_description";
   isTemplate?: boolean;
+  /** Social preview image (#256): changes with each upload; null when there is none. */
+  socialPreviewKey?: string | null;
   suggestUpdateBranch?: boolean;
   /** Official FHR handler ids it holds, most files first (#257); on lists that compute them. */
   formats?: string[];

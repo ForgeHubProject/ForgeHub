@@ -187,6 +187,9 @@ model Repo {
   squashCommitMessage String    @default("default")
   // A template repository (#256): "Use this template" starts new repositories from it.
   isTemplate          Boolean   @default(false)
+  // Social preview image (#256): the card a shared link shows. Its bytes live at
+  // `<GIT_STORAGE_ROOT>-social-previews/<repo id>`; the key only busts caches.
+  socialPreviewKey    String?
   // Offer "Update branch" whenever a pull request's head is behind its base (#256).
   suggestUpdateBranch Boolean   @default(false)
 
