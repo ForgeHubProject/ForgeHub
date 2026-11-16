@@ -4,6 +4,8 @@ import { IssueDetailView } from "./issues/IssueDetailView";
 import { NewIssueComposer } from "./issues/NewIssueComposer";
 import { MilestonesListView } from "./issues/MilestonesListView";
 import { MilestoneDetailView } from "./issues/MilestoneDetailView";
+import { Navigate } from "react-router-dom";
+import { isGuest, signInPath } from "../../lib/guest";
 
 type Props = {
   token: string;
@@ -26,6 +28,7 @@ type Props = {
  */
 export function RepoIssuesTab({ token, handle, repoName, user, splat }: Props) {
   if (/^issues\/new\/?$/.test(splat)) {
+    if (isGuest(user)) return <Navigate to={signInPath()} replace />;
     return <NewIssueComposer token={token} handle={handle} repoName={repoName} user={user} />;
   }
 
