@@ -148,6 +148,7 @@ function readOutcome(res: IncomingMessage): Promise<{ bytes: number; error: Erro
     res.on("end", () => resolve({ bytes, error: null }));
     res.on("error", (error) => resolve({ bytes, error }));
     res.on("aborted", () => resolve({ bytes, error: new Error("aborted") }));
+    res.resume();
   });
 }
 
@@ -291,8 +292,14 @@ describe("GET /rawblob — streamed, no size ceiling", () => {
     // below, which is where the discriminating coverage lives.
     const { res } = await open(url("big.bin", headSha));
     expect(res.statusCode).toBe(200);
-    await new Promise<void>((resolve) => res.once("data", () => resolve()));
-    await execFile("pkill", ["-f", `cat-file blob ${bigOid}`]).catch(() => undefined);
+    // Hold the body on its first chunk. Backpressure then keeps git blocked
+    // mid-blob (26 MiB is far more than the socket and pipe buffers take), so
+    // pkill finds it alive. Left flowing, the rest of the body could arrive —
+    // and `end` fire with nobody listening yet — before pkill ran, and the test
+    // hung until its timeout instead of failing.
+    await new Promise<void>((resolve) => res.once("data", () => { res.pause(); resolve(); }));
+    const killed = await execFile("pkill", ["-f", `cat-file blob ${bigOid}`]).then(() => true, () => false);
+    expect(killed).toBe(true);
 
     const outcome = await readOutcome(res);
     expect(outcome.bytes).toBeLessThan(LARGE_BYTES);
