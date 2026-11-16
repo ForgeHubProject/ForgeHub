@@ -2943,6 +2943,40 @@ export async function uploadAvatar(
   return res.json() as Promise<{ avatarKey: string; contentType: string; size: number }>;
 }
 
+/** Social preview (#256): the image a shared link to the repository shows. PNG, JPG or GIF under 1 MB. */
+export async function uploadSocialPreview(
+  token: string,
+  handle: string,
+  repoName: string,
+  file: File,
+): Promise<{ socialPreviewKey: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/repos/${handle}/${repoName}/social-preview`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ socialPreviewKey: string }>;
+}
+
+export async function deleteSocialPreview(token: string, handle: string, repoName: string): Promise<void> {
+  return req(`/repos/${handle}/${repoName}/social-preview`, { method: "DELETE", token });
+}
+
+/** The image as an object URL: a private repository's can't be fetched without the token. */
+export async function fetchSocialPreview(token: string | null, handle: string, repoName: string, key: string): Promise<string> {
+  const res = await fetch(`${BASE}/repos/${handle}/${repoName}/social-preview?v=${encodeURIComponent(key)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return URL.createObjectURL(await res.blob());
+}
+
 /** Clear the current user's avatar. */
 export async function deleteAvatar(token: string): Promise<void> {
   return req("/users/me/avatar", { method: "DELETE", token });

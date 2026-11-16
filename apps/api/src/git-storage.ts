@@ -149,6 +149,42 @@ export async function removeAvatar(userId: string): Promise<void> {
   await rm(avatarPathForUser(userId), { force: true });
 }
 
+// ─── Social preview images (#256) ─────────────────────────────────────────────
+//
+// One image per repository, beside the avatars: `<root>-social-previews/<repo id>`.
+// Keyed by id, so renaming or transferring the repository keeps it.
+
+function socialPreviewsRoot(): string {
+  return `${path.resolve(storageRoot())}-social-previews`;
+}
+
+/** Resolve a repository's social preview file to an absolute path, guarding against traversal. */
+export function socialPreviewPath(repoId: string): string {
+  const root = socialPreviewsRoot();
+  const full = path.resolve(root, repoId);
+  const rel = path.relative(root, full);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+    throw new Error("Invalid repository id");
+  }
+  return full;
+}
+
+export async function writeSocialPreview(repoId: string, buf: Buffer): Promise<void> {
+  const full = socialPreviewPath(repoId);
+  await mkdir(path.dirname(full), { recursive: true });
+  await writeFile(full, buf);
+}
+
+/** The stored image (throws if absent — callers guard on socialPreviewKey). */
+export async function readSocialPreview(repoId: string): Promise<Buffer> {
+  return readFile(socialPreviewPath(repoId));
+}
+
+/** Delete a repository's social preview (idempotent). */
+export async function removeSocialPreview(repoId: string): Promise<void> {
+  await rm(socialPreviewPath(repoId), { force: true });
+}
+
 // ─── CI (Actions) storage (issue #86) ────────────────────────────────────────
 //
 // Workflow-run logs and the runner's throwaway commit clones live under a sibling
