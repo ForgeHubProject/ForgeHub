@@ -66,11 +66,27 @@ export async function clientFingerprints(env: NodeJS.ProcessEnv = process.env): 
   return own ? [{ type: "ED25519", fingerprint: own }] : [];
 }
 
+/**
+ * The build this server runs: the release tag and commit the container image
+ * was built from (the Dockerfile's VERSION and VCS_REF build args). Null
+ * outside an image. Lets anyone check which commit is live, since merged is
+ * not deployed.
+ */
+export function buildInfo(env: NodeJS.ProcessEnv = process.env): { version: string | null; revision: string | null } {
+  return { version: env["FORGEHUB_VERSION"] || null, revision: env["FORGEHUB_REVISION"] || null };
+}
+
 export async function serverInfoRoutes(app: FastifyInstance) {
   app.get("/server/info", async () => {
     const config = sshClientConfig();
     const sshFingerprints = await clientFingerprints();
     // sshFingerprint: the first one, for clients that read a single value.
-    return { ...config, sshFingerprint: sshFingerprints[0]?.fingerprint ?? null, sshFingerprints, registration: registrationMode() };
+    return {
+      ...config,
+      sshFingerprint: sshFingerprints[0]?.fingerprint ?? null,
+      sshFingerprints,
+      registration: registrationMode(),
+      build: buildInfo(),
+    };
   });
 }

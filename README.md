@@ -544,3 +544,13 @@ MIT — see [LICENSE](LICENSE).
 ### Releasing container images
 
 `npm run release:containers` (or `scripts/release-containers.sh`) builds the sqlite, `-postgres` and `-mysql` images for amd64+arm64 and pushes them to `docker.io/touficmajdalani/forgehub`, `ghcr.io/forgehubproject/forgehub` and `quay.io/forgehubproject/forgehub`. Tags are `<BASE>-<N>` (default `1.1-1`, `1.1-2`, …; N is auto-incremented from the registries) plus the floating `<BASE>` tag (`1.1`, `1.1-postgres`, `1.1-mysql`, always the newest `<BASE>-<N>`) and `latest`. Log in to all three registries first; use `--dry-run` to preview and `BASE=1.2` to start a new series.
+
+### Checking a deployment
+
+After the server pulls the new image, check it from any machine with Node 18+:
+
+```bash
+node scripts/check-deploy.mjs https://forgehubcode.com --repo gamedev/lanternfall
+```
+
+It visits the site signed out, through every proxy in front of it, and checks what development never shows: which build is live and how far behind `origin/main` it is (`/server/info` reports the image's version and commit), that browser page loads get the app and the app's requests get the API, the app's scripts and styles, public reads and `git clone` over HTTPS, a 3D diff and raw model download from the repository's history, that 8 MB uploads reach the API and git, and that the SSH fingerprint the site shows is the one the SSH port presents. It changes nothing; the upload check sends 8 MB to endpoints that refuse it for want of sign-in. It exits 1 when a check fails.
