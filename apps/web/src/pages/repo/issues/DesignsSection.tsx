@@ -329,7 +329,7 @@ function DesignCard({
 // ─── section ────────────────────────────────────────────────────────────────────
 
 export function DesignsSection({
-  token, handle, repoName, number, viewerHandle, canManageRepo, onChanged,
+  token, handle, repoName, number, viewerHandle, canManageRepo, canUpload = true, onChanged,
 }: {
   token: string;
   handle: string;
@@ -337,6 +337,8 @@ export function DesignsSection({
   number: number;
   viewerHandle: string;
   canManageRepo: boolean;
+  /** False for a signed-out visitor: designs are shown, nothing offers an upload. */
+  canUpload?: boolean;
   /** Called after an upload/delete so the parent can refresh the issue timeline. */
   onChanged?: () => void;
 }) {
@@ -398,18 +400,23 @@ export function DesignsSection({
   const openDesign = designs.find((d) => d.id === openId) ?? null;
   const canManageDesign = (d: Design) => canManageRepo || d.createdBy === viewerHandle;
 
+  // Nothing to show and nothing a visitor could add: no section at all.
+  if (!canUpload && !loading && designs.length === 0) return null;
+
   return (
     <section className="border border-fh-border rounded-md overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border">
         <span className="text-fh-fg-muted"><CubeMark size={16} /></span>
         <h3 className="text-fh-sm font-semibold text-fh-fg">Designs</h3>
         {designs.length > 0 && <Badge tone="neutral">{designs.length}</Badge>}
-        <div className="ml-auto">
-          <input ref={fileRef} type="file" className="hidden" onChange={onPick} />
-          <Button size="sm" variant="default" loading={uploading} onClick={() => fileRef.current?.click()} leadingIcon={<UploadMark size={16} />}>
-            Upload design
-          </Button>
-        </div>
+        {canUpload && (
+          <div className="ml-auto">
+            <input ref={fileRef} type="file" className="hidden" onChange={onPick} />
+            <Button size="sm" variant="default" loading={uploading} onClick={() => fileRef.current?.click()} leadingIcon={<UploadMark size={16} />}>
+              Upload design
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="p-4 bg-fh-surface">
