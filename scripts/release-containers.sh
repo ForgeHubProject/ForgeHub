@@ -129,3 +129,4 @@ for v in "${VARIANTS[@]}"; do
 done
 
 echo "Done: $VERSION"
+(( DRY_RUN || LOCAL )) || echo "Once the server runs it: node scripts/check-deploy.mjs <https://your-host>"
