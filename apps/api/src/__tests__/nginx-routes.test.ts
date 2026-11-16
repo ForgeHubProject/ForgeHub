@@ -25,8 +25,9 @@ import { createTestServer } from "./helpers/server.js";
 
 const repoFile = (path: string) => readFileSync(fileURLToPath(new URL(`../../../../${path}`, import.meta.url)), "utf8");
 const CONFIGS = ["docker/nginx.conf", "apps/web/nginx.conf"];
-// /git/ has a location of its own; the API's built-in dev page isn't part of the site.
-const OWN_LOCATION = new Set(["git", "ui"]);
+// /git/ and link previews' /_preview/ have locations of their own; the API's
+// built-in dev page isn't part of the site.
+const OWN_LOCATION = new Set(["git", "_preview", "ui"]);
 
 function rules(config: string) {
   const apiLocation = /location ~ \^\/\(([^)]+)\)\(\/\|\$\) \{([^}]*)\}/.exec(config);
@@ -52,6 +53,19 @@ describe.each(CONFIGS)("%s", (file) => {
     const prefixes = new Set(routes.map((url) => url.split("/")[1]).filter((p) => p && !OWN_LOCATION.has(p)));
     expect(prefixes.size).toBeGreaterThan(10);
     expect([...prefixes].filter((p) => !api.has(p))).toEqual([]);
+  });
+
+  it("gives link previews a repository's card, never by an outside request, and leaves files alone", () => {
+    const config = repoFile(file);
+    expect(config).toMatch(/location \^~ \/_preview\/ \{\s*internal;/);
+    expect(config).toMatch(/location \/ \{\s*if \(\$link_preview\) \{\s*rewrite \^ \/_preview\$uri last;/);
+    // Which paths a link preview of a page asks about: the map's regexes, in order, first match wins.
+    const map = /map "\$link_preview_agent:\$uri" \$link_preview \{([^}]*)\}/.exec(config)?.[1] ?? "";
+    const rules = [...map.matchAll(/"~([^"]+)"\s+([01]);/g)].map((m) => [new RegExp(m[1]!), m[2] === "1"] as const);
+    const card = (uri: string) => rules.find(([re]) => re.test(`1:${uri}`))?.[1] ?? false;
+    expect(["/", "/ada", "/ada/lanternfall", "/ada/my.game/pulls/3"].filter((uri) => !card(uri))).toEqual([]);
+    expect(["/favicon.ico", "/assets/index-abc.js", "/robots.txt"].filter(card)).toEqual([]);
+    expect(/facebookexternalhit\|[^"]*slackbot[^"]*discordbot[^"]*linkedinbot/.test(config)).toBe(true);
   });
 
   it("gives a browser the app on pages whose path the API also has", () => {

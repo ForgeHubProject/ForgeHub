@@ -2,7 +2,9 @@ import { sshClientConfig } from "../ssh/config.js";
 import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
-import { bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
+import {
+  bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir, removeSocialPreview,
+} from "../git-storage.js";
 import { seedFromTemplate } from "../repo-template.js";
 import { fillMissingFormats, parseFormats } from "../repo-formats.js";
 import { resolveActorIdentity } from "../pull-merge.js";
@@ -116,6 +118,7 @@ export function repoResponse(
     squashCommitMessage?: string;
     isTemplate?: boolean;
     suggestUpdateBranch?: boolean;
+    socialPreviewKey?: string | null;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -158,6 +161,8 @@ export function repoResponse(
     squashCommitMessage: r.squashCommitMessage ?? "default",
     isTemplate: r.isTemplate ?? false,
     suggestUpdateBranch: r.suggestUpdateBranch ?? false,
+    // Social preview (#256): changes with each upload, so it versions the image's URL.
+    socialPreviewKey: r.socialPreviewKey ?? null,
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -978,6 +983,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (existing.storageKey) {
         await removeBareRepo(existing.storageKey);
       }
+      if (existing.socialPreviewKey) await removeSocialPreview(existing.id).catch(() => {});
 
       return reply.status(204).send();
     },
@@ -1011,6 +1017,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (existing.storageKey) {
         await removeBareRepo(existing.storageKey);
       }
+      if (existing.socialPreviewKey) await removeSocialPreview(existing.id).catch(() => {});
 
       return reply.status(204).send();
     },

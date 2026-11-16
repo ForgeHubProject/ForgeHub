@@ -63,6 +63,7 @@ import { ciRoutes } from "./routes/ci.js";
 import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
+import { socialPreviewRoutes } from "./routes/social-preview.js";
 import { registrationMode } from "./registration.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
@@ -232,6 +233,7 @@ export async function buildServer() {
   // Profiles (issue #115) — registered last so its new /users/* routes sit after
   // the auth surfaces they extend.
   await app.register(profileRoutes);
+  await app.register(socialPreviewRoutes);
 
   // SSH git transport (issue #116). Hard-off unless FORGEHUB_SSH_PORT is set; when
   // started, it is torn down with the Fastify app so tests (and clean shutdowns)
