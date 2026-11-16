@@ -2882,6 +2882,8 @@ export type ServerInfo = {
   sshFingerprints?: { type: string | null; fingerprint: string }[];
   /** Sign-up policy (FORGEHUB_REGISTRATION). "closed" means POST /auth/register is rejected. */
   registration: "open" | "closed";
+  /** The image's release tag and commit; nulls outside an image. Absent from older servers. */
+  build?: { version: string | null; revision: string | null };
 };
 
 /** GET /server/info — fetch SSH config and host-key fingerprint. No auth required. */

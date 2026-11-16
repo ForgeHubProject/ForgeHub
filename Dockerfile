@@ -100,6 +100,8 @@ EXPOSE 80
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
+# Also reported by GET /server/info, so the live build can be checked from outside.
+ENV FORGEHUB_VERSION=${VERSION} FORGEHUB_REVISION=${VCS_REF}
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \

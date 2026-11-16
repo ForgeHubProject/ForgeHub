@@ -40,6 +40,22 @@ describe("GET /server/info", () => {
     delete process.env["FORGEHUB_SSH_PUBLIC_PORT"];
     delete process.env["FORGEHUB_SSH_HOST_FINGERPRINTS"];
     delete process.env["FORGEHUB_REGISTRATION"];
+    delete process.env["FORGEHUB_VERSION"];
+    delete process.env["FORGEHUB_REVISION"];
+  });
+
+  it("reports the build it runs: the image's release tag and commit, null outside an image", async () => {
+    const dev = await app.inject({ method: "GET", url: "/server/info" });
+    expect(dev.json().build).toEqual({ version: null, revision: null });
+    process.env["FORGEHUB_VERSION"] = "1.2-2";
+    process.env["FORGEHUB_REVISION"] = "5ee58b3";
+    const image = await app.inject({ method: "GET", url: "/server/info" });
+    expect(image.json().build).toEqual({ version: "1.2-2", revision: "5ee58b3" });
+    // An image built without the args carries them as empty strings.
+    process.env["FORGEHUB_VERSION"] = "";
+    process.env["FORGEHUB_REVISION"] = "";
+    const bare = await app.inject({ method: "GET", url: "/server/info" });
+    expect(bare.json().build).toEqual({ version: null, revision: null });
   });
 
   it("exposes registration mode, defaulting to open", async () => {
