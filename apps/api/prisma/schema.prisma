@@ -49,6 +49,12 @@ model User {
   // Notification preferences (#258): JSON { [reason]: { web, email } }; a missing
   // reason means both on. Email still needs emailNotifications, the master switch.
   notificationPrefs String?
+  // Two-factor authentication (#258): the authenticator secret, encrypted (see
+  // src/two-factor.ts); on once totpEnabledAt is set. totpLastStep is the last
+  // time step accepted, so a code can't be used twice.
+  totpSecret      String?
+  totpEnabledAt   DateTime?
+  totpLastStep    Int?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   repos          Repo[]
@@ -95,6 +101,8 @@ model User {
   threadMutes      ThreadMute[]
   watches          Watch[]
   reactions        Reaction[]
+  recoveryCodes    RecoveryCode[]
+  loginChallenges  LoginChallenge[]
 }
 
 model PersonalAccessToken {
@@ -1351,6 +1359,35 @@ model Session {
   createdAt  DateTime  @default(now())
   lastSeenAt DateTime  @default(now())
   revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Two-factor authentication (#258) ─────────────────────────────────────────
+// A recovery code, stored as its SHA-256; deleted when used.
+model RecoveryCode {
+  id        String   @id @default(cuid())
+  userId    String
+  codeHash  String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// A password accepted for a two-factor account: the second step trades it, with a
+// code, for a session. Failed codes count in `attempts`, which lock the account's
+// second step for a while.
+model LoginChallenge {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

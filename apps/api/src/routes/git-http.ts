@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { bareRepoPathFromKey } from "../git-storage.js";
 import { prisma } from "../prisma.js";
 import { hashToken } from "../tokens.js";
+import { sessionActive } from "../session-service.js";
 import { FULL_SCOPES, hasScope, parseScopes, type PatScope } from "../scopes.js";
 import { preparePushProtection, runPostReceiveEffects, snapshotHeadShas } from "../git-push-shared.js";
 import { canRead, canWrite, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere } from "../repo-access.js";
@@ -31,6 +32,21 @@ function parseRepoNameWithGitSuffix(rawRepo: string): string | null {
   return repo.slice(0, -4);
 }
 
+/**
+ * The actor a session JWT names; undefined once that session is revoked (signed
+ * out, or a password change, #258); null when `token` isn't a JWT at all.
+ */
+async function jwtActor(app: FastifyInstance, token: string): Promise<ActorAuth | undefined | null> {
+  let payload: { sub?: string; sid?: string };
+  try {
+    payload = await app.jwt.verify<{ sub?: string; sid?: string }>(token);
+  } catch {
+    return null;
+  }
+  if (!payload.sub || (payload.sid && !(await sessionActive(payload.sid)))) return undefined;
+  return { userId: payload.sub, scopes: [...FULL_SCOPES] };
+}
+
 async function resolveActorFromAuthHeader(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -41,12 +57,7 @@ async function resolveActorFromAuthHeader(
   if (header.startsWith("Bearer ")) {
     const token = header.slice("Bearer ".length).trim();
     if (!token) return undefined;
-    try {
-      const payload = await app.jwt.verify<{ sub?: string }>(token);
-      return payload.sub ? { userId: payload.sub, scopes: [...FULL_SCOPES] } : undefined;
-    } catch {
-      return undefined;
-    }
+    return (await jwtActor(app, token)) ?? undefined;
   }
 
   if (header.startsWith("Basic ")) {
@@ -61,10 +72,8 @@ async function resolveActorFromAuthHeader(
       if (!password) return undefined;
 
       // Accept JWT token as password (for scripted/CI usage) — unscoped/full.
-      try {
-        const payload = await app.jwt.verify<{ sub?: string }>(password);
-        if (payload.sub) return { userId: payload.sub, scopes: [...FULL_SCOPES] };
-      } catch { /* not a JWT, fall through */ }
+      const viaJwt = await jwtActor(app, password);
+      if (viaJwt !== null) return viaJwt;
 
       // Accept a Personal Access Token as password (scoped, named, revocable — see /auth/tokens)
       const pat = await prisma.personalAccessToken.findUnique({ where: { tokenHash: hashToken(password) } });
@@ -75,11 +84,13 @@ async function resolveActorFromAuthHeader(
       }
 
       // Accept handle-or-email + ForgeHub password (for interactive git prompts) — full.
+      // Not for a two-factor account (#258): a password alone isn't enough, so git
+      // takes a token instead, like GitHub.
       const user = await prisma.user.findFirst({
         where: { OR: [{ handle: username.toLowerCase() }, { email: username.toLowerCase() }] },
-        select: { id: true, passwordHash: true },
+        select: { id: true, passwordHash: true, totpEnabledAt: true },
       });
-      if (user && await bcrypt.compare(password, user.passwordHash)) {
+      if (user && await bcrypt.compare(password, user.passwordHash) && !user.totpEnabledAt) {
         return { userId: user.id, scopes: [...FULL_SCOPES] };
       }
     } catch { /* ignore */ }

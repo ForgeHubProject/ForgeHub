@@ -5,11 +5,16 @@ import type { registerBodySchema } from "./validation.js";
 
 export type NewUserInput = z.infer<typeof registerBodySchema>;
 
+/** How every password is stored: registration and a password change (#258) alike. */
+export function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
+}
+
 /** Creates a user the way POST /auth/register does. Returns null when the email/handle is already taken (including by an org handle). */
 export async function createUserAccount(input: NewUserInput) {
   const email = input.email.trim().toLowerCase();
   const handle = input.handle.toLowerCase();
-  const passwordHash = await bcrypt.hash(input.password, 12);
+  const passwordHash = await hashPassword(input.password);
 
   // Users and orgs share one handle space (issue #114): reject a handle already
   // claimed by an org. The reverse (org-create vs existing user) is enforced in

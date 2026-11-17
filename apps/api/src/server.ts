@@ -50,6 +50,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { peopleRoutes } from "./routes/people.js";
 import { exploreRoutes } from "./routes/explore.js";
 import { accountRoutes } from "./routes/account.js";
+import { securityRoutes } from "./routes/security.js";
 import { userSettingsRoutes } from "./routes/user-settings.js";
 import { activityRoutes } from "./routes/activity.js";
 import { registerBlockGuard } from "./blocks.js";
@@ -220,6 +221,7 @@ export async function buildServer() {
   await app.register(peopleRoutes);
   await app.register(exploreRoutes);
   await app.register(accountRoutes);
+  await app.register(securityRoutes);
   await app.register(userSettingsRoutes);
   await app.register(activityRoutes);
   await app.register(webhookRoutes);

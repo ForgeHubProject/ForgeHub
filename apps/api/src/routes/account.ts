@@ -33,7 +33,7 @@ const AUTHORED: Array<[table: string, column: string]> = [
   ["DesignVersion", "uploadedById"],
 ];
 
-function sessionOnly(request: FastifyRequest, reply: FastifyReply): boolean {
+export function sessionOnly(request: FastifyRequest, reply: FastifyReply): boolean {
   if (request.patScopes === null) return true;
   void reply.status(403).send({ error: "Manage your account on the website; tokens can't do this" });
   return false;
