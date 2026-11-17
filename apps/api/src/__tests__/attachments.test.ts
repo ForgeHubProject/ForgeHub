@@ -147,6 +147,7 @@ describe("attachmentName", () => {
     expect(attachmentName("shot.png", "image/png")).toBe("shot.png");
     expect(attachmentName("Photo.JPG", "image/jpeg")).toBe("Photo.JPG");
     expect(attachmentName("build.log", "text/plain; charset=utf-8")).toBe("build.log");
+    expect(attachmentName("scene.gltf", "text/plain; charset=utf-8")).toBe("scene.gltf");
     expect(attachmentName("evil.html", "text/plain; charset=utf-8")).toBe("evil.html.txt");
     expect(attachmentName("cave.svg", "image/png")).toBe("cave.svg.png");
     expect(attachmentName("../../etc/passwd", "application/pdf")).toBe("file.pdf");

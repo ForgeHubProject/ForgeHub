@@ -33,7 +33,8 @@ const EXTENSIONS: Record<string, string[]> = {
   "application/pdf": ["pdf"],
   "application/zip": ["zip"],
   "model/gltf-binary": ["glb"],
-  "text/plain; charset=utf-8": ["txt", "log", "md", "csv"],
+  // .gltf is JSON text: the product's own 3D format keeps its name (#253).
+  "text/plain; charset=utf-8": ["txt", "log", "md", "csv", "gltf"],
 };
 
 /** What the bytes are, when they're something attachments take; null otherwise. */

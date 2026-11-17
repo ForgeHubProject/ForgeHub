@@ -62,6 +62,8 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
     if (!token) return;
     for (const img of ref.current?.querySelectorAll<HTMLImageElement>("img[data-fh-attachment]") ?? []) {
       const url = img.dataset.fhAttachment!;
+      // A comment can write its own data-fh-attachment: only ever set a src that is an attachment URL (#253).
+      if (!isAttachmentUrl(url)) continue;
       attachmentObjectUrl(url, token).then((src) => { img.src = src; }, () => { img.src = url; });
     }
   }, [html, token]);
