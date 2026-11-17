@@ -905,6 +905,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      if (existing.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       if (currentName === newName) {
         return repoResponse(existing);

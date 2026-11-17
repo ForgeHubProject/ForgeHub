@@ -19,6 +19,7 @@ vi.mock("../git-storage.js", async (orig) => ({
   ...(await orig<typeof import("../git-storage.js")>()),
   createBareRepo: vi.fn().mockResolvedValue("/srv/git/ada/hello-world.git"),
   removeBareRepo: vi.fn().mockResolvedValue(undefined),
+  moveBareRepo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../github-import.js", async (orig) => ({
   ...(await orig<typeof import("../github-import.js")>()),
@@ -27,7 +28,7 @@ vi.mock("../github-import.js", async (orig) => ({
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
-import { createBareRepo, removeBareRepo } from "../git-storage.js";
+import { createBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { runGithubImport } from "../github-import.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
 
@@ -246,5 +247,14 @@ describe("GitHub import routes", () => {
     expect(res.statusCode).toBe(409);
     expect(prisma.repo.delete).not.toHaveBeenCalled();
     expect(removeBareRepo).not.toHaveBeenCalled();
+  });
+
+  it("refuses the legacy rename while it imports", async () => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({
+      id: "repo-1", name: "hello-world", storageKey: "ada/hello-world.git", ownerId: ADA, orgId: null, owner: { handle: "ada" }, importStatus: "importing",
+    } as never);
+    const res = await app.inject({ method: "PATCH", url: "/repos/hello-world/rename", headers: { authorization: ada }, payload: { name: "hi" } });
+    expect(res.statusCode).toBe(409);
+    expect(moveBareRepo).not.toHaveBeenCalled();
   });
 });
