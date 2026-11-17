@@ -6,7 +6,7 @@
 #   cp .env.postgres.example .env.postgres
 #   # Edit .env.postgres — set JWT_SECRET and POSTGRES_PASSWORD
 #   docker compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
-#   podman compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
+#   podman-compose -f docker-compose.postgres.yml --env-file .env.postgres up -d
 #
 # On first boot Prisma runs `db push` to create the schema with PostgreSQL DDL.
 # Subsequent boots are idempotent (additive schema changes only).

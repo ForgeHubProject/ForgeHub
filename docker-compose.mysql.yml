@@ -6,7 +6,7 @@
 #   cp .env.mysql.example .env.mysql
 #   # Edit .env.mysql — set JWT_SECRET, MYSQL_PASSWORD, and MYSQL_ROOT_PASSWORD
 #   docker compose -f docker-compose.mysql.yml --env-file .env.mysql up -d
-#   podman compose -f docker-compose.mysql.yml --env-file .env.mysql up -d
+#   podman-compose -f docker-compose.mysql.yml --env-file .env.mysql up -d
 #
 # On first boot Prisma runs `db push` to create the schema with MySQL DDL.
 # Subsequent boots are idempotent (additive schema changes only).
