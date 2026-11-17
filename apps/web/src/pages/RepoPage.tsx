@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { refFromSplat } from "./repo/refs";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
-import { ApiError, createBranch, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
+import { ApiError, createBranch, deleteRepo, forkRepo, getRepo, getRepoSocial, listBranches, listIssues, listProjects, listPulls, retryImport, setWatchLevel, starRepo, syncFork, unstarRepo } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { NotFoundPage } from "./NotFoundPage";
-import { Badge, Button, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, TabNav, TabItem, useToast } from "../ui";
+import { Badge, Button, ConfirmDialog, DropdownItem, DropdownMenu, DropdownSeparator, Spinner, TabNav, TabItem, useToast } from "../ui";
 import { BellIcon, CheckIcon, ChevronDownIcon } from "../ui/icons";
 import type { BranchInfo, Repo, RepoSocial, SyncForkResult, User, WatchLevel } from "../types";
 
@@ -189,6 +189,10 @@ export function RepoPage({ token, user, onLogout }: Props) {
   const [forking, setForking] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncForkResult | null>(null);
+  // A failed GitHub import (#289): retry it, or delete the repository.
+  const [retrying, setRetrying] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Star/watch state (issue #88). Loaded separately from the repo so a failure
   // here never blocks the page; null keeps the buttons in a neutral state.
@@ -241,6 +245,48 @@ export function RepoPage({ token, user, onLogout }: Props) {
 
     refreshProjectCount();
   }, [token, h, r]);
+
+  // A GitHub import runs in the background (#289): check on it until it's done.
+  useEffect(() => {
+    if (repo?.importStatus !== "importing") return;
+    const timer = setInterval(() => {
+      getRepo(token, h, r)
+        .then(async (next) => {
+          if (next.importStatus === "importing") return;
+          const branchData = await listBranches(token, h, r);
+          setBranches(branchData.branches);
+          setDefaultBranch(branchData.defaultBranch);
+          setCurrentRef(branchData.defaultBranch);
+          setRepo(next);
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [repo?.importStatus, token, h, r]);
+
+  async function handleRetryImport() {
+    setRetrying(true);
+    try {
+      await retryImport(token, h, r);
+      setRepo((cur) => cur && { ...cur, importStatus: "importing", importError: null });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not retry the import", { tone: "danger" });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  async function handleDeleteRepo() {
+    setDeleting(true);
+    try {
+      await deleteRepo(token, h, r);
+      toast(`Deleted ${h}/${r}`, { tone: "success" });
+      navigate("/");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not delete this repository", { tone: "danger" });
+      setDeleting(false);
+    }
+  }
 
   function refreshProjectCount() {
     listProjects(token, h, r, "open")
@@ -590,6 +636,43 @@ export function RepoPage({ token, user, onLogout }: Props) {
           </div>
         </div>
       )}
+      {repo.importStatus === "importing" && (
+        <div className={`w-full ${column} mx-auto pt-4`}>
+          <div role="status" className="flex items-center gap-2 rounded-md border border-fh-accent-emphasis/40 bg-fh-accent-muted px-4 py-3 text-fh-sm text-fh-fg">
+            <Spinner size={14} />
+            Importing from github.com/{repo.importSource}… This page updates when it's done.
+          </div>
+        </div>
+      )}
+      {repo.importStatus === "failed" && (
+        <div className={`w-full ${column} mx-auto pt-4`}>
+          <div role="alert" className="rounded-md border border-fh-danger-emphasis/40 bg-fh-danger-muted px-4 py-3">
+            <p className="text-fh-sm font-semibold text-fh-fg">The import from github.com/{repo.importSource} failed</p>
+            <p className="text-fh-sm text-fh-fg-muted mt-0.5">{repo.importError}</p>
+            {canAdmin && (
+              <div className="mt-2 flex items-center gap-2">
+                <Button variant="primary" size="sm" loading={retrying} onClick={() => void handleRetryImport()}>
+                  Retry import
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
+                  Delete repository
+                </Button>
+              </div>
+            )}
+          </div>
+          <ConfirmDialog
+            open={confirmDelete}
+            title="Delete this repository?"
+            message={<>This permanently deletes <span className="font-mono font-semibold">{h}/{repo.name}</span>. It cannot be undone.</>}
+            confirmLabel="Delete repository"
+            loading={deleting}
+            onConfirm={() => void handleDeleteRepo()}
+            onCancel={() => setConfirmDelete(false)}
+          />
+        </div>
+      )}
+      {/* Nothing to show while an import runs (#289); the tabs load once it's done. */}
+      {repo.importStatus === "importing" ? <div className="flex-1" /> : (
       <RepoPermissionProvider value={repo.viewerPermission ?? null}>
       <RepoArchivedProvider value={!!repo.archived}>
       <div className={`flex-1 w-full ${column} mx-auto py-6`}>
@@ -692,6 +775,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
       </div>
       </RepoArchivedProvider>
       </RepoPermissionProvider>
+      )}
 
       <Footer />
     </div>
