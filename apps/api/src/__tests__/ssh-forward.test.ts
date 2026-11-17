@@ -3,6 +3,12 @@ import ssh2 from "ssh2";
 import type { AuthContext, ParsedKey } from "ssh2";
 import type { FastifyInstance } from "fastify";
 
+// This machine also owns a public address, as under rootless podman's pasta network (#290).
+vi.mock("node:os", async (importOriginal) => {
+  const os = await importOriginal<typeof import("node:os")>();
+  const own = { address: "203.0.113.10", netmask: "255.255.255.0", family: "IPv4", mac: "02:00:00:00:00:01", internal: false, cidr: "203.0.113.10/24" } as const;
+  return { ...os, networkInterfaces: () => ({ ...os.networkInterfaces(), pasta0: [own] }) };
+});
 vi.mock("../ssh/store.js", () => ({
   resolveActorByFingerprint: vi.fn(),
   touchSshKey: vi.fn(),
@@ -172,6 +178,12 @@ describe("forwarded auth only from private addresses", () => {
     expect(r.result).toBe("reject");
     expect(r.bound).toBeNull();
     expect(resolveActorByFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("accepts the forward key from this machine's own public address (rootless podman's pasta)", async () => {
+    const r = await attempt({ ip: "203.0.113.10", username: KEYS_USER, signWith: forwardPriv });
+    expect(r.result).toBe("accept");
+    expect(r.bound).toEqual({ kind: "keylookup" });
   });
 
   it("throttles repeated public-address attempts", async () => {
