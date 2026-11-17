@@ -290,8 +290,42 @@ async function req<T>(
   return res.json() as Promise<T>;
 }
 
-export async function login(email: string, password: string): Promise<{ token: string; user: User }> {
+/** A session, or for a two-factor account (#258) a challenge for {@link loginTwoFactor}. */
+export type LoginResult = { token: string; user: User } | { twoFactorRequired: true; challenge: string };
+
+export async function login(email: string, password: string): Promise<LoginResult> {
   return req("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+/** The second sign-in step (#258): a code from the authenticator app, or a recovery code. */
+export async function loginTwoFactor(challenge: string, code: string): Promise<{ token: string; user: User }> {
+  return req("/auth/login/2fa", { method: "POST", body: JSON.stringify({ challenge, code }) });
+}
+
+/** Change your password (#258); every other session is signed out. */
+export async function changePassword(token: string, currentPassword: string, newPassword: string): Promise<void> {
+  return req("/users/me/password", { method: "POST", token, body: JSON.stringify({ currentPassword, newPassword }) });
+}
+
+export async function getTwoFactor(token: string): Promise<{ enabled: boolean; recoveryCodesLeft: number }> {
+  return req("/users/me/two-factor", { token });
+}
+
+/** A new authenticator secret (#258), used once /enable confirms a code from it. */
+export async function setupTwoFactor(token: string): Promise<{ secret: string; uri: string }> {
+  return req("/users/me/two-factor/setup", { method: "POST", token });
+}
+
+export async function enableTwoFactor(token: string, password: string, code: string): Promise<{ recoveryCodes: string[] }> {
+  return req("/users/me/two-factor/enable", { method: "POST", token, body: JSON.stringify({ password, code }) });
+}
+
+export async function regenerateRecoveryCodes(token: string, password: string): Promise<{ recoveryCodes: string[] }> {
+  return req("/users/me/two-factor/recovery-codes", { method: "POST", token, body: JSON.stringify({ password }) });
+}
+
+export async function disableTwoFactor(token: string, password: string): Promise<void> {
+  return req("/users/me/two-factor", { method: "DELETE", token, body: JSON.stringify({ password }) });
 }
 
 export async function getPublicProfile(token: string | null, handle: string): Promise<PublicProfile> {
