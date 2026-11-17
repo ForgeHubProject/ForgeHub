@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream, existsSync, type ReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -183,6 +183,34 @@ export async function readSocialPreview(repoId: string): Promise<Buffer> {
 /** Delete a repository's social preview (idempotent). */
 export async function removeSocialPreview(repoId: string): Promise<void> {
   await rm(socialPreviewPath(repoId), { force: true });
+}
+
+// ─── Comment attachments (#253) ───────────────────────────────────────────────
+//
+// Beside the avatars: `<root>-attachments/<repo id>/<attachment id>`. Keyed by
+// id, so renaming or transferring the repository keeps them; deleting it removes the folder.
+
+const SAFE_ID = /^[\w-]+$/;
+
+function attachmentPath(repoId: string, id = ""): string {
+  if (!SAFE_ID.test(repoId) || (id && !SAFE_ID.test(id))) throw new Error("Invalid attachment path");
+  return path.join(`${path.resolve(storageRoot())}-attachments`, repoId, id);
+}
+
+export async function writeAttachment(repoId: string, id: string, buf: Buffer): Promise<void> {
+  const full = attachmentPath(repoId, id);
+  await mkdir(path.dirname(full), { recursive: true });
+  await writeFile(full, buf);
+}
+
+/** A stored attachment's bytes (rejects when the file is gone). */
+export async function openAttachment(repoId: string, id: string): Promise<ReadStream> {
+  return (await open(attachmentPath(repoId, id))).createReadStream();
+}
+
+/** Delete every attachment of a repository (idempotent). */
+export async function removeAttachments(repoId: string): Promise<void> {
+  await rm(attachmentPath(repoId), { recursive: true, force: true });
 }
 
 // ─── CI (Actions) storage (issue #86) ────────────────────────────────────────

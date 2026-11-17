@@ -4,7 +4,7 @@ import { prisma } from "./prisma.js";
 const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /** What a blocked user can't do in their blocker's personal repositories (#258). */
-const GUARDED = /^\/repos\/:handle\/:name\/(issues|pulls|reactions)(\/|$)/;
+const GUARDED = /^\/repos\/:handle\/:name\/(issues|pulls|reactions|attachments)(\/|$)/;
 
 /** Whether `blockerId` has blocked `blockedId`. */
 export async function isBlocked(blockerId: string, blockedId: string): Promise<boolean> {

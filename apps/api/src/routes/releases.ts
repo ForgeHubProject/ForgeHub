@@ -76,9 +76,9 @@ export function sanitizeAssetName(raw: string | undefined | null): string | null
 }
 
 // A Content-Disposition value that is safe for arbitrary UTF-8 file names.
-function contentDisposition(name: string): string {
+export function contentDisposition(name: string, type: "attachment" | "inline" = "attachment"): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 export async function releaseRoutes(app: FastifyInstance) {

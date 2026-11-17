@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
 import { escapeHtml, highlightCode } from "../lib/highlight";
 import { linkifyHtml, type RepoRef } from "../lib/autolink";
 import { createHeadingIds } from "../lib/headings";
+import { attachmentObjectUrl, downloadAttachment, holdAttachmentImages, isAttachmentUrl, storedToken } from "../lib/attachments";
 
 const renderer = new Renderer();
 
@@ -40,6 +41,8 @@ type Props = {
 
 export function MarkdownRenderer({ content, className = "", repo }: Props) {
   const navigate = useNavigate();
+  const ref = useRef<HTMLDivElement>(null);
+  const token = storedToken();
 
   const html = useMemo(() => {
     headingId = createHeadingIds();
@@ -50,12 +53,29 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
     });
     // Bake reference autolinks into the markup (skips code and existing links) so
     // they survive re-renders instead of being reapplied imperatively.
-    return repo ? linkifyHtml(clean, repo) : clean;
-  }, [content, repo?.owner, repo?.name]);
+    const linked = repo ? linkifyHtml(clean, repo) : clean;
+    // Signed in, attachments (#253) load with the token below: a private repository's are a 404 without it.
+    return token ? holdAttachmentImages(linked) : linked;
+  }, [content, repo?.owner, repo?.name, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    for (const img of ref.current?.querySelectorAll<HTMLImageElement>("img[data-fh-attachment]") ?? []) {
+      const url = img.dataset.fhAttachment!;
+      attachmentObjectUrl(url, token).then((src) => { img.src = src; }, () => { img.src = url; });
+    }
+  }, [html, token]);
 
   // Keep autolink clicks inside the SPA rather than triggering a full navigation.
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const link = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
+    if (token && link && isAttachmentUrl(link.href)) {
+      e.preventDefault();
+      const url = link.href;
+      downloadAttachment(url, token).catch(() => window.open(url, "_blank", "noopener"));
+      return;
+    }
     const anchor = (e.target as HTMLElement).closest("a[data-fh-autolink]") as HTMLAnchorElement | null;
     if (!anchor) return;
     const href = anchor.getAttribute("href");
@@ -66,6 +86,7 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
 
   return (
     <div
+      ref={ref}
       onClick={onClick}
       className={`gh-prose ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
