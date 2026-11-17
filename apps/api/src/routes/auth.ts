@@ -202,15 +202,15 @@ export async function authRoutes(app: FastifyInstance) {
   // from the authenticator app, or a recovery code, turns the challenge into a session.
   app.post("/auth/login/2fa", async (request, reply) => {
     const { challenge, code } = (request.body ?? {}) as { challenge?: unknown; code?: unknown };
-    if (typeof challenge !== "string" || typeof code !== "string" || code.length > 64) {
+    if (typeof challenge !== "string" || typeof code !== "string" || challenge.length > 64 || code.length > 64) {
       return reply.status(400).send({ error: "Invalid body" });
     }
+    const expired = () => reply.status(401).send({ error: "This sign-in expired. Enter your password again." });
     const row = await prisma.loginChallenge.findUnique({ where: { tokenHash: hashToken(challenge) } });
-    if (!row || row.expiresAt.getTime() < Date.now()) {
-      return reply.status(401).send({ error: "This sign-in expired. Enter your password again." });
-    }
-    // Counted before checking, so racing guesses can't slip past the lock.
-    await prisma.loginChallenge.update({ where: { id: row.id }, data: { attempts: { increment: 1 } } });
+    if (!row || row.expiresAt.getTime() < Date.now()) return expired();
+    // Counted before checking so racing guesses can't slip past the lock; no row: a parallel request spent it (#258).
+    const counted = await prisma.loginChallenge.updateMany({ where: { id: row.id }, data: { attempts: { increment: 1 } } });
+    if (counted.count === 0) return expired();
     const recent = await prisma.loginChallenge.aggregate({
       where: { userId: row.userId, createdAt: { gte: new Date(Date.now() - LOCK_WINDOW_MS) } },
       _sum: { attempts: true },

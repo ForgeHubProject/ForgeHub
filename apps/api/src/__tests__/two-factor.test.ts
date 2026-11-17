@@ -32,10 +32,12 @@ vi.mock("../prisma.js", () => {
         }),
         findFirst: vi.fn(async ({ where }: { where: { OR: Row[] } }) => where.OR.map(userWhere).find(Boolean) ?? null),
         update: vi.fn(async ({ where, data }: { where: Row; data: Row }) => Object.assign(userWhere(where)!, data)),
-        updateMany: vi.fn(async ({ where, data }: { where: { id: string; OR: Array<{ totpLastStep: null | { lt: number } }> }; data: Row }) => {
+        updateMany: vi.fn(async ({ where, data }: { where: Row & { id: string; OR?: Array<{ totpLastStep: null | { lt: number } }> }; data: Row }) => {
           const u = userWhere({ id: where.id });
           const last = u?.totpLastStep as number | null;
-          const ok = u && where.OR.some((c) => (c.totpLastStep === null ? last === null : last !== null && last < c.totpLastStep.lt));
+          const ok = u && (where.OR
+            ? where.OR.some((c) => (c.totpLastStep === null ? last === null : last !== null && last < c.totpLastStep.lt))
+            : Object.entries(where).every(([k, v]) => u[k] === v));
           if (ok) Object.assign(u!, data);
           return { count: ok ? 1 : 0 };
         }),
@@ -61,10 +63,10 @@ vi.mock("../prisma.js", () => {
           return row;
         }),
         findUnique: vi.fn(async ({ where }: { where: Row }) => db.challenges.find((c) => c.tokenHash === where.tokenHash) ?? null),
-        update: vi.fn(async ({ where }: { where: Row }) => {
-          const c = byId(db.challenges, where.id)!;
-          c.attempts = (c.attempts as number) + 1;
-          return c;
+        updateMany: vi.fn(async ({ where }: { where: Row }) => {
+          const c = byId(db.challenges, where.id);
+          if (c) c.attempts = (c.attempts as number) + 1;
+          return { count: c ? 1 : 0 };
         }),
         aggregate: vi.fn(async ({ where }: { where: { userId: string; createdAt: { gte: Date } } }) => ({
           _sum: {
@@ -110,6 +112,7 @@ vi.mock("../prisma.js", () => {
 import type { FastifyInstance } from "fastify";
 import { createTestServer } from "./helpers/server.js";
 import { hashToken } from "../tokens.js";
+import { prisma } from "../prisma.js";
 import {
   base32, decryptSecret, encryptSecret, hashRecoveryCode, matchTotp, newRecoveryCodes, newTotpSecret, otpauthUri, totpCode, totpStep,
 } from "../two-factor.js";
@@ -268,6 +271,16 @@ describe("signing in with two-factor on", () => {
     expect((await second(challenge, nowCode())).statusCode).toBe(401);
     expect((await second("made-up", nowCode())).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url: "/auth/login/2fa", payload: { challenge } })).statusCode).toBe(400);
+    expect((await second("x".repeat(65), nowCode())).statusCode).toBe(400);
+  });
+
+  it("a challenge a parallel request just spent is expired, not a server error", async () => {
+    const { challenge } = (await login()).json();
+    vi.mocked(prisma.loginChallenge.findUnique).mockResolvedValueOnce({ ...db.challenges[0] } as never);
+    db.challenges = [];
+    const res = await second(challenge, nowCode());
+    expect(res.statusCode).toBe(401);
+    expect(db.sessions).toHaveLength(0);
   });
 
   it("without two-factor, the password still signs straight in", async () => {
@@ -304,6 +317,22 @@ describe("turning two-factor on and off", () => {
     const status = await app.inject({ method: "GET", url: "/users/me/two-factor", headers: { authorization: auth } });
     expect(status.json()).toEqual({ enabled: true, recoveryCodesLeft: 10 });
     expect((await app.inject({ method: "POST", url: "/users/me/two-factor/setup", headers: { authorization: auth } })).statusCode).toBe(409);
+  });
+
+  it("enabling refuses when the secret changed after the code was checked", async () => {
+    const auth = `Bearer ${(await login()).json().token}`;
+    await app.inject({ method: "POST", url: "/users/me/two-factor/setup", headers: { authorization: auth } });
+    const checked = decryptSecret(db.users[0].totpSecret as string)!;
+    // A second setup lands between the password check and the write.
+    vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValueOnce({ ...db.users[0] } as never);
+    db.users[0].totpSecret = encryptSecret(newTotpSecret());
+    const res = await app.inject({
+      method: "POST", url: "/users/me/two-factor/enable", headers: { authorization: auth },
+      payload: { password: PASSWORD, code: totpCode(checked, totpStep()) },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(db.users[0].totpEnabledAt).toBeNull();
+    expect(db.codes).toHaveLength(0);
   });
 
   it("regenerating replaces the recovery codes; turning off needs the password", async () => {

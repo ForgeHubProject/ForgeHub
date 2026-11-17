@@ -91,11 +91,14 @@ export async function securityRoutes(app: FastifyInstance) {
     if (!secret) return reply.status(400).send({ error: "Start the setup again" });
     const step = typeof code === "string" ? matchTotp(secret, code.replace(/\s+/g, ""), null) : null;
     if (step === null) return reply.status(400).send({ error: "That code didn't match. Check the time on your device and try a new code." });
+    // Only the secret the code was checked against, so a racing setup can't swap in one the app lacks (#258).
+    const won = await prisma.user.updateMany({
+      where: { id: me.id, totpEnabledAt: null, totpSecret: me.totpSecret },
+      data: { totpEnabledAt: new Date(), totpLastStep: step },
+    });
+    if (won.count === 0) return reply.status(409).send({ error: "Start the setup again" });
     const recoveryCodes = newRecoveryCodes();
-    await prisma.$transaction([
-      prisma.user.update({ where: { id: me.id }, data: { totpEnabledAt: new Date(), totpLastStep: step } }),
-      ...recoveryCodeWrites(me.id, recoveryCodes),
-    ]);
+    await prisma.$transaction(recoveryCodeWrites(me.id, recoveryCodes));
     return { recoveryCodes };
   });
 
