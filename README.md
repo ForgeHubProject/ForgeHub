@@ -436,8 +436,8 @@ cp .env.example .env   # set JWT_SECRET: openssl rand -base64 32
 # Docker
 docker compose up -d --build
 
-# Podman (podman-compose, or podman v4.4+'s built-in `podman compose`)
-podman compose up -d --build
+# Podman
+podman-compose up -d --build
 ```
 
 Web (SPA + proxied API + git-http) is published on `${WEB_PORT:-8080}`. The api container isn't published directly — everything goes through the web container's nginx, same as a real deployment behind one TLS-terminating reverse proxy.
