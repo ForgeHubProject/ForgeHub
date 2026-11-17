@@ -28,6 +28,7 @@ export function MarkdownEditor({
   ariaLabel,
   id,
   className,
+  suggest,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -50,6 +51,8 @@ export function MarkdownEditor({
   /** The textarea's id, for a `<label htmlFor>`. */
   id?: string;
   className?: string;
+  /** Review comments on a line: the toolbar's "Suggest a change" toggle (#253). */
+  suggest?: { active: boolean; onToggle: () => void };
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useDraft(draftKey, value, onValueChange);
@@ -187,6 +190,12 @@ export function MarkdownEditor({
             <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
             <ToolButton label="Mention someone" onClick={() => insertTrigger("@")}><span className="font-semibold">@</span></ToolButton>
             <ToolButton label="Reference an issue or pull request" onClick={() => insertTrigger("#")}><span className="font-semibold">#</span></ToolButton>
+            {suggest && (
+              <>
+                <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
+                <ToolButton label="Suggest a change" pressed={suggest.active} onClick={suggest.onToggle}><SuggestGlyph /></ToolButton>
+              </>
+            )}
           </div>
         )}
         {/* Outside the toolbar: its sideways scroll would clip the menu's panel. */}
@@ -323,16 +332,20 @@ function useDraft(key: string | undefined, value: string, onValueChange: (v: str
   }, [key, value]);
 }
 
-function ToolButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function ToolButton({ label, onClick, pressed, children }: { label: string; onClick: () => void; pressed?: boolean; children: React.ReactNode }) {
   return (
     <button
       type="button"
       title={label}
       aria-label={label}
+      aria-pressed={pressed}
       // Keep the textarea's selection: a mousedown would blur it first.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className="inline-flex items-center justify-center w-7 h-7 rounded text-fh-sm text-fh-fg-muted hover:text-fh-accent-fg hover:bg-fh-surface-muted"
+      className={cx(
+        "inline-flex items-center justify-center w-7 h-7 rounded text-fh-sm hover:text-fh-accent-fg hover:bg-fh-surface-muted",
+        pressed ? "text-fh-accent-fg bg-fh-surface-muted" : "text-fh-fg-muted",
+      )}
     >
       {children}
     </button>
@@ -450,6 +463,9 @@ function ListGlyph() {
 }
 function NumberedGlyph() {
   return <svg className={glyph} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M5 3.25a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 5 3.25Zm0 5a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 5 8.25Zm0 5a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75ZM.924 10.32a.5.5 0 0 1-.851-.525l.001-.001.001-.002.002-.004.007-.011c.097-.144.215-.273.348-.384.228-.19.588-.392 1.068-.392.468 0 .858.181 1.126.484.259.294.377.673.377 1.038 0 .987-.686 1.495-1.156 1.845l-.047.035c-.303.225-.522.4-.654.597h1.357a.5.5 0 0 1 0 1H.5a.5.5 0 0 1-.5-.5c0-1.005.692-1.52 1.167-1.875l.035-.025c.531-.396.8-.625.8-1.078a.57.57 0 0 0-.128-.376C1.806 10.068 1.695 10 1.5 10a.658.658 0 0 0-.429.163.835.835 0 0 0-.144.153ZM2.003 2.5V6h.503a.5.5 0 0 1 0 1H.5a.5.5 0 0 1 0-1h.503V3.308l-.28.14a.5.5 0 0 1-.446-.895l1.003-.5a.5.5 0 0 1 .723.447Z" /></svg>;
+}
+function SuggestGlyph() {
+  return <svg className={glyph} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M8.75 1.75V5H12a.75.75 0 0 1 0 1.5H8.75v3.25a.75.75 0 0 1-1.5 0V6.5H4A.75.75 0 0 1 4 5h3.25V1.75a.75.75 0 0 1 1.5 0ZM4 13h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 13Z" /></svg>;
 }
 function TaskGlyph() {
   return <svg className={glyph} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M2.5 1.75v11.5c0 .138.112.25.25.25h3.17a.75.75 0 0 1 0 1.5H2.75A1.75 1.75 0 0 1 1 13.25V1.75C1 .784 1.784 0 2.75 0h8.5C12.216 0 13 .784 13 1.75v7.736a.75.75 0 0 1-1.5 0V1.75a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25Zm13.274 9.537v-.001l-4.557 4.45a.75.75 0 0 1-1.055-.008l-1.943-1.95a.75.75 0 0 1 1.062-1.058l1.419 1.425 4.026-3.932a.75.75 0 1 1 1.048 1.074Z" /></svg>;
