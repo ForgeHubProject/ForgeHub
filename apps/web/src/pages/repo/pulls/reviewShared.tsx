@@ -129,18 +129,6 @@ export function InlineComposer({
       <div className="flex items-center gap-2 px-3 py-2 border-b border-fh-border bg-fh-canvas text-fh-sm">
         <Avatar name={currentUser} size={20} />
         <span className="font-semibold text-fh-fg">{currentUser}</span>
-        {suggestionSeed != null && (
-          <button
-            type="button"
-            className={cx(
-              "ml-auto text-fh-xs bg-transparent border-none cursor-pointer",
-              suggesting ? "text-fh-danger-fg hover:underline" : "text-fh-accent-fg hover:underline",
-            )}
-            onClick={toggleSuggesting}
-          >
-            {suggesting ? "Remove suggestion" : "Suggest a change"}
-          </button>
-        )}
       </div>
       <div className="p-2.5 space-y-2">
         {suggesting && (
@@ -162,6 +150,7 @@ export function InlineComposer({
           placeholder={placeholder}
           value={body}
           onValueChange={setBody}
+          suggest={suggestionSeed != null ? { active: suggesting, onToggle: toggleSuggesting } : undefined}
           onSubmit={trimmed ? () => onSubmit(trimmed, hasPendingReview ? "review" : "single", payload) : undefined}
           token={ctx?.token}
           repo={ctx ? { owner: ctx.handle, name: ctx.repoName } : undefined}
