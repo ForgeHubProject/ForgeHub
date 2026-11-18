@@ -22,9 +22,23 @@ export function storedToken(): string | null {
   }
 }
 
-/** Attachment images keep their URL aside (no request goes out without the token) until the renderer loads them. */
-export function holdAttachmentImages(html: string, base = attachmentBase()): string {
-  return html.replace(/<img src="([^"]*)"/g, (tag, src: string) => (isAttachmentUrl(src, base) ? `<img data-fh-attachment="${src}"` : tag));
+const IMG_SRC = /<img src="([^"]*)"/g;
+
+/**
+ * Attachment images keep their URL aside (no request goes out without the token)
+ * until the renderer has loaded them; `loaded` maps each URL to what to show in its place.
+ */
+export function holdAttachmentImages(html: string, base = attachmentBase(), loaded: Readonly<Record<string, string>> = {}): string {
+  return html.replace(IMG_SRC, (tag, src: string) => {
+    if (!isAttachmentUrl(src, base)) return tag;
+    const shown = loaded[src];
+    return shown ? `<img src="${shown}" data-fh-attachment="${src}"` : `<img data-fh-attachment="${src}"`;
+  });
+}
+
+/** The attachment images in rendered Markdown (before holding): the URLs the renderer loads with the token. */
+export function attachmentImageUrls(html: string, base = attachmentBase()): string[] {
+  return [...new Set([...html.matchAll(IMG_SRC)].map((m) => m[1]!).filter((src) => isAttachmentUrl(src, base)))];
 }
 
 async function fetchAttachment(url: string, token: string): Promise<Response> {

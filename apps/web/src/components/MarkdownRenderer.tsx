@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { marked, Renderer } from "marked";
 import { escapeHtml, highlightCode } from "../lib/highlight";
 import { linkifyHtml, type RepoRef } from "../lib/autolink";
 import { createHeadingIds } from "../lib/headings";
-import { attachmentObjectUrl, downloadAttachment, holdAttachmentImages, isAttachmentUrl, storedToken } from "../lib/attachments";
+import { attachmentImageUrls, attachmentObjectUrl, downloadAttachment, holdAttachmentImages, isAttachmentUrl, storedToken } from "../lib/attachments";
 
 const renderer = new Renderer();
 
@@ -41,10 +41,9 @@ type Props = {
 
 export function MarkdownRenderer({ content, className = "", repo }: Props) {
   const navigate = useNavigate();
-  const ref = useRef<HTMLDivElement>(null);
   const token = storedToken();
 
-  const html = useMemo(() => {
+  const linked = useMemo(() => {
     headingId = createHeadingIds();
     const raw = marked.parse(content) as string;
     const clean = DOMPurify.sanitize(raw, {
@@ -53,20 +52,30 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
     });
     // Bake reference autolinks into the markup (skips code and existing links) so
     // they survive re-renders instead of being reapplied imperatively.
-    const linked = repo ? linkifyHtml(clean, repo) : clean;
-    // Signed in, attachments (#253) load with the token below: a private repository's are a 404 without it.
-    return token ? holdAttachmentImages(linked) : linked;
-  }, [content, repo?.owner, repo?.name, token]);
+    return repo ? linkifyHtml(clean, repo) : clean;
+  }, [content, repo?.owner, repo?.name]);
+
+  // Signed in, attachment images (#253) load with the token: a private repository's are a 404
+  // without it. What each loads to is kept in state and written into the markup, so a re-render
+  // that resets the HTML keeps the image (setting `img.src` on the element lost it when React
+  // replaced the element right after a comment was posted).
+  const [loaded, setLoaded] = useState<Record<string, string>>({});
+  const html = useMemo(() => (token ? holdAttachmentImages(linked, undefined, loaded) : linked), [linked, token, loaded]);
 
   useEffect(() => {
     if (!token) return;
-    for (const img of ref.current?.querySelectorAll<HTMLImageElement>("img[data-fh-attachment]") ?? []) {
-      const url = img.dataset.fhAttachment!;
-      // A comment can write its own data-fh-attachment: only ever set a src that is an attachment URL (#253).
-      if (!isAttachmentUrl(url)) continue;
-      attachmentObjectUrl(url, token).then((src) => { img.src = src; }, () => { img.src = url; });
+    let live = true;
+    const show = (url: string, src: string) => {
+      if (live) setLoaded((m) => (m[url] === src ? m : { ...m, [url]: src }));
+    };
+    // Only URLs found in the Markdown's own images: never one a comment put in data-fh-attachment.
+    for (const url of attachmentImageUrls(linked)) {
+      attachmentObjectUrl(url, token).then((src) => show(url, src), () => show(url, url));
     }
-  }, [html, token]);
+    return () => {
+      live = false;
+    };
+  }, [linked, token]);
 
   // Keep autolink clicks inside the SPA rather than triggering a full navigation.
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -88,7 +97,6 @@ export function MarkdownRenderer({ content, className = "", repo }: Props) {
 
   return (
     <div
-      ref={ref}
       onClick={onClick}
       className={`gh-prose ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
