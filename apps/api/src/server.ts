@@ -72,6 +72,7 @@ import { hasScope, type PatScope } from "./scopes.js";
 import { sessionActive } from "./session-service.js";
 import { backfillImplicitWatches } from "./watch-service.js";
 import { ciStartupRecovery } from "./ci/boot.js";
+import { failInterruptedImports } from "./github-import.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -264,6 +265,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // the backfill above: production boot only, never a test server.
       await ciStartupRecovery().catch((err) => {
         app.log.warn({ err }, "CI startup recovery failed");
+      });
+      // A restart ends any running GitHub import (#289): mark it failed so it can be retried.
+      await failInterruptedImports().catch((err) => {
+        app.log.warn({ err }, "GitHub import recovery failed");
       });
       return app.listen({ port, host: "0.0.0.0" }).then(() => {
         app.log.info(`Listening on http://localhost:${port}`);

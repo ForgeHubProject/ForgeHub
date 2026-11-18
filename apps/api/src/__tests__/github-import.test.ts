@@ -1,0 +1,243 @@
+/**
+ * Import a repository from GitHub (#289): the URL parser at the trust boundary,
+ * the metadata checks, and the background job with git and GitHub mocked.
+ */
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+
+vi.mock("node:child_process", async (orig) => ({
+  ...(await orig<typeof import("node:child_process")>()),
+  execFile: vi.fn(),
+}));
+vi.mock("../prisma.js", () => ({
+  prisma: { repo: { update: vi.fn(), updateMany: vi.fn() } },
+}));
+vi.mock("../git-storage.js", () => ({
+  bareRepoPathFromKey: (key: string) => `/srv/git/${key}`,
+}));
+vi.mock("../git-utils.js", () => ({
+  branchExists: vi.fn(),
+  setDefaultBranch: vi.fn(),
+}));
+vi.mock("../git-push-shared.js", () => ({
+  runPostReceiveEffects: vi.fn(),
+}));
+
+import { execFile } from "node:child_process";
+import type { FastifyInstance } from "fastify";
+import { prisma } from "../prisma.js";
+import { branchExists, setDefaultBranch } from "../git-utils.js";
+import { runPostReceiveEffects } from "../git-push-shared.js";
+import {
+  failInterruptedImports, fetchGithubRepo, ImportError, MAX_IMPORT_KB, parseGithubRepo, runGithubImport, type GithubRepo,
+} from "../github-import.js";
+
+describe("parseGithubRepo", () => {
+  it.each([
+    ["https://github.com/octocat/Hello-World", "octocat", "Hello-World"],
+    ["https://github.com/octocat/Hello-World.git", "octocat", "Hello-World"],
+    ["https://github.com/octocat/Hello-World/", "octocat", "Hello-World"],
+    ["https://github.com/octocat/Hello-World.git/", "octocat", "Hello-World"],
+    ["  octocat/hello.world_2  ", "octocat", "hello.world_2"],
+    ["a-b/.github", "a-b", ".github"],
+  ])("accepts %j", (input, owner, name) => {
+    expect(parseGithubRepo(input)).toEqual({ owner, name });
+  });
+
+  it.each([
+    "",
+    "octocat",
+    "http://github.com/octocat/Hello-World", // https only
+    "HTTPS://GITHUB.COM/octocat/Hello-World",
+    "github.com/octocat/Hello-World",
+    "https://www.github.com/octocat/Hello-World",
+    "https://github.com.evil.example/octocat/Hello-World",
+    "https://evil.example/octocat/Hello-World",
+    "https://github.com@evil.example/octocat/Hello-World",
+    "https://user:pass@github.com/octocat/Hello-World",
+    "https://github.com:443/octocat/Hello-World",
+    "https://github.com/octocat/Hello-World/tree/main",
+    "https://github.com/octocat/Hello-World?tab=readme",
+    "https://github.com/octocat/Hello-World#readme",
+    "https://github.com/octocat",
+    "ssh://git@github.com/octocat/Hello-World.git",
+    "git@github.com:octocat/Hello-World.git",
+    "file:///etc/passwd",
+    "ext::sh -c touch% /tmp/pwned",
+    "ext::sh/x",
+    "--upload-pack=touch /tmp/pwned/x",
+    "-o/x",
+    "octocat/..",
+    "octocat/.",
+    "../etc/passwd",
+    "octocat/Hello%2e%2e",
+    "octocat/Hello World",
+    "octocat/Hello\nWorld",
+    "octo_cat/Hello-World", // not a GitHub login
+    "octocat-/Hello-World",
+    `${"a".repeat(40)}/x`,
+    `octocat/${"a".repeat(101)}`,
+    "octocat/Hellо-World", // Cyrillic о
+  ])("rejects %j", (input) => {
+    expect(parseGithubRepo(input)).toBeNull();
+  });
+});
+
+describe("fetchGithubRepo", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answer = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status, headers }));
+  const publicRepo = {
+    full_name: "octocat/Hello-World", private: false, size: 108, description: "  My first repository  ",
+    topics: ["demo", "Not A Topic", "3d"], default_branch: "master",
+  };
+  const refusal = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as ImportError);
+
+  it("asks GitHub's API without a token and keeps what an import needs", async () => {
+    answer(200, publicRepo);
+    expect(await fetchGithubRepo("octocat", "hello-world")).toEqual({
+      owner: "octocat", name: "Hello-World", description: "My first repository", topics: ["demo", "3d"], defaultBranch: "master",
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.github.com/repos/octocat/hello-world");
+    expect(JSON.stringify(init.headers)).not.toMatch(/authorization/i);
+  });
+
+  it("refuses a repository GitHub doesn't show (missing, or private)", async () => {
+    answer(404, { message: "Not Found" });
+    const e = await refusal(fetchGithubRepo("octocat", "secret"));
+    expect(e).toBeInstanceOf(ImportError);
+    expect(e!.status).toBe(404);
+    expect(e!.message).toMatch(/only public repositories/i);
+  });
+
+  it("refuses a repository marked private", async () => {
+    answer(200, { ...publicRepo, private: true });
+    expect((await refusal(fetchGithubRepo("octocat", "Hello-World")))!.status).toBe(404);
+  });
+
+  it("refuses a repository over the size cap before any download", async () => {
+    answer(200, { ...publicRepo, size: MAX_IMPORT_KB + 1 });
+    const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
+    expect(e!.status).toBe(413);
+    expect(e!.message).toMatch(/1 GB/);
+  });
+
+  it("accepts a repository exactly at the cap", async () => {
+    answer(200, { ...publicRepo, size: MAX_IMPORT_KB });
+    await expect(fetchGithubRepo("octocat", "Hello-World")).resolves.toMatchObject({ name: "Hello-World" });
+  });
+
+  it("refuses an answer with no size, or a name that isn't a GitHub repository", async () => {
+    answer(200, { ...publicRepo, size: undefined });
+    expect((await refusal(fetchGithubRepo("octocat", "Hello-World")))!.status).toBe(502);
+    answer(200, { ...publicRepo, full_name: "ext::sh/x" });
+    expect((await refusal(fetchGithubRepo("octocat", "Hello-World")))!.status).toBe(502);
+  });
+
+  it("says when the server's hourly GitHub requests are used up", async () => {
+    answer(403, { message: "API rate limit exceeded" }, { "x-ratelimit-remaining": "0" });
+    const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
+    expect(e!.status).toBe(503);
+    expect(e!.message).toMatch(/60 GitHub requests/);
+  });
+
+  it("reports GitHub being unreachable", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    expect((await refusal(fetchGithubRepo("octocat", "Hello-World")))!.status).toBe(502);
+  });
+});
+
+describe("runGithubImport", () => {
+  const app = { log: { error: vi.fn() } } as unknown as FastifyInstance;
+  const repo = { id: "repo-1", storageKey: "ada/hello.git" };
+  const source: GithubRepo = { owner: "octocat", name: "Hello-World", description: null, topics: [], defaultBranch: "master" };
+
+  /** Answer the next git call the way promisify(execFile) expects. */
+  function git(err: (Error & { killed?: boolean }) | null) {
+    vi.mocked(execFile).mockImplementationOnce(((...args: unknown[]) => {
+      (args[args.length - 1] as (e: unknown, r?: unknown) => void)(err, { stdout: "", stderr: "" });
+    }) as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.repo.update).mockResolvedValue({} as never);
+    vi.mocked(branchExists).mockResolvedValue(true);
+  });
+
+  it("fetches only branches and tags, from a URL it builds, with git kept non-interactive", async () => {
+    git(null);
+    await runGithubImport(app, repo, "user-ada", source);
+
+    const [cmd, args, opts] = vi.mocked(execFile).mock.calls[0]! as unknown as [string, string[], { cwd: string; env: NodeJS.ProcessEnv; timeout: number }];
+    expect(cmd).toBe("git");
+    // The bare repository is named outright (safe.bareRepository=explicit hosts).
+    expect(args.slice(0, 2)).toEqual(["--git-dir", "/srv/git/ada/hello.git"]);
+    expect(args).toContain("credential.helper=");
+    const rest = args.slice(args.indexOf("--") + 1);
+    expect(rest).toEqual(["https://github.com/octocat/Hello-World.git", "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"]);
+    expect(args.join(" ")).not.toMatch(/refs\/pull|\+refs/);
+    expect(opts.env).toMatchObject({ GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "https", GIT_ASKPASS: "" });
+    expect(opts.timeout).toBeGreaterThan(0);
+  });
+
+  it("on success: points HEAD at GitHub's default branch, clears the state, and runs what a push runs", async () => {
+    git(null);
+    await runGithubImport(app, repo, "user-ada", source);
+
+    expect(setDefaultBranch).toHaveBeenCalledWith("ada/hello.git", "master");
+    expect(prisma.repo.update).toHaveBeenCalledWith({ where: { id: "repo-1" }, data: { importStatus: null, importError: null } });
+    expect(runPostReceiveEffects).toHaveBeenCalledWith(app, repo, "user-ada", "/srv/git/ada/hello.git", new Map());
+  });
+
+  it("leaves HEAD alone for an empty repository", async () => {
+    git(null);
+    vi.mocked(branchExists).mockResolvedValue(false);
+    await runGithubImport(app, repo, "user-ada", source);
+    expect(setDefaultBranch).not.toHaveBeenCalled();
+    expect(prisma.repo.update).toHaveBeenCalledWith(expect.objectContaining({ data: { importStatus: null, importError: null } }));
+  });
+
+  it("on a failed fetch: records a plain message, not git's, and runs nothing else", async () => {
+    git(new Error("fatal: unable to write to /srv/git/ada/hello.git/objects"));
+    await runGithubImport(app, repo, "user-ada", source);
+
+    const { data } = vi.mocked(prisma.repo.update).mock.calls[0]![0] as { data: { importStatus: string; importError: string } };
+    expect(data.importStatus).toBe("failed");
+    expect(data.importError).toMatch(/Could not fetch github\.com\/octocat\/Hello-World/);
+    expect(data.importError).not.toContain("/srv/git");
+    expect(runPostReceiveEffects).not.toHaveBeenCalled();
+  });
+
+  it("on a fetch stopped by the timeout: says so", async () => {
+    git(Object.assign(new Error("killed"), { killed: true }));
+    await runGithubImport(app, repo, "user-ada", source);
+    const { data } = vi.mocked(prisma.repo.update).mock.calls[0]![0] as { data: { importError: string } };
+    expect(data.importError).toMatch(/longer than 30 minutes/);
+  });
+
+  it("never throws when the repository was deleted meanwhile", async () => {
+    git(null);
+    vi.mocked(prisma.repo.update).mockRejectedValue(Object.assign(new Error("gone"), { code: "P2025" }));
+    await expect(runGithubImport(app, repo, "user-ada", source)).resolves.toBeUndefined();
+    git(new Error("fatal"));
+    await expect(runGithubImport(app, repo, "user-ada", source)).resolves.toBeUndefined();
+  });
+});
+
+describe("failInterruptedImports", () => {
+  it("marks every import a restart cut short as failed, so it can be retried", async () => {
+    vi.mocked(prisma.repo.updateMany).mockResolvedValue({ count: 2 } as never);
+    expect(await failInterruptedImports()).toBe(2);
+    expect(prisma.repo.updateMany).toHaveBeenCalledWith({
+      where: { importStatus: "importing" },
+      data: { importStatus: "failed", importError: expect.stringMatching(/restarted/) },
+    });
+  });
+});

@@ -93,6 +93,13 @@ describe("change username", () => {
       ["lovelace/poster.git", "ada/poster.git"],
     ]);
   });
+
+  it("waits for a GitHub import to finish before moving its directory (#289)", async () => {
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ id: "r1", name: "poster", storageKey: "ada/poster.git", updatedAt: new Date(), importStatus: "importing" }] as never);
+    expect((await call("POST", "/users/me/rename", { handle: "lovelace" })).statusCode).toBe(409);
+    expect(moveBareRepo).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
 });
 
 describe("delete account", () => {
@@ -127,6 +134,15 @@ describe("delete account", () => {
     expect(updates).toContainEqual({ text: 'UPDATE "Repo" SET "ownerId" = ? WHERE "ownerId" = ? AND "orgId" IS NOT NULL', values: ["ghost-id", ME] });
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: ME } });
     expect(removeBareRepo).toHaveBeenCalledWith("ada/poster.git");
+  });
+
+  it("waits for a GitHub import to finish before removing its directory (#289)", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.user.create).mockResolvedValue({ id: "ghost-id" } as never);
+    vi.mocked(prisma.repo.findMany).mockResolvedValue([{ storageKey: "ada/poster.git", importStatus: "importing" }] as never);
+    expect((await call("DELETE", "/users/me", { confirm: "ada", password: "hunter22" })).statusCode).toBe(409);
+    expect(prisma.user.delete).not.toHaveBeenCalled();
+    expect(removeBareRepo).not.toHaveBeenCalled();
   });
 
   it("refuses when a real person is called ghost", async () => {

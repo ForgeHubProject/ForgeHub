@@ -149,6 +149,7 @@ export function Header({ user, onLogout, token }: Props) {
             </>
           )}
           <DropdownItem onSelect={() => navigate("/?new=repo")}>New repository</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/new/import")}>Import repository</DropdownItem>
           <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
         </DropdownMenu>
 

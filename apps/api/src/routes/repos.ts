@@ -6,6 +6,7 @@ import {
   bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir, removeSocialPreview,
 } from "../git-storage.js";
 import { seedFromTemplate } from "../repo-template.js";
+import { fetchGithubRepo, ImportError, parseGithubRepo, runGithubImport, type GithubRepo } from "../github-import.js";
 import { fillMissingFormats, parseFormats } from "../repo-formats.js";
 import { resolveActorIdentity } from "../pull-merge.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
@@ -22,6 +23,9 @@ import {
   transferRepoBodySchema,
   updateRepoBodySchema,
 } from "../validation.js";
+
+/** Moving or deleting the directory a GitHub import is fetching into would corrupt or orphan it (#289). */
+const STILL_IMPORTING = "This repository is still importing. Try again when it's done.";
 
 function toApiVisibility(v: RepoVisibility) {
   return v === "PUBLIC" ? "public" : "private";
@@ -119,6 +123,10 @@ export function repoResponse(
     isTemplate?: boolean;
     suggestUpdateBranch?: boolean;
     socialPreviewKey?: string | null;
+    // GitHub import (#289); absent on narrower selects ⇒ not imported.
+    importSource?: string | null;
+    importStatus?: string | null;
+    importError?: string | null;
     // Grouped star count (issue #88) — populated when the query includes
     // `_count.stars` (repoCardInclude does); 0 when the include was omitted.
     _count?: { stars: number };
@@ -163,6 +171,10 @@ export function repoResponse(
     suggestUpdateBranch: r.suggestUpdateBranch ?? false,
     // Social preview (#256): changes with each upload, so it versions the image's URL.
     socialPreviewKey: r.socialPreviewKey ?? null,
+    // GitHub import (#289): "importing" or "failed" while the page shows its progress.
+    importSource: r.importSource ?? null,
+    importStatus: r.importStatus ?? null,
+    importError: r.importError ?? null,
 
     ...sshCloneConfig(),
     createdAt: r.createdAt.toISOString(),
@@ -465,6 +477,20 @@ export async function repoRoutes(app: FastifyInstance) {
         namespaceHandle = org.handle;
       }
 
+      // Importing from GitHub (#289): refused here, before anything is created or downloaded.
+      const from = parsed.data.importFrom ? parseGithubRepo(parsed.data.importFrom) : null;
+      if (parsed.data.importFrom) {
+        if (parsed.data.template) {
+          return reply.status(400).send({ error: "Start from a template or import a repository, not both" });
+        }
+        if (!from) {
+          return reply.status(400).send({ error: "Enter a GitHub repository as https://github.com/owner/name or owner/name" });
+        }
+        if (await prisma.repo.count({ where: { ownerId, importStatus: "importing" } })) {
+          return reply.status(429).send({ error: "Wait for your other import to finish first" });
+        }
+      }
+
       // Starting from a template (#256): one the caller can read and that is marked as a template.
       let templateKey: string | null = null;
       if (parsed.data.template) {
@@ -488,6 +514,16 @@ export async function repoRoutes(app: FastifyInstance) {
       if (existing) {
         return reply.status(409).send({ error: nameTaken });
       }
+      // Asked last: the server has 60 GitHub requests an hour to share (#289).
+      let source: GithubRepo | null = null;
+      if (from) {
+        try {
+          source = await fetchGithubRepo(from.owner, from.name);
+        } catch (e) {
+          if (e instanceof ImportError) return reply.status(e.status).send({ error: e.message });
+          throw e;
+        }
+      }
       try {
         await createBareRepo(storageKey);
       } catch (e: unknown) {
@@ -502,13 +538,19 @@ export async function repoRoutes(app: FastifyInstance) {
         repo = await prisma.repo.create({
           data: {
             name,
-            description: parsed.data.description?.trim() || null,
-            visibility: fromApiVisibility(parsed.data.visibility),
+            description: parsed.data.description?.trim() || source?.description || null,
+            // An import is public like its source, with its topics (#289).
+            visibility: source ? "PUBLIC" : fromApiVisibility(parsed.data.visibility),
             storageKey,
             ownerId,
             orgId,
+            ...(source && {
+              importSource: `${source.owner}/${source.name}`,
+              importStatus: "importing",
+              topics: { create: source.topics.map((topic) => ({ topic })) },
+            }),
           },
-          include: { owner: { select: { handle: true } }, org: { select: { handle: true } } },
+          include: { owner: { select: { handle: true } }, org: { select: { handle: true } }, ...topicsInclude },
         });
       } catch (e: unknown) {
         // The directory is the one createBareRepo just made for this request.
@@ -520,6 +562,7 @@ export async function repoRoutes(app: FastifyInstance) {
       }
       // The creator implicitly watches their new repo at ALL (issue #88).
       await ensureImplicitWatch(repo.id, ownerId);
+      if (source) void runGithubImport(app, { id: repo.id, storageKey }, ownerId, source);
       if (templateKey) {
         try {
           await seedFromTemplate(storageKey, templateKey, await resolveActorIdentity(ownerId));
@@ -680,6 +723,40 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /repos/:handle/:name/import/retry — run a failed GitHub import again (#289),
+  // checking its source again first (it may have gone private or grown).
+  app.post(
+    "/repos/:handle/:name/import/retry",
+    { preHandler: [app.authenticate, adminScope] },
+    async (request, reply) => {
+      const repo = await adminRepo(request, reply);
+      if (!repo) return reply;
+      const from = repo.importSource ? parseGithubRepo(repo.importSource) : null;
+      if (repo.importStatus !== "failed" || !from || !repo.storageKey) {
+        return reply.status(409).send({ error: "This repository has no failed import to retry" });
+      }
+      const userId = request.user.sub;
+      if (await prisma.repo.count({ where: { ownerId: userId, importStatus: "importing" } })) {
+        return reply.status(429).send({ error: "Wait for your other import to finish first" });
+      }
+      let source: GithubRepo;
+      try {
+        source = await fetchGithubRepo(from.owner, from.name);
+      } catch (e) {
+        if (e instanceof ImportError) return reply.status(e.status).send({ error: e.message });
+        throw e;
+      }
+      // Conditional, so two retries at once start one job.
+      const { count } = await prisma.repo.updateMany({
+        where: { id: repo.id, importStatus: "failed" },
+        data: { importStatus: "importing", importError: null },
+      });
+      if (count === 0) return reply.status(409).send({ error: "This repository has no failed import to retry" });
+      void runGithubImport(app, { id: repo.id, storageKey: repo.storageKey }, userId, source);
+      return reply.status(202).send({ importStatus: "importing" });
+    },
+  );
+
   // POST /repos/:handle/:name/rename { name } — rename (#256): any repo the
   // caller administers, personal or org. The bare repository moves with it, and
   // the old name keeps redirecting (web and git) until another repo takes it.
@@ -696,6 +773,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (repo.archivedAt) {
         return reply.status(409).send({ error: "This repository is archived. Unarchive it to rename it." });
       }
+      if (repo.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       const newName = parsed.data.name.toLowerCase();
       if (newName === repo.name) return reply.send({ name: repo.name });
@@ -746,6 +824,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const repo = await adminRepo(request, reply);
       if (!repo) return reply;
       if (repo.archivedAt) return reply.status(409).send({ error: "This repository is archived. Unarchive it to transfer it." });
+      if (repo.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       const userId = request.user.sub;
       const target = parsed.data.newOwner.toLowerCase();
@@ -826,6 +905,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      if (existing.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       if (currentName === newName) {
         return repoResponse(existing);
@@ -977,6 +1057,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      if (existing.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       await prisma.repo.delete({ where: { id: existing.id } });
 
@@ -1011,6 +1092,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (!existing) {
         return reply.status(404).send({ error: "Repository not found" });
       }
+      if (existing.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
 
       await prisma.repo.delete({ where: { id: existing.id } });
 

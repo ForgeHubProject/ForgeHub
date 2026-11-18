@@ -243,6 +243,10 @@ export type Repo = {
   archivedAt?: string | null;
   /** Delete the head branch after a pull request merges (#256). */
   deleteBranchOnMerge?: boolean;
+  /** Imported from GitHub (#289): its "owner/name" there, and the import's state until done. */
+  importSource?: string | null;
+  importStatus?: "importing" | "failed" | null;
+  importError?: string | null;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;
   /** Optional explicit SSH host override; when null the browser hostname is used. */
