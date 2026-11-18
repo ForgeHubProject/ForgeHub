@@ -1,9 +1,51 @@
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma.js";
 import { loginBodySchema, registerBodySchema } from "../validation.js";
 import { registrationMode } from "../registration.js";
 import { createUserAccount } from "../user-service.js";
+import { hashToken } from "../tokens.js";
+import { decryptSecret, hashRecoveryCode, matchTotp } from "../two-factor.js";
+
+/** How long the second sign-in step (#258) stays open after the password. */
+const CHALLENGE_TTL_MS = 5 * 60_000;
+/** Failed codes an account may have in {@link LOCK_WINDOW_MS} before its second step locks. */
+const MAX_FAILED_CODES = 10;
+const LOCK_WINDOW_MS = 15 * 60_000;
+
+/**
+ * The password was right for a two-factor account (#258): an opaque, short-lived
+ * token that only POST /auth/login/2fa takes. It's no JWT and no PAT, so nothing
+ * else accepts it as a session.
+ */
+async function createLoginChallenge(userId: string): Promise<string> {
+  const token = randomBytes(32).toString("base64url");
+  // Challenges older than the lock window no longer count against the account.
+  await prisma.loginChallenge.deleteMany({ where: { userId, createdAt: { lt: new Date(Date.now() - LOCK_WINDOW_MS) } } });
+  await prisma.loginChallenge.create({ data: { userId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS) } });
+  return token;
+}
+
+/** Spend `code` — a TOTP code or a recovery code (#258) — for `user`; false when it's no good. */
+async function spendSecondFactor(
+  user: { id: string; totpSecret: string | null; totpLastStep: number | null },
+  code: string,
+): Promise<boolean> {
+  if (/^\d{6}$/.test(code)) {
+    const secret = user.totpSecret ? decryptSecret(user.totpSecret) : null;
+    const step = secret ? matchTotp(secret, code, user.totpLastStep) : null;
+    if (step === null) return false;
+    // Conditional, so two requests racing with one code can't both get in.
+    const won = await prisma.user.updateMany({
+      where: { id: user.id, OR: [{ totpLastStep: null }, { totpLastStep: { lt: step } }] },
+      data: { totpLastStep: step },
+    });
+    return won.count === 1;
+  }
+  const used = await prisma.recoveryCode.deleteMany({ where: { userId: user.id, codeHash: hashRecoveryCode(code) } });
+  return used.count > 0;
+}
 
 /**
  * Record an interactive-login Session (issue #117) and mint a JWT that carries
@@ -148,7 +190,40 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
       return reply.status(401).send({ error: "Incorrect username, email, or password" });
     }
+    if (user.totpEnabledAt) {
+      return { twoFactorRequired: true, challenge: await createLoginChallenge(user.id) };
+    }
 
+    const token = await issueSessionToken(request, reply, user.id);
+    return { user: publicUser(user), token };
+  });
+
+  // POST /auth/login/2fa { challenge, code } — the second sign-in step (#258): a code
+  // from the authenticator app, or a recovery code, turns the challenge into a session.
+  app.post("/auth/login/2fa", async (request, reply) => {
+    const { challenge, code } = (request.body ?? {}) as { challenge?: unknown; code?: unknown };
+    if (typeof challenge !== "string" || typeof code !== "string" || challenge.length > 64 || code.length > 64) {
+      return reply.status(400).send({ error: "Invalid body" });
+    }
+    const expired = () => reply.status(401).send({ error: "This sign-in expired. Enter your password again." });
+    const row = await prisma.loginChallenge.findUnique({ where: { tokenHash: hashToken(challenge) } });
+    if (!row || row.expiresAt.getTime() < Date.now()) return expired();
+    // Counted before checking so racing guesses can't slip past the lock; no row: a parallel request spent it (#258).
+    const counted = await prisma.loginChallenge.updateMany({ where: { id: row.id }, data: { attempts: { increment: 1 } } });
+    if (counted.count === 0) return expired();
+    const recent = await prisma.loginChallenge.aggregate({
+      where: { userId: row.userId, createdAt: { gte: new Date(Date.now() - LOCK_WINDOW_MS) } },
+      _sum: { attempts: true },
+    });
+    if ((recent._sum.attempts ?? 0) > MAX_FAILED_CODES) {
+      return reply.status(429).send({ error: "Too many codes tried. Wait 15 minutes, then sign in again." });
+    }
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: row.userId } });
+    if (!user.totpEnabledAt || !(await spendSecondFactor(user, code.replace(/\s+/g, "")))) {
+      return reply.status(401).send({ error: "Incorrect code" });
+    }
+    // Signed in: the lock starts over.
+    await prisma.loginChallenge.deleteMany({ where: { userId: user.id } });
     const token = await issueSessionToken(request, reply, user.id);
     return { user: publicUser(user), token };
   });

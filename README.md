@@ -45,7 +45,8 @@ The API is fully functional end-to-end. Below is a summary of what is running.
 |--------|----------|-------------|
 | `GET` | `/health` | Liveness check |
 | `POST` | `/auth/register` | Create account (`email`, `password`, `handle`, optional `displayName`) |
-| `POST` | `/auth/login` | Returns a Bearer JWT |
+| `POST` | `/auth/login` | Returns a Bearer JWT; for a two-factor account, a short-lived `challenge` instead |
+| `POST` | `/auth/login/2fa` | Second sign-in step: `challenge` plus an authenticator or recovery `code`, returns a Bearer JWT |
 | `GET` | `/auth/me` | Current user from token |
 | `POST` | `/auth/tokens` | Create a named, optionally-expiring Personal Access Token (plaintext shown once) |
 | `GET` | `/auth/tokens` | List the caller's tokens (name, prefix, expiry, last used — never the secret) |

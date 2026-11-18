@@ -27,6 +27,7 @@ import { SettingsBlockedPage } from "./pages/SettingsBlockedPage";
 import { SettingsOrganizationsPage } from "./pages/SettingsOrganizationsPage";
 import { SettingsSSHKeysPage } from "./pages/SettingsSSHKeysPage";
 import { SettingsSessionsPage } from "./pages/SettingsSessionsPage";
+import { SettingsSecurityPage } from "./pages/SettingsSecurityPage";
 import { SettingsRenderingPage } from "./pages/SettingsRenderingPage";
 import { UserProfilePage } from "./pages/UserProfilePage";
 import { YourWorkPage } from "./pages/YourWorkPage";
@@ -200,6 +201,10 @@ function AppRoutes() {
       <Route
         path="/settings/organizations"
         element={authed ? <SettingsOrganizationsPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
+      />
+      <Route
+        path="/settings/security"
+        element={authed ? <SettingsSecurityPage token={token!} user={user!} onLogout={handleLogout} /> : signIn}
       />
       <Route
         path="/settings/blocked"

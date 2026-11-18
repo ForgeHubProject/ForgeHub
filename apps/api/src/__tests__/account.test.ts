@@ -166,4 +166,17 @@ describe("export", () => {
     expect(res.json()).toMatchObject({ account: { handle: "ada", email: "ada@x.io" }, repositories: [{ fullName: "ada/poster", topics: ["design"] }] });
     expect((await call("GET", "/users/me/export", undefined, "Bearer fhp_token")).statusCode).toBe(403);
   });
+
+  it("leaves out the password hash and the two-factor secret (#258)", async () => {
+    vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue({
+      id: ME, handle: "ada", email: "ada@x.io", createdAt: new Date("2026-01-01"),
+      passwordHash: "$2a$hash", totpSecret: "iv.tag.ciphertext", totpEnabledAt: new Date(), totpLastStep: 59_000_000,
+    } as never);
+    for (const m of ["repo", "star", "follow", "issue", "pullRequest", "issueComment", "pullRequestComment", "sSHKey", "personalAccessToken"] as const) {
+      vi.mocked(prisma[m].findMany as () => Promise<unknown[]>).mockResolvedValue([]);
+    }
+    const res = await call("GET", "/users/me/export");
+    expect(res.statusCode).toBe(200);
+    for (const leak of ["$2a$hash", "iv.tag.ciphertext", "59000000", "totp", "recovery", "passwordHash"]) expect(res.body).not.toContain(leak);
+  });
 });

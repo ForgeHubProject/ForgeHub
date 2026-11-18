@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { ApiError, getServerInfo, login, register } from "../api";
+import { ApiError, getServerInfo, login, loginTwoFactor, register } from "../api";
 import { ForgeLogo } from "../components/ForgeLogo";
 import { Button, Field, TextInput } from "../ui";
 import type { User } from "../types";
@@ -23,6 +23,9 @@ export function LoginPage({ onAuth }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Two-factor (#258): the password was right; a code from the app finishes signing in.
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   // Optimistic: assume sign-up is open until /server/info says otherwise, so a
   // failed fetch never hides the form on an open instance (the API still enforces).
   const [registrationClosed, setRegistrationClosed] = useState(false);
@@ -39,7 +42,7 @@ export function LoginPage({ onAuth }: Props) {
   }, []);
 
   const isLogin = mode === "login";
-  useDocumentTitle(isLogin ? "Sign in · ForgeHub" : "Sign up · ForgeHub");
+  useDocumentTitle(challenge ? "Two-factor authentication · ForgeHub" : isLogin ? "Sign in · ForgeHub" : "Sign up · ForgeHub");
 
   function switchMode(next: Mode) {
     // A handle typed at sign-in would be stranded in what becomes a
@@ -65,6 +68,11 @@ export function LoginPage({ onAuth }: Props) {
       const res = isLogin
         ? await login(identifier, password)
         : await register(identifier, password, handle.trim(), displayName || undefined);
+      if ("challenge" in res) {
+        setChallenge(res.challenge);
+        setPassword("");
+        return;
+      }
       onAuth(res.token, res.user);
     } catch (err) {
       if (isLogin && err instanceof ApiError && err.status === 400 && err.fieldErrors?.email) {
@@ -84,6 +92,22 @@ export function LoginPage({ onAuth }: Props) {
     }
   }
 
+  async function submitCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!challenge) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await loginTwoFactor(challenge, code.trim());
+      onAuth(res.token, res.user);
+    } catch (err) {
+      setCode("");
+      setError(err instanceof Error && err.message ? err.message : "Unable to verify the code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-fh-canvas flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-[22rem]">
@@ -92,7 +116,7 @@ export function LoginPage({ onAuth }: Props) {
             <ForgeLogo size={40} />
           </span>
           <h1 className="text-fh-xl font-semibold text-fh-fg text-center">
-            {isLogin ? "Sign in to ForgeHub" : "Create your account"}
+            {challenge ? "Two-factor authentication" : isLogin ? "Sign in to ForgeHub" : "Create your account"}
           </h1>
         </div>
 
@@ -106,78 +130,106 @@ export function LoginPage({ onAuth }: Props) {
             </div>
           )}
 
-          <form onSubmit={submit} className="flex flex-col gap-4">
-            {!isLogin && (
-              <>
-                <Field label="Username" required>
-                  {(id) => (
-                    <TextInput
-                      id={id}
-                      value={handle}
-                      onChange={(e) => setHandle(e.target.value)}
-                      placeholder="octocat"
-                      autoComplete="username"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      required
-                      autoFocus
-                    />
-                  )}
-                </Field>
-                <Field label="Name" hint="Shown on your profile. Optional.">
-                  {(id) => (
-                    <TextInput
-                      id={id}
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="The Octocat"
-                      autoComplete="name"
-                    />
-                  )}
-                </Field>
-              </>
-            )}
-
-            {/* At sign-in this accepts a handle too (GitHub's "Username or email
-                address"), so it must be type="text" there — type="email" makes
-                the browser reject a handle before the request is ever sent. */}
-            <Field label={isLogin ? "Username or email address" : "Email address"} required>
-              {(id) => (
-                <TextInput
-                  id={id}
-                  type={isLogin ? "text" : "email"}
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder={isLogin ? "octocat or you@example.com" : "you@example.com"}
-                  autoComplete={isLogin ? "username" : "email"}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  required
-                  autoFocus={isLogin}
-                />
+          {challenge ? (
+            <form onSubmit={submitCode} className="flex flex-col gap-4">
+              <Field label="Authentication code" hint="Open your authenticator app, or enter one of your recovery codes." required>
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder="XXXXXX"
+                    autoComplete="one-time-code"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={64}
+                    required
+                    autoFocus
+                  />
+                )}
+              </Field>
+              <Button type="submit" variant="primary" block loading={loading}>
+                Verify
+              </Button>
+              <Button variant="invisible" block onClick={() => { setChallenge(null); setCode(""); setError(null); }}>
+                Back to sign in
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              {!isLogin && (
+                <>
+                  <Field label="Username" required>
+                    {(id) => (
+                      <TextInput
+                        id={id}
+                        value={handle}
+                        onChange={(e) => setHandle(e.target.value)}
+                        placeholder="octocat"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        required
+                        autoFocus
+                      />
+                    )}
+                  </Field>
+                  <Field label="Name" hint="Shown on your profile. Optional.">
+                    {(id) => (
+                      <TextInput
+                        id={id}
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="The Octocat"
+                        autoComplete="name"
+                      />
+                    )}
+                  </Field>
+                </>
               )}
-            </Field>
 
-            <Field label="Password" required>
-              {(id) => (
-                <TextInput
-                  id={id}
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={isLogin ? "Enter your password" : "Create a password"}
-                  autoComplete={isLogin ? "current-password" : "new-password"}
-                  required
-                />
-              )}
-            </Field>
+              {/* At sign-in this accepts a handle too (GitHub's "Username or email
+                  address"), so it must be type="text" there — type="email" makes
+                  the browser reject a handle before the request is ever sent. */}
+              <Field label={isLogin ? "Username or email address" : "Email address"} required>
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    type={isLogin ? "text" : "email"}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder={isLogin ? "octocat or you@example.com" : "you@example.com"}
+                    autoComplete={isLogin ? "username" : "email"}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    required
+                    autoFocus={isLogin}
+                  />
+                )}
+              </Field>
 
-            <Button type="submit" variant="primary" block loading={loading} className="mt-1">
-              {isLogin ? "Sign in" : "Create account"}
-            </Button>
-          </form>
+              <Field label="Password" required>
+                {(id) => (
+                  <TextInput
+                    id={id}
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={isLogin ? "Enter your password" : "Create a password"}
+                    autoComplete={isLogin ? "current-password" : "new-password"}
+                    required
+                  />
+                )}
+              </Field>
+
+              <Button type="submit" variant="primary" block loading={loading} className="mt-1">
+                {isLogin ? "Sign in" : "Create account"}
+              </Button>
+            </form>
+          )}
         </div>
 
         <div className="mt-4 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-center text-fh-sm text-fh-fg-muted">
