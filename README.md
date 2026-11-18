@@ -386,7 +386,7 @@ you ──22──▶ host sshd ──(git user: AuthorizedKeysCommand + forced 
 ```
 
 1. Start ForgeHub with `FORGEHUB_SSH_PORT=2222` and `FORGEHUB_SSH_BIND=127.0.0.1` so the listener is reachable from the host only.
-2. On the host: `sudo deploy/ssh/install.sh 2222`. It creates the locked `git` account, a *forward key* (`/etc/forgehub/forward_key`, readable only by that account), installs the two helper scripts and an `sshd_config.d` drop-in that applies to the `git` user alone, validates with `sshd -t` and reloads. Other accounts log in as before.
+2. On the host: `sudo deploy/ssh/install.sh 2222`. It creates the locked `git` account, a *forward key* (`/etc/forgehub/forward_key`, readable only by that account), installs the two helper scripts and an `sshd_config.d` drop-in that applies to the `git` user alone, validates with `sshd -t` and reloads. Other accounts log in as before. With SELinux enabled (Rocky, RHEL, Fedora) it also loads a small policy module, `forgehub-ssh`, that lets sshd's helper connect to ForgeHub's port; without it every key is refused.
 3. Put what it prints into ForgeHub's environment (`FORGEHUB_SSH_PUBLIC_PORT=22`, `FORGEHUB_SSH_FORWARD_KEY=…`, `FORGEHUB_SSH_HOST_FINGERPRINTS=…`) and restart. The web clone box then shows `git@host:owner/repo.git`, and Settings → SSH keys lists the fingerprints of the host's sshd — the keys people actually meet on port 22 — rather than ForgeHub's own listener key. Without `FORGEHUB_SSH_HOST_FINGERPRINTS` that page shows no fingerprint instead of a wrong one.
 
 How it stays safe: the host's sshd proves *who* — the person signed in with a key registered in ForgeHub (looked up live, so deleting a key revokes it at once) — and ForgeHub still decides *what*, with the same access checks and push hooks as HTTPS. The `git` account can run only the forced command, which hands ForgeHub nothing but `git-upload-pack` / `git-receive-pack`. The forward key lets its holder act as any registered key, which is why the listener must stay on loopback and the private key stays root-owned (`0640 root:git`). Forwarded auth is also accepted only from loopback/private source addresses, so a mistakenly public SSH port cannot be used with the forward key, and ForgeHub logs a warning at startup whenever forwarding is on. To rotate or revoke the forward key, change `FORGEHUB_SSH_FORWARD_KEY` (or the file named by `FORGEHUB_SSH_FORWARD_KEY_FILE`, which is re-read on every login) — the old key stops working immediately. With no `FORGEHUB_SSH_FORWARD_KEY` set, none of this is reachable.
@@ -437,8 +437,8 @@ cp .env.example .env   # set JWT_SECRET: openssl rand -base64 32
 # Docker
 docker compose up -d --build
 
-# Podman (podman-compose, or podman v4.4+'s built-in `podman compose`)
-podman compose up -d --build
+# Podman
+podman-compose up -d --build
 ```
 
 Web (SPA + proxied API + git-http) is published on `${WEB_PORT:-8080}`. The api container isn't published directly — everything goes through the web container's nginx, same as a real deployment behind one TLS-terminating reverse proxy.

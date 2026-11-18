@@ -293,7 +293,9 @@ These are binding. They are what separates "looks like a real tool" from
 1. **System font stack only.** `-apple-system, BlinkMacSystemFont, "Segoe UI"…`
    for UI; `ui-monospace, SFMono-Regular…` for code. No web fonts.
 2. **Dense type.** Body is 13–14px (`text-fh-sm`/`text-fh-base`). Headings top
-   out at 24px. Resist large hero text.
+   out at 24px. Resist large hero text. The one exception is the signed-out
+   landing page (`pages/LandingPage.tsx`): its headline and section headings
+   are display type (48px / 32px), as GitHub's landing page is.
 3. **4px spacing grid.** Use Tailwind's 0.5/1/1.5/2/3/4… steps; no arbitrary
    `17px` gaps.
 4. **6px radius everywhere** (`rounded-md`). Pills use `rounded-full`. No

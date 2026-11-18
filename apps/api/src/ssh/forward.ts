@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { parsePublicKey, type ParsedPublicKey } from "./keys.js";
 
 /**
@@ -99,4 +100,15 @@ export function isPrivateAddress(ip: string): boolean {
   const [a, b] = [Number(m[1]), Number(m[2])];
   if ([a, b, Number(m[3]), Number(m[4])].some((n) => n > 255)) return false;
   return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/**
+ * Is `ip` one of this machine's own addresses? Under rootless podman's default
+ * network (pasta) the host's loopback reaches the container from the container's
+ * own address, which is the host's, public on a VPS (#290). No remote peer can
+ * connect from it, so it is as local as loopback.
+ */
+export function isOwnAddress(ip: string): boolean {
+  const addr = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  return Object.values(networkInterfaces()).some((list) => list?.some((i) => i.address === addr));
 }

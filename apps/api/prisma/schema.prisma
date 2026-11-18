@@ -205,6 +205,12 @@ model Repo {
   // official FHR handler ids, most files first. Refreshed on push; null until then.
   formats             String?
 
+  // Imported from GitHub (#289): the "owner/name" it came from, and its background
+  // job's state: "importing", "failed" (with importError), or null once done.
+  importSource        String?
+  importStatus        String?
+  importError         String?
+
   // Fork lineage (issue #113): the repo this was forked from (null for roots),
   // and the inbound forks that point back at this repo. onDelete: SetNull so
   // deleting an upstream orphans its forks rather than cascade-deleting them.

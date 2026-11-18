@@ -9,7 +9,6 @@
 #   ssh user@vps
 #   cd /opt/forgehub/deploy
 #   podman-compose up -d
-#   # or: podman compose up -d
 #
 # In NPM: add a proxy host for forgehubcode.com -> 127.0.0.1:${WEB_PORT} (default 8080),
 # with "Websockets Support" on, and request a Let's Encrypt cert for the domain.
@@ -59,6 +58,7 @@ services:
       # keys shows, since clients on port 22 meet that sshd, not ForgeHub's key.
       FORGEHUB_SSH_HOST_FINGERPRINTS: "${FORGEHUB_SSH_HOST_FINGERPRINTS:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
+      FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"
       UNSUBSCRIBE_SECRET: "${UNSUBSCRIBE_SECRET:-}"

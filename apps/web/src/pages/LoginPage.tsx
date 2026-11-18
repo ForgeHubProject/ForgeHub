@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { ApiError, getServerInfo, login, loginTwoFactor, register } from "../api";
 import { ForgeLogo } from "../components/ForgeLogo";
 import { Button, Field, TextInput } from "../ui";
@@ -14,7 +15,9 @@ type Mode = "login" | "register";
 export function LoginPage({ onAuth }: Props) {
   // Signed-out "Sign up" links open the form in register mode.
   const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(window.location.search).get("mode") === "register" ? "register" : "login"));
-  const [email, setEmail] = useState("");
+  // The landing page's "Sign up for ForgeHub" hands over the email typed there.
+  const handedEmail = (useLocation().state as { email?: unknown } | null)?.email;
+  const [email, setEmail] = useState(() => (typeof handedEmail === "string" ? handedEmail : ""));
   const [password, setPassword] = useState("");
   const [handle, setHandle] = useState("");
   const [displayName, setDisplayName] = useState("");

@@ -56,11 +56,10 @@ services:
       FORGEHUB_RAWBLOB_MAX_BYTES: "${FORGEHUB_RAWBLOB_MAX_BYTES:-}"
     ports:
       - "${WEB_PORT:-8080}:80"
-    # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set in .env.
-    # The host port and the container port must match; to map port 22
-    # externally use a host firewall rule or load-balancer redirect.
-    # ports:
-    #   - "${FORGEHUB_SSH_BIND:-0.0.0.0}:${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
+      # SSH git transport: uncomment when FORGEHUB_SSH_PORT is set in .env.
+      # The host port and the container port must match; to map port 22
+      # externally use a host firewall rule or load-balancer redirect.
+      # - "${FORGEHUB_SSH_BIND:-0.0.0.0}:${FORGEHUB_SSH_PORT:-2222}:${FORGEHUB_SSH_PORT:-2222}"
     volumes:
       # forgehub-data: the durable forge — SQLite DB + bare repos. Losing it loses
       #                the instance.

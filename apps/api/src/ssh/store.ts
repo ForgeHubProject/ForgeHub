@@ -21,14 +21,17 @@ export async function fingerprintInUse(fingerprint: string): Promise<boolean> {
 /**
  * The authenticated SSH actor, resolved from a presented public key's fingerprint.
  * A `user` actor (SSHKey) acts with its owner's full repo access; a `deploy` actor
- * (DeployKey) is repo-scoped and honors `readOnly`.
+ * (DeployKey) is repo-scoped and honors `readOnly`. An `anonymous` actor is a key
+ * nobody registered: SSH cannot connect without one, so it may read PUBLIC repos
+ * and nothing else.
  */
 export type SshActor =
   | { kind: "user"; userId: string; sshKeyId: string; publicKey: string }
+  | { kind: "anonymous" }
   | { kind: "deploy"; deployKeyId: string; repoId: string; readOnly: boolean; publicKey: string };
 
 /** Look up an actor by fingerprint: SSHKey first, then DeployKey. Null if neither. */
-export async function resolveActorByFingerprint(fingerprint: string): Promise<SshActor | null> {
+export async function resolveActorByFingerprint(fingerprint: string): Promise<Exclude<SshActor, { kind: "anonymous" }> | null> {
   const sshKey = await prisma.sSHKey.findUnique({ where: { fingerprint } });
   if (sshKey) {
     return { kind: "user", userId: sshKey.userId, sshKeyId: sshKey.id, publicKey: sshKey.publicKey };
