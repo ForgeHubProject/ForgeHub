@@ -58,6 +58,7 @@ services:
       # keys shows, since clients on port 22 meet that sshd, not ForgeHub's key.
       FORGEHUB_SSH_HOST_FINGERPRINTS: "${FORGEHUB_SSH_HOST_FINGERPRINTS:-}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
+      FORGEHUB_REGISTRATION: "${FORGEHUB_REGISTRATION:-}"
       SMTP_URL: "${SMTP_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-}"
       UNSUBSCRIBE_SECRET: "${UNSUBSCRIBE_SECRET:-}"

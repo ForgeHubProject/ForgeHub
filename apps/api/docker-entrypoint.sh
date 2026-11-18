@@ -191,8 +191,8 @@ EOF
     # DDL directly from schema.prisma — idempotent, safe for additive changes.
     #
     # For DESTRUCTIVE schema changes (dropped/renamed column or table) run once:
-    #   docker compose run --rm forgehub /usr/local/bin/docker-entrypoint.sh \
-    #     /repo/node_modules/.bin/prisma db push --accept-data-loss
+    #   docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma forgehub \
+    #     db push --accept-data-loss
     # Back up your data first.
     if ! $PRISMA_BIN db push; then
       cat >&2 <<'EOF'
@@ -202,8 +202,8 @@ ForgeHub: schema push did not apply.
 If the schema change would destroy data (dropped column, incompatible type),
 Prisma requires explicit confirmation.  Back up your data, then run:
 
-  docker compose run --rm forgehub \
-    /repo/node_modules/.bin/prisma db push --accept-data-loss
+  docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma forgehub \
+    db push --accept-data-loss
 
 EOF
       exit 1
