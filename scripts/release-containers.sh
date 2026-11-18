@@ -101,7 +101,7 @@ if (( ! DRY_RUN && ! LOCAL )); then
   done
 fi
 
-# provider:suffix:build-url (mirrors .github/workflows/publish.yml matrix)
+# provider:suffix:build-url
 VARIANTS=(
   "sqlite::file:/tmp/.build-dummy.db"
   "postgresql:-postgres:postgresql://user:pass@localhost:5432/forgehub"
