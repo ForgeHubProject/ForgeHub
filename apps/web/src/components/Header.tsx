@@ -75,6 +75,18 @@ export function Header({ user, onLogout, token }: Props) {
       </nav>
       )}
 
+      {/* Signed out: Explore, where GitHub puts its product menus. */}
+      {!token && (
+        <nav className="hidden md:flex items-center flex-shrink-0">
+          <Link
+            to="/explore"
+            className="text-fh-sm font-semibold px-2 py-1 rounded-md text-fh-header-text/90 hover:bg-white/10 transition-colors"
+          >
+            Explore
+          </Link>
+        </nav>
+      )}
+
       {/* Search */}
       <form onSubmit={handleSearch} className="flex-1 max-w-md hidden sm:block">
         <div className="group relative">
@@ -137,6 +149,7 @@ export function Header({ user, onLogout, token }: Props) {
             </>
           )}
           <DropdownItem onSelect={() => navigate("/?new=repo")}>New repository</DropdownItem>
+          <DropdownItem onSelect={() => navigate("/new/import")}>Import repository</DropdownItem>
           <DropdownItem onSelect={() => navigate("/organizations/new")}>New organization</DropdownItem>
         </DropdownMenu>
 

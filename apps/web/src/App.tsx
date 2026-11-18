@@ -4,8 +4,10 @@ import { GUEST, safeNext, signInPath } from "./lib/guest";
 import { ApiError, getPublicProfile } from "./api";
 import { ExplorePage } from "./pages/ExplorePage";
 import { FeedPage } from "./pages/FeedPage";
+import { LandingPage } from "./pages/LandingPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NewOrgPage } from "./pages/NewOrgPage";
+import { ImportRepoPage } from "./pages/ImportRepoPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { WatchingPage } from "./pages/WatchingPage";
@@ -136,7 +138,7 @@ function AppRoutes() {
               onLogout={handleLogout}
             />
           ) : (
-            <Navigate to="/explore" replace />
+            <LandingPage onLogout={handleLogout} />
           )
         }
       />
@@ -264,6 +266,16 @@ function AppRoutes() {
         element={
           authed ? (
             <NewOrgPage token={token!} user={user!} onLogout={handleLogout} />
+          ) : (
+            signIn
+          )
+        }
+      />
+      <Route
+        path="/new/import"
+        element={
+          authed ? (
+            <ImportRepoPage token={token!} user={user!} onLogout={handleLogout} />
           ) : (
             signIn
           )

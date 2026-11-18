@@ -11,7 +11,7 @@ import { resolveRepo, canRead, canWrite, redirectedRepoId, repoAccessInclude, ty
 import { fingerprintFromRaw } from "./keys.js";
 import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
-import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isPrivateAddress } from "./forward.js";
+import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isOwnAddress, isPrivateAddress } from "./forward.js";
 
 const { Server, utils: sshUtils } = ssh2;
 
@@ -146,6 +146,13 @@ type RepoForAccess = RepoAccessInput & { id: string; storageKey?: string | null 
  */
 export function decideAccess(actor: SshActor, repo: RepoForAccess, service: GitService): AccessDecision {
   const wantsWrite = service === "git-receive-pack";
+
+  if (actor.kind === "anonymous") {
+    if (wantsWrite) {
+      return { allowed: false, reason: "Write access denied: this SSH key is not registered. Add it at Settings → SSH keys" };
+    }
+    return repo.visibility === "PUBLIC" ? { allowed: true } : { allowed: false, reason: "Repository not found" };
+  }
 
   if (actor.kind === "user") {
     if (wantsWrite) {
@@ -284,7 +291,7 @@ async function handleExec(
       void runPostReceiveEffects(app, { id: repo.id, storageKey }, actorUserId, repoPath, shasBefore);
     }
     if (actor.kind === "user") touchSshKey(actor.sshKeyId, ip);
-    else touchDeployKey(actor.deployKeyId, ip);
+    else if (actor.kind === "deploy") touchDeployKey(actor.deployKeyId, ip);
     try {
       stream.exit(code ?? 0);
       stream.end();
@@ -366,18 +373,16 @@ export function onAuthentication(
 
   void (async () => {
     const fingerprint = fingerprintFromRaw(ctx.key.data);
-    const actor = await resolveActorByFingerprint(fingerprint);
-    if (!actor) {
-      recordAuthFailure(ip);
-      app.log.warn({ fingerprint, ip }, "ssh: auth failed — unknown fingerprint");
-      ctx.reject();
-      return;
-    }
+    const registered = await resolveActorByFingerprint(fingerprint);
+    // An unregistered key is not an auth failure: SSH has no anonymous mode, so any
+    // key that proves possession is let in as a read-only visitor (public repos only).
+    const actor: SshActor = registered ?? { kind: "anonymous" };
+    const publicKey = registered ? registered.publicKey : `${ctx.key.algo} ${ctx.key.data.toString("base64")}`;
 
-    // Signature present → verify it against the stored public key. Absent → this is
+    // Signature present → verify it against the key. Absent → this is
     // the client's "is this key acceptable?" probe; accept so it sends a signature.
     if (ctx.signature) {
-      const pub = sshUtils.parseKey(actor.publicKey);
+      const pub = sshUtils.parseKey(publicKey);
       if (pub instanceof Error) {
         app.log.error({ err: pub, fingerprint }, "ssh: stored public key failed to parse");
         recordAuthFailure(ip);
@@ -395,7 +400,9 @@ export function onAuthentication(
       const actorInfo =
         actor.kind === "user"
           ? { kind: "user", userId: actor.userId, sshKeyId: actor.sshKeyId }
-          : { kind: "deploy", deployKeyId: actor.deployKeyId, repoId: actor.repoId };
+          : actor.kind === "deploy"
+            ? { kind: "deploy", deployKeyId: actor.deployKeyId, repoId: actor.repoId }
+            : { kind: "anonymous" };
       app.log.info({ fingerprint, ip, actor: actorInfo }, "ssh: auth succeeded");
       // Reset only here, after a VERIFIED signature. Fingerprints are not secret, so
       // clearing on the unsigned probe would let anyone holding a registered public
@@ -419,9 +426,9 @@ function onForwardedAuthentication(
   bind: (actor: BoundActor, ip?: string) => void,
   keys: ReturnType<typeof forwardKeys>,
 ): void {
-  if (!isPrivateAddress(ip)) {
+  if (!isPrivateAddress(ip) && !isOwnAddress(ip)) {
     // Not the host's sshd. Count it, so a scan from one address is throttled too.
-    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not a loopback/private address");
+    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not loopback, private or this machine's own address");
     recordAuthFailure(ip);
     ctx.reject();
     return;
@@ -451,13 +458,13 @@ function onForwardedAuthentication(
       return;
     }
     const target = decodeForwardUser(ctx.username);
-    const actor = target ? await resolveActorByFingerprint(target.fingerprint) : null;
-    if (!target || !actor) {
-      // The host's sshd just authenticated this key, so this is a key deleted in between.
-      app.log.warn({ ip }, "ssh: forwarded auth for an unregistered key");
+    if (!target) {
       ctx.reject();
       return;
     }
+    // The host's sshd already proved possession. A key ForgeHub does not know (never
+    // registered, or deleted in between) is a read-only visitor, as on the direct path.
+    const actor: SshActor = (await resolveActorByFingerprint(target.fingerprint)) ?? { kind: "anonymous" };
     if (ctx.signature) {
       app.log.info({ fingerprint: target.fingerprint, ip, forwarded: true }, "ssh: auth succeeded");
       resetAuthFailures(ip);
@@ -487,6 +494,10 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
   }
 
   const hostKey = await loadOrCreateHostKey(app.log);
+  // Where to bind. Default is all interfaces (containers need it); set 127.0.0.1 when
+  // only the host's sshd forwards here. Not FORGEHUB_SSH_BIND: compose reads that for
+  // the host-side publish address, which is a different thing.
+  const listenHost = process.env["FORGEHUB_SSH_LISTEN_HOST"]?.trim() || "0.0.0.0";
 
   const sweep = setInterval(sweepExpiredFailures, WINDOW_MS);
   sweep.unref();
@@ -515,13 +526,13 @@ export async function startSshServer(app: FastifyInstance): Promise<SshServerHan
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => reject(err);
     server.on("error", onError);
-    server.listen(port, "0.0.0.0", () => {
+    server.listen(port, listenHost, () => {
       server.removeListener("error", onError);
       resolve();
     });
   });
 
-  app.log.info(`SSH git transport listening on port ${port}`);
+  app.log.info(`SSH git transport listening on ${listenHost}:${port}`);
   if (forwardKeys().length > 0) {
     app.log.warn(
       "SSH forwarding is enabled: the forward key can act as ANY registered key. " +

@@ -60,8 +60,12 @@ export async function accountRoutes(app: FastifyInstance) {
 
     const repos = await prisma.repo.findMany({
       where: { ownerId: user.id, orgId: null },
-      select: { id: true, name: true, storageKey: true, updatedAt: true },
+      select: { id: true, name: true, storageKey: true, updatedAt: true, importStatus: true },
     });
+    // A GitHub import is fetching into one of these directories (#289).
+    if (repos.some((r) => r.importStatus === "importing")) {
+      return reply.status(409).send({ error: "One of your repositories is still importing. Try again when it's done." });
+    }
     const moved: Array<[from: string, to: string]> = [];
     try {
       for (const r of repos) {
@@ -173,7 +177,11 @@ export async function accountRoutes(app: FastifyInstance) {
 
     const ghost = await ghostUser();
     if (!ghost) return reply.status(500).send({ error: `The username ${GHOST_HANDLE} belongs to someone; it's needed for deleted accounts` });
-    const personal = await prisma.repo.findMany({ where: { ownerId: user.id, orgId: null }, select: { id: true, storageKey: true } });
+    const personal = await prisma.repo.findMany({ where: { ownerId: user.id, orgId: null }, select: { id: true, storageKey: true, importStatus: true } });
+    // A GitHub import is fetching into one of these directories (#289).
+    if (personal.some((r) => r.importStatus === "importing")) {
+      return reply.status(409).send({ error: "One of your repositories is still importing. Try again when it's done." });
+    }
     await prisma.$transaction([
       ...AUTHORED.map(([table, column]) =>
         prisma.$executeRaw`UPDATE ${ident(table)} SET ${ident(column)} = ${ghost.id} WHERE ${ident(column)} = ${user.id}`,

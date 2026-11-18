@@ -474,12 +474,19 @@ export async function createRepo(
   owner?: string,
   /** Start from a template repository (#256): "owner/name". */
   template?: string,
+  /** Import a public GitHub repository (#289): its URL or "owner/name". */
+  importFrom?: string,
 ): Promise<Repo> {
   return req("/repos", {
     method: "POST",
     token,
-    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined }),
+    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined, importFrom: importFrom || undefined }),
   });
+}
+
+/** Run a failed GitHub import again (#289). Admins only. */
+export async function retryImport(token: string, handle: string, repoName: string): Promise<{ importStatus: "importing" }> {
+  return req(`/repos/${handle}/${repoName}/import/retry`, { method: "POST", token });
 }
 
 /** A repository's Insights (#256): weekly commits, code frequency, contributors. */

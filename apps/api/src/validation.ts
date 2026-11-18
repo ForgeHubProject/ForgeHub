@@ -79,6 +79,12 @@ export const createRepoBodySchema = z.object({
   owner: handleSchema.optional(),
   /** Start from a template repository (#256): "owner/name". */
   template: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+  /**
+   * Import a public GitHub repository (#289): its URL or "owner/name", parsed
+   * strictly in the route. The import is public like its source and takes its
+   * description (unless one is given), topics and default branch.
+   */
+  importFrom: z.string().max(200).optional(),
 });
 
 /** A pull-request merge method (issue #119). */

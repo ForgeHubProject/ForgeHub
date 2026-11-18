@@ -3,6 +3,12 @@ import ssh2 from "ssh2";
 import type { AuthContext, ParsedKey } from "ssh2";
 import type { FastifyInstance } from "fastify";
 
+// This machine also owns a public address, as under rootless podman's pasta network (#290).
+vi.mock("node:os", async (importOriginal) => {
+  const os = await importOriginal<typeof import("node:os")>();
+  const own = { address: "203.0.113.10", netmask: "255.255.255.0", family: "IPv4", mac: "02:00:00:00:00:01", internal: false, cidr: "203.0.113.10/24" } as const;
+  return { ...os, networkInterfaces: () => ({ ...os.networkInterfaces(), pasta0: [own] }) };
+});
 vi.mock("../ssh/store.js", () => ({
   resolveActorByFingerprint: vi.fn(),
   touchSshKey: vi.fn(),
@@ -142,18 +148,20 @@ describe("forwarded authentication", () => {
     expect(r.result).toBe("reject");
   });
 
-  it("refuses to act for a key that is not registered", async () => {
+  it("acts as a read-only anonymous visitor for a key that is not registered", async () => {
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
     const r = await attempt({ username: encodeForwardUser(personFp), signWith: forwardPriv });
-    expect(r.result).toBe("reject");
+    expect(r.result).toBe("accept");
+    expect(r.bound).toEqual({ kind: "anonymous" });
   });
 
   it("does nothing special when no forward key is configured", async () => {
     delete process.env["FORGEHUB_SSH_FORWARD_KEY"];
-    // The forward key is not a registered key, so ordinary auth turns it away.
+    // The forward key is not a registered key, so ordinary auth treats it as any
+    // stranger's key: a read-only anonymous visitor, never the key-lookup session.
     vi.mocked(resolveActorByFingerprint).mockResolvedValue(null);
     const r = await attempt({ username: KEYS_USER, signWith: forwardPriv });
-    expect(r.result).toBe("reject");
+    expect(r.bound).toEqual({ kind: "anonymous" });
   });
 });
 
@@ -172,6 +180,12 @@ describe("forwarded auth only from private addresses", () => {
     expect(r.result).toBe("reject");
     expect(r.bound).toBeNull();
     expect(resolveActorByFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("accepts the forward key from this machine's own public address (rootless podman's pasta)", async () => {
+    const r = await attempt({ ip: "203.0.113.10", username: KEYS_USER, signWith: forwardPriv });
+    expect(r.result).toBe("accept");
+    expect(r.bound).toEqual({ kind: "keylookup" });
   });
 
   it("throttles repeated public-address attempts", async () => {

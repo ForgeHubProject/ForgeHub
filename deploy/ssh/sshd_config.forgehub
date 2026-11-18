@@ -3,7 +3,7 @@
 # user is affected; every other account logs in exactly as before.
 Match User git
     AuthorizedKeysFile none
-    AuthorizedKeysCommand /usr/local/sbin/forgehub-authorized-keys %f
+    AuthorizedKeysCommand /usr/local/sbin/forgehub-authorized-keys %f %t %k
     AuthorizedKeysCommandUser git
     PasswordAuthentication no
     KbdInteractiveAuthentication no
