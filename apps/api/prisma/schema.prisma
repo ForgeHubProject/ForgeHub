@@ -66,6 +66,7 @@ model User {
   resolvedReviewComments PullRequestReviewComment[] @relation("PRReviewCommentResolver")
   releases         Release[]                  @relation("ReleaseAuthor")
   releaseAssets    ReleaseAsset[]             @relation("ReleaseAssetUploader")
+  attachments      Attachment[]               @relation("AttachmentUploader")
   notifications    Notification[]
   personalAccessTokens PersonalAccessToken[]
   savedFilters     SavedFilter[]              @relation("SavedFilterOwner")
@@ -175,6 +176,7 @@ model Repo {
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
   refUpdates          RefUpdate[]
+  attachments         Attachment[]
 
   // More repository settings (#256): features on or off, pull request behaviour,
   // and the default merge and squash commit messages ("default", "title",
@@ -965,6 +967,23 @@ model ReleaseAsset {
   uploadedBy User    @relation("ReleaseAssetUploader", fields: [uploadedById], references: [id])
 
   @@unique([releaseId, name])
+}
+
+// A file pasted, dropped or picked into a comment box (#253). Its bytes live at
+// `<GIT_STORAGE_ROOT>-attachments/<repo id>/<id>`; the id is random, so its URL can't be guessed.
+model Attachment {
+  id           String   @id
+  repoId       String
+  name         String
+  contentType  String
+  size         Int
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  repo       Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@index([repoId])
 }
 
 model PullRequestComment {

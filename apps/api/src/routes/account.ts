@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { ident } from "../sql.js";
-import { buildStorageKey, moveBareRepo, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
+import { buildStorageKey, moveBareRepo, removeAttachments, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { newHandleSchema } from "../validation.js";
 
 /**
@@ -25,6 +25,7 @@ const AUTHORED: Array<[table: string, column: string]> = [
   ["IssueComment", "authorId"],
   ["Release", "authorId"],
   ["ReleaseAsset", "uploadedById"],
+  ["Attachment", "uploadedById"],
   ["PullRequestComment", "authorId"],
   ["PullRequestReview", "authorId"],
   ["PullRequestReviewComment", "authorId"],
@@ -176,7 +177,7 @@ export async function accountRoutes(app: FastifyInstance) {
 
     const ghost = await ghostUser();
     if (!ghost) return reply.status(500).send({ error: `The username ${GHOST_HANDLE} belongs to someone; it's needed for deleted accounts` });
-    const personal = await prisma.repo.findMany({ where: { ownerId: user.id, orgId: null }, select: { storageKey: true, importStatus: true } });
+    const personal = await prisma.repo.findMany({ where: { ownerId: user.id, orgId: null }, select: { id: true, storageKey: true, importStatus: true } });
     // A GitHub import is fetching into one of these directories (#289).
     if (personal.some((r) => r.importStatus === "importing")) {
       return reply.status(409).send({ error: "One of your repositories is still importing. Try again when it's done." });
@@ -191,6 +192,7 @@ export async function accountRoutes(app: FastifyInstance) {
     ]);
     for (const r of personal) {
       if (r.storageKey) await removeBareRepo(r.storageKey).catch((err: unknown) => app.log.error({ err }, "removing a deleted account's repository failed"));
+      await removeAttachments(r.id).catch(() => {});
     }
     if (personal[0]?.storageKey) await removeEmptyOwnerDir(personal[0].storageKey);
     return reply.status(204).send();

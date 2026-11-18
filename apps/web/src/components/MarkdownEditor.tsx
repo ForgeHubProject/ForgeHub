@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { listIssues, listPulls, listRepoMembers } from "../api";
+import { listIssues, listPulls, listRepoMembers, uploadAttachment } from "../api";
+import { attachmentBase } from "../lib/attachments";
 import type { RepoRef } from "../lib/autolink";
-import { activeTrigger, applyFormat, completeTrigger, EMOJI, type Format, type Trigger } from "../lib/markdownEditing";
+import {
+  activeTrigger, applyFormat, attachmentMarkdown, completeTrigger, EMOJI, replacePlaceholder, uploadPlaceholder, type Format, type Trigger,
+} from "../lib/markdownEditing";
 import { SavedRepliesMenu } from "./SavedRepliesMenu";
 import { Avatar, cx } from "../ui";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -11,8 +14,9 @@ type Suggestion = { key: string; insert: string; label: React.ReactNode; hint?: 
 /**
  * The comment box (#253), GitHub's: Write / Preview tabs, a formatting
  * toolbar, `@` (people), `#` (issues and pull requests) and `:` (emoji)
- * autocomplete, and Ctrl/⌘+Enter to submit. Every place people write Markdown
- * in a conversation uses it.
+ * autocomplete, Ctrl/⌘+Enter to submit, and files pasted, dropped or picked
+ * (signed in, in a repository). Every place people write Markdown in a
+ * conversation uses it.
  */
 export function MarkdownEditor({
   value,
@@ -61,6 +65,12 @@ export function MarkdownEditor({
   const [active, setActive] = useState(0);
   const pendingSelection = useRef<[number, number] | null>(null);
   const sources = useSuggestionSources(token ?? null, repo, trigger?.char ?? null);
+  // Uploads finish after renders that took newer text: they edit this, not a stale `value`.
+  const latest = useRef(value);
+  latest.current = value;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const canAttach = Boolean(token && repo);
 
   // Restore the selection a toolbar action or completion computed, after React writes the value.
   useLayoutEffect(() => {
@@ -100,8 +110,37 @@ export function MarkdownEditor({
     const end = el?.selectionEnd ?? value.length;
     const caret = start + text.length;
     pendingSelection.current = [caret, caret];
-    onValueChange(value.slice(0, start) + text + value.slice(end));
+    latest.current = value.slice(0, start) + text + value.slice(end);
+    onValueChange(latest.current);
     el?.focus();
+  }
+
+  /** Upload files (#253): a placeholder at the caret for each, then its link, or nothing and a message. */
+  function attach(files: File[]) {
+    if (!token || !repo || files.length === 0) return;
+    setAttachError(null);
+    const placeholders = files.map((f) => uploadPlaceholder(f.name));
+    insertText(placeholders.join("\n"));
+    files.forEach((file, i) => {
+      uploadAttachment(token, repo.owner, repo.name, file).then(
+        (a) => settle(placeholders[i], attachmentMarkdown(a, attachmentBase() + a.id)),
+        (err: unknown) => {
+          settle(placeholders[i], "");
+          setAttachError(`${file.name}: ${err instanceof Error ? err.message : "the upload failed"}`);
+        },
+      );
+    });
+  }
+
+  function settle(placeholder: string, replacement: string) {
+    const el = ref.current;
+    const now = { text: latest.current, selStart: el?.selectionStart ?? 0, selEnd: el?.selectionEnd ?? 0 };
+    const next = replacePlaceholder(now, placeholder, replacement);
+    if (next.text === now.text) return;
+    // Keep the caret of someone typing on; don't pull focus back otherwise.
+    if (el && document.activeElement === el) pendingSelection.current = [next.selStart, next.selEnd];
+    latest.current = next.text;
+    onValueChange(next.text);
   }
 
   /** Type a trigger character at the caret and open its list (the toolbar's @ and #). */
@@ -190,6 +229,12 @@ export function MarkdownEditor({
             <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
             <ToolButton label="Mention someone" onClick={() => insertTrigger("@")}><span className="font-semibold">@</span></ToolButton>
             <ToolButton label="Reference an issue or pull request" onClick={() => insertTrigger("#")}><span className="font-semibold">#</span></ToolButton>
+            {canAttach && (
+              <>
+                <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
+                <ToolButton label="Attach files" onClick={() => fileInput.current?.click()}><PaperclipGlyph /></ToolButton>
+              </>
+            )}
             {suggest && (
               <>
                 <span className="mx-1 h-4 w-px bg-fh-border" aria-hidden />
@@ -197,6 +242,18 @@ export function MarkdownEditor({
               </>
             )}
           </div>
+        )}
+        {mode === "write" && canAttach && (
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              attach([...(e.target.files ?? [])]);
+              e.target.value = "";
+            }}
+          />
         )}
         {/* Outside the toolbar: its sideways scroll would clip the menu's panel. */}
         {mode === "write" && token && (
@@ -226,6 +283,20 @@ export function MarkdownEditor({
               if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) syncTrigger(e.currentTarget);
             }}
             onBlur={() => setTimeout(() => setTrigger(null), 150)}
+            onPaste={(e) => {
+              // Text copied from an office app carries a picture of itself too: paste the text.
+              if (!canAttach || e.clipboardData.files.length === 0 || e.clipboardData.types.includes("text/plain")) return;
+              e.preventDefault();
+              attach([...e.clipboardData.files]);
+            }}
+            onDragOver={(e) => {
+              if (canAttach && e.dataTransfer.types.includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (!canAttach || e.dataTransfer.files.length === 0) return;
+              e.preventDefault();
+              attach([...e.dataTransfer.files]);
+            }}
             className="block w-full resize-y bg-transparent px-3 py-2 text-fh-base leading-normal text-fh-fg placeholder:text-fh-fg-subtle focus:outline-none"
           />
           {open && (
@@ -267,6 +338,7 @@ export function MarkdownEditor({
       <div className="flex items-center gap-2 px-3 py-1.5 border-t border-fh-border-muted text-fh-xs text-fh-fg-subtle">
         <MarkdownGlyph />
         <span>Markdown is supported</span>
+        {attachError && <span role="alert" className="text-fh-danger-fg">{attachError}</span>}
         {onSubmit && (
           <span className="ml-auto hidden sm:inline">
             <kbd className="font-mono">Ctrl</kbd>+<kbd className="font-mono">Enter</kbd> to submit
@@ -469,6 +541,9 @@ function SuggestGlyph() {
 }
 function TaskGlyph() {
   return <svg className={glyph} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M2.5 1.75v11.5c0 .138.112.25.25.25h3.17a.75.75 0 0 1 0 1.5H2.75A1.75 1.75 0 0 1 1 13.25V1.75C1 .784 1.784 0 2.75 0h8.5C12.216 0 13 .784 13 1.75v7.736a.75.75 0 0 1-1.5 0V1.75a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25Zm13.274 9.537v-.001l-4.557 4.45a.75.75 0 0 1-1.055-.008l-1.943-1.95a.75.75 0 0 1 1.062-1.058l1.419 1.425 4.026-3.932a.75.75 0 1 1 1.048 1.074Z" /></svg>;
+}
+function PaperclipGlyph() {
+  return <svg className={glyph} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M12.212 3.02a1.753 1.753 0 0 0-2.478.003l-5.83 5.83a3.007 3.007 0 0 0-.88 2.127c0 .795.315 1.551.88 2.116.567.567 1.333.89 2.126.89.79 0 1.548-.321 2.116-.89l5.48-5.48a.75.75 0 0 1 1.061 1.06l-5.48 5.48a4.492 4.492 0 0 1-3.177 1.33c-1.2 0-2.345-.487-3.187-1.33a4.483 4.483 0 0 1-1.32-3.177c0-1.195.475-2.341 1.32-3.186l5.83-5.83a3.25 3.25 0 0 1 5.553 2.297c0 .863-.343 1.691-.953 2.301L7.439 12.39c-.375.377-.884.59-1.416.593a1.998 1.998 0 0 1-1.412-.593 1.992 1.992 0 0 1 0-2.828l5.48-5.48a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042l-5.48 5.48a.492.492 0 0 0 0 .707.499.499 0 0 0 .352.154.51.51 0 0 0 .356-.154l5.833-5.827a1.755 1.755 0 0 0 0-2.481Z" /></svg>;
 }
 function MarkdownGlyph() {
   return <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M14.85 3c.63 0 1.15.52 1.14 1.15v7.7c0 .63-.51 1.15-1.15 1.15H1.15C.52 13 0 12.48 0 11.84V4.15C0 3.52.52 3 1.15 3ZM9 11V5H7L5.5 7 4 5H2v6h2V8l1.5 1.92L7 8v3Zm2.99.5L14.5 8H13V5h-2v3H9.5Z" /></svg>;

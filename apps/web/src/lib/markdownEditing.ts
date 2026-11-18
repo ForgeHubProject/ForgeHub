@@ -1,7 +1,7 @@
 /**
  * The comment box's text operations (#253), kept pure so they're unit-tested:
- * toolbar formatting around the selection, and the `@` / `#` / `:` token the
- * caret is in, for autocomplete.
+ * toolbar formatting around the selection, the `@` / `#` / `:` token the
+ * caret is in, for autocomplete, and the links uploaded files become.
  */
 
 export type Edit = { text: string; selStart: number; selEnd: number };
@@ -90,6 +90,30 @@ export function completeTrigger(text: string, caret: number, trigger: Trigger, r
   const space = /^\s/.test(after) ? "" : " ";
   const next = text.slice(0, trigger.start) + replacement + space + after;
   return { text: next, caret: trigger.start + replacement.length + 1 };
+}
+
+const linkText = (name: string) => name.replace(/[\\[\]]/g, "\\$&");
+
+/** What stands in the text for a file while it uploads (#253). */
+export function uploadPlaceholder(name: string): string {
+  return `[Uploading ${linkText(name)}…]()`;
+}
+
+/** An uploaded file's link: an image shows inline, anything else is a link to download it. */
+export function attachmentMarkdown(a: { name: string; contentType: string }, url: string): string {
+  return `${a.contentType.startsWith("image/") ? "!" : ""}[${linkText(a.name)}](${url})`;
+}
+
+/**
+ * Put `replacement` where the placeholder is ("" drops it), keeping the selection
+ * where it was in the text around it. Text whose placeholder was deleted stays as it is.
+ */
+export function replacePlaceholder(e: Edit, placeholder: string, replacement: string): Edit {
+  const at = e.text.indexOf(placeholder);
+  if (at === -1) return e;
+  const end = at + placeholder.length;
+  const move = (pos: number) => (pos <= at ? pos : pos >= end ? pos - placeholder.length + replacement.length : at + replacement.length);
+  return { text: e.text.slice(0, at) + replacement + e.text.slice(end), selStart: move(e.selStart), selEnd: move(e.selEnd) };
 }
 
 /** The `:` autocomplete's emoji: GitHub's common shortcodes, inserted as the character. */

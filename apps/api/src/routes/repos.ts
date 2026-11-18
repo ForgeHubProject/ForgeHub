@@ -3,7 +3,7 @@ import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import {
-  bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeEmptyOwnerDir, removeSocialPreview,
+  bareRepoPathFromKey, buildStorageKey, createBareRepo, inspectBareRepo, moveBareRepo, removeBareRepo, removeAttachments, removeEmptyOwnerDir, removeSocialPreview,
 } from "../git-storage.js";
 import { seedFromTemplate } from "../repo-template.js";
 import { fetchGithubRepo, ImportError, parseGithubRepo, runGithubImport, type GithubRepo } from "../github-import.js";
@@ -1065,6 +1065,7 @@ export async function repoRoutes(app: FastifyInstance) {
         await removeBareRepo(existing.storageKey);
       }
       if (existing.socialPreviewKey) await removeSocialPreview(existing.id).catch(() => {});
+      await removeAttachments(existing.id).catch(() => {});
 
       return reply.status(204).send();
     },
@@ -1100,6 +1101,7 @@ export async function repoRoutes(app: FastifyInstance) {
         await removeBareRepo(existing.storageKey);
       }
       if (existing.socialPreviewKey) await removeSocialPreview(existing.id).catch(() => {});
+      await removeAttachments(existing.id).catch(() => {});
 
       return reply.status(204).send();
     },

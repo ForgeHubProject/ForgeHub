@@ -47,6 +47,7 @@ vi.mock("../git-storage.js", () => ({
   buildStorageKey: vi.fn().mockReturnValue("alice/my-repo.git"),
   createBareRepo: vi.fn().mockResolvedValue("/tmp/alice/my-repo.git"),
   removeBareRepo: vi.fn().mockResolvedValue(undefined),
+  removeAttachments: vi.fn().mockResolvedValue(undefined),
   moveBareRepo: vi.fn().mockResolvedValue(undefined),
   bareRepoPathFromKey: vi.fn().mockReturnValue("/tmp/repo"),
   inspectBareRepo: vi.fn().mockResolvedValue({
@@ -87,7 +88,7 @@ vi.mock("bcryptjs", () => ({
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
 import { prisma } from "../prisma.js";
-import { removeBareRepo } from "../git-storage.js";
+import { removeAttachments, removeBareRepo } from "../git-storage.js";
 import { createTestServer, authHeader } from "./helpers/server.js";
 import type { FastifyInstance } from "fastify";
 
@@ -397,6 +398,7 @@ describe("DELETE /repos/:name", () => {
       headers: { authorization: token },
     });
     expect(res.statusCode).toBe(204);
+    expect(removeAttachments).toHaveBeenCalledWith(makeRepo().id);
   });
 
   it("404 when repo not found", async () => {

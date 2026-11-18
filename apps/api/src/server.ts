@@ -64,6 +64,7 @@ import { userKeyRoutes } from "./routes/user-keys.js";
 import { deployKeyRoutes } from "./routes/deploy-keys.js";
 import { profileRoutes } from "./routes/profile.js";
 import { socialPreviewRoutes } from "./routes/social-preview.js";
+import { attachmentRoutes } from "./routes/attachments.js";
 import { registrationMode } from "./registration.js";
 import { serverInfoRoutes } from "./routes/server-info.js";
 import { startSshServer } from "./ssh/server.js";
@@ -84,7 +85,8 @@ export async function buildServer() {
 
   const app = Fastify({ logger: true });
 
-  await app.register(cors, { origin: true });
+  // Content-Disposition: the app names an attachment it downloads with the token (#253).
+  await app.register(cors, { origin: true, exposedHeaders: ["Content-Disposition"] });
   await app.register(jwt, { secret });
 
   // Release-asset uploads. Truncate (don't throw) at the size cap so the route
@@ -235,6 +237,7 @@ export async function buildServer() {
   // the auth surfaces they extend.
   await app.register(profileRoutes);
   await app.register(socialPreviewRoutes);
+  await app.register(attachmentRoutes);
 
   // SSH git transport (issue #116). Hard-off unless FORGEHUB_SSH_PORT is set; when
   // started, it is torn down with the Fastify app so tests (and clean shutdowns)

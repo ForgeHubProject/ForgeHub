@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { activeTrigger, applyFormat, completeTrigger } from "../lib/markdownEditing";
+import { activeTrigger, applyFormat, attachmentMarkdown, completeTrigger, replacePlaceholder, uploadPlaceholder } from "../lib/markdownEditing";
 
 const at = (text: string, selStart: number, selEnd = selStart) => ({ text, selStart, selEnd });
 const selected = (e: { text: string; selStart: number; selEnd: number }) => e.text.slice(e.selStart, e.selEnd);
@@ -80,5 +80,36 @@ describe("completeTrigger", () => {
   it("adds the space at the end of the text", () => {
     const done = completeTrigger("cc @al", 6, activeTrigger("cc @al", 6)!, "@alice");
     expect(done).toEqual({ text: "cc @alice ", caret: 10 });
+  });
+});
+
+describe("uploads (#253)", () => {
+  const url = "https://forge.example/attachments/0123456789abcdef0123456789abcdef";
+
+  it("an image shows inline, any other file is a link, and brackets in a name can't break out", () => {
+    expect(uploadPlaceholder("shot.png")).toBe("[Uploading shot.png…]()");
+    expect(attachmentMarkdown({ name: "shot.png", contentType: "image/png" }, url)).toBe(`![shot.png](${url})`);
+    expect(attachmentMarkdown({ name: "spec.pdf", contentType: "application/pdf" }, url)).toBe(`[spec.pdf](${url})`);
+    expect(attachmentMarkdown({ name: "a]b[c.txt", contentType: "text/plain; charset=utf-8" }, url)).toBe(`[a\\]b\\[c.txt](${url})`);
+    expect(uploadPlaceholder("x]")).toBe("[Uploading x\\]…]()");
+  });
+
+  it("swaps the placeholder for the link and keeps the caret in the text after it", () => {
+    const ph = uploadPlaceholder("shot.png");
+    const text = `see ${ph} and more`;
+    const caret = text.length; // typing on at the end
+    const done = replacePlaceholder(at(text, caret), ph, "![shot.png](u)");
+    expect(done.text).toBe("see ![shot.png](u) and more");
+    expect(done.selStart).toBe(done.text.length);
+    // A caret before the placeholder stays put; one inside it lands after the replacement.
+    expect(replacePlaceholder(at(text, 2), ph, "L")).toEqual(at("see L and more", 2));
+    expect(replacePlaceholder(at(text, 6), ph, "L")).toEqual(at("see L and more", 5));
+  });
+
+  it("a failed upload drops its placeholder; a deleted placeholder leaves the text alone", () => {
+    const ph = uploadPlaceholder("big.zip");
+    expect(replacePlaceholder(at(`a ${ph} b`, 0), ph, "").text).toBe("a  b");
+    const edited = at("the placeholder was deleted", 3);
+    expect(replacePlaceholder(edited, ph, "L")).toBe(edited);
   });
 });

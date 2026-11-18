@@ -2986,6 +2986,24 @@ export async function fetchSocialPreview(token: string | null, handle: string, r
   return URL.createObjectURL(await res.blob());
 }
 
+/** A comment attachment (#253): an image or file stored in the repository, at `/attachments/<id>`. */
+export type Attachment = { id: string; name: string; contentType: string; size: number; url: string };
+
+export async function uploadAttachment(token: string, handle: string, repoName: string, file: File): Promise<Attachment> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/repos/${handle}/${repoName}/attachments`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<Attachment>;
+}
+
 /** Clear the current user's avatar. */
 export async function deleteAvatar(token: string): Promise<void> {
   return req("/users/me/avatar", { method: "DELETE", token });
