@@ -4,6 +4,7 @@
 **/.env.*
 !**/.env.example
 **/git-storage
+**/git-storage-*
 **/*.db
 **/*.db-journal
 .git

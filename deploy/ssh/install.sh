@@ -56,6 +56,31 @@ chmod 0644 /etc/forgehub/ssh.conf
 install -m 0755 -o root -g root "$here/forgehub-authorized-keys" /usr/local/sbin/forgehub-authorized-keys
 install -m 0755 -o root -g root "$here/forgehub-shell" /usr/local/sbin/forgehub-shell
 
+# SELinux (#290): sshd runs the helper, and the helper's ssh, in sshd's own domain,
+# which may not connect to ForgeHub's port; the lookup then fails and every key gets
+# "Permission denied". Allow sshd's domains (sshd_t; sshd_session_t on EL10) exactly
+# that. Labelling the port ssh_port_t would not help: only ssh_t may connect there.
+# shortcut: covers listen ports 1024-32767 (unreserved_port_t), the default 2222 among them.
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+  if ! command -v checkmodule >/dev/null 2>&1 || ! command -v semodule_package >/dev/null 2>&1; then
+    if command -v dnf >/dev/null 2>&1; then dnf install -y checkpolicy policycoreutils
+    elif command -v apt-get >/dev/null 2>&1; then apt-get install -y checkpolicy semodule-utils policycoreutils
+    elif command -v zypper >/dev/null 2>&1; then zypper install -y checkpolicy policycoreutils
+    else echo "install checkpolicy and policycoreutils, then rerun" >&2; exit 1; fi
+  fi
+  se=$(mktemp -d)
+  cat > "$se/forgehub-ssh.te" <<'TE'
+module forgehub-ssh 1.0;
+require { type unreserved_port_t; class tcp_socket name_connect; }
+optional { require { type sshd_t; } allow sshd_t unreserved_port_t:tcp_socket name_connect; }
+optional { require { type sshd_session_t; } allow sshd_session_t unreserved_port_t:tcp_socket name_connect; }
+TE
+  checkmodule -M -m -o "$se/forgehub-ssh.mod" "$se/forgehub-ssh.te"
+  semodule_package -o "$se/forgehub-ssh.pp" -m "$se/forgehub-ssh.mod"
+  semodule -i "$se/forgehub-ssh.pp"
+  rm -rf "$se"
+fi
+
 # sshd must read drop-ins; older configs have no Include line.
 main=/etc/ssh/sshd_config
 if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/' "$main"; then

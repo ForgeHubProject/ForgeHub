@@ -52,7 +52,7 @@ ForgeHub: $label ($dir) is not writable by uid $(id -u).
 The API container no longer runs as root. A volume created by an earlier ForgeHub
 image is still owned by root and has to be handed over once:
 
-  docker compose run --rm --user 0 --entrypoint chown api -R $(id -u):$(id -g) $dir
+  docker compose run --rm --user 0 --entrypoint chown forgehub -R $(id -u):$(id -g) $dir
 
 Then start the stack again. This is a one-time migration.
 EOF
@@ -78,7 +78,7 @@ ForgeHub: the database file ($DB_FILE) is not writable by uid $(id -u).
 
 The API container no longer runs as root. Hand the data volume over once:
 
-  docker compose run --rm --user 0 --entrypoint chown api -R $(id -u):$(id -g) $DB_DIR
+  docker compose run --rm --user 0 --entrypoint chown forgehub -R $(id -u):$(id -g) $DB_DIR
 
 Then start the stack again. This is a one-time migration.
 EOF
@@ -174,7 +174,7 @@ If this database was created by an earlier ForgeHub — before the migration his
 was repaired — its tables already exist and the catch-up migration has nothing to
 do. Record it as applied, once, and start the stack again:
 
-  docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma api \
+  docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma forgehub \
     migrate resolve --applied 20260807000000_catch_up_schema
 
 Check the error above first: if it is NOT "table already exists", baselining is the
@@ -191,8 +191,8 @@ EOF
     # DDL directly from schema.prisma — idempotent, safe for additive changes.
     #
     # For DESTRUCTIVE schema changes (dropped/renamed column or table) run once:
-    #   docker compose run --rm forgehub /usr/local/bin/docker-entrypoint.sh \
-    #     /repo/node_modules/.bin/prisma db push --accept-data-loss
+    #   docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma forgehub \
+    #     db push --accept-data-loss
     # Back up your data first.
     if ! $PRISMA_BIN db push; then
       cat >&2 <<'EOF'
@@ -202,8 +202,8 @@ ForgeHub: schema push did not apply.
 If the schema change would destroy data (dropped column, incompatible type),
 Prisma requires explicit confirmation.  Back up your data, then run:
 
-  docker compose run --rm forgehub \
-    /repo/node_modules/.bin/prisma db push --accept-data-loss
+  docker compose run --rm --entrypoint /repo/node_modules/.bin/prisma forgehub \
+    db push --accept-data-loss
 
 EOF
       exit 1

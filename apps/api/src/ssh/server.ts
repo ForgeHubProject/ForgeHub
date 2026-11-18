@@ -11,7 +11,7 @@ import { resolveRepo, canRead, canWrite, redirectedRepoId, repoAccessInclude, ty
 import { fingerprintFromRaw } from "./keys.js";
 import { generateEd25519KeyPair, isTruncatedEd25519Key } from "./keygen.js";
 import { resolveActorByFingerprint, touchSshKey, touchDeployKey, type SshActor } from "./store.js";
-import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isPrivateAddress } from "./forward.js";
+import { KEYS_USER, KEY_LOOKUP_COMMAND, decodeForwardUser, forwardKeys, isForwardKey, isOwnAddress, isPrivateAddress } from "./forward.js";
 
 const { Server, utils: sshUtils } = ssh2;
 
@@ -419,9 +419,9 @@ function onForwardedAuthentication(
   bind: (actor: BoundActor, ip?: string) => void,
   keys: ReturnType<typeof forwardKeys>,
 ): void {
-  if (!isPrivateAddress(ip)) {
+  if (!isPrivateAddress(ip) && !isOwnAddress(ip)) {
     // Not the host's sshd. Count it, so a scan from one address is throttled too.
-    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not a loopback/private address");
+    app.log.warn({ ip }, "ssh: forwarded auth refused — source is not loopback, private or this machine's own address");
     recordAuthFailure(ip);
     ctx.reject();
     return;
