@@ -51,15 +51,14 @@ async function autoMergePayload(pr: {
  */
 async function reviewGate(
   storageKey: string | null,
-  prId: string,
-  fromBranch: string,
+  pr: { id: string; fromBranch: string; authorId: string },
   override: boolean,
 ): Promise<{ blocked: boolean; changesRequested: number }> {
   let headSha: string | null = null;
   if (storageKey) {
-    try { headSha = await resolveBranchSha(storageKey, fromBranch); } catch { headSha = null; }
+    try { headSha = await resolveBranchSha(storageKey, pr.fromBranch); } catch { headSha = null; }
   }
-  const summary = await computeReviewSummary(prId, headSha);
+  const summary = await computeReviewSummary(pr.id, headSha, pr.authorId);
   return { blocked: summary.changesRequested > 0 && !override, changesRequested: summary.changesRequested };
 }
 
@@ -107,7 +106,7 @@ async function loadMergeProtection(
   repo: { id: string },
   handle: string,
   name: string,
-  pr: { id: string; toBranch: string },
+  pr: { id: string; toBranch: string; authorId: string },
   headSha: string | null,
   authorization?: string,
 ): Promise<ProtectionMergeStatus | null> {
@@ -118,7 +117,7 @@ async function loadMergeProtection(
   if (!needsApprovals && !needsChecks) return null; // protected, but no merge-gate rules
 
   const review = needsApprovals
-    ? await computeReviewSummary(pr.id, headSha)
+    ? await computeReviewSummary(pr.id, headSha, pr.authorId)
     : { approvals: 0, changesRequested: 0 };
   const checks = needsChecks
     ? await getCheckSummary(app, handle, name, headSha ?? "", authorization)
@@ -319,7 +318,7 @@ export async function pullRoutes(app: FastifyInstance) {
       } catch { mergeable = pr.state === "OPEN" ? false : null; }
     }
 
-    const reviewSummary = await computeReviewSummary(pr.id, headSha);
+    const reviewSummary = await computeReviewSummary(pr.id, headSha, pr.authorId);
     // How far the head is behind its base (#256), for "Update branch".
     const behindBy = pr.state === "OPEN" && repo.storageKey
       ? (await countAheadBehind(repo.storageKey, pr.toBranch, pr.fromBranch)).behind
@@ -603,7 +602,7 @@ export async function pullRoutes(app: FastifyInstance) {
     }
 
     // Soft review gate: block on active change requests unless overridden.
-    const gate = await reviewGate(repo.storageKey, pr.id, pr.fromBranch, override === true);
+    const gate = await reviewGate(repo.storageKey, pr, override === true);
     if (gate.blocked) {
       return reply.status(409).send({ error: changesRequestedError(gate.changesRequested), changesRequested: true });
     }
@@ -786,7 +785,7 @@ export async function pullRoutes(app: FastifyInstance) {
     }
 
     // Soft review gate: block on active change requests unless overridden.
-    const gate = await reviewGate(repo.storageKey, pr.id, pr.fromBranch, body.override === true);
+    const gate = await reviewGate(repo.storageKey, pr, body.override === true);
     if (gate.blocked) {
       return reply.status(409).send({ error: changesRequestedError(gate.changesRequested), changesRequested: true });
     }

@@ -65,7 +65,7 @@ export async function checkSummaryForCommit(repoId: string, sha: string): Promis
  * reasons (empty ⇒ ready to fire). Pure read — never mutates anything.
  */
 export async function evaluateAutoMergeGates(
-  pr: { id: string; toBranch: string; isDraft?: boolean },
+  pr: { id: string; toBranch: string; isDraft?: boolean; authorId?: string },
   repoId: string,
   headSha: string | null,
 ): Promise<{ ready: boolean; reasons: string[] }> {
@@ -77,7 +77,7 @@ export async function evaluateAutoMergeGates(
   // this evaluation, so clearing the flag is itself an auto-merge signal.
   if (pr.isDraft) reasons.push("pull request is a draft");
 
-  const review = await computeReviewSummary(pr.id, headSha);
+  const review = await computeReviewSummary(pr.id, headSha, pr.authorId ?? null);
   if (review.changesRequested > 0) {
     reasons.push(`${review.changesRequested} active change request${review.changesRequested === 1 ? "" : "s"}`);
   }
