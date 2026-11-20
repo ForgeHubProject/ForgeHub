@@ -164,7 +164,8 @@ import type { FastifyInstance } from "fastify";
 
 // alice is the repo owner (ownerId: "user-alice") and the authenticated user in most tests
 const ALICE_ID = "user-alice";
-// bob is the PR author — used to test "cannot review own PR"
+// bob is the PR author — used to test what the author may and may not do on
+// their own PR (comment: yes; approve / request changes: no)
 const BOB_ID = "user-bob";
 const OTHER_ID = "user-other-prc";
 
@@ -481,8 +482,8 @@ describe("POST /repos/:handle/:name/pulls/:number/reviews", () => {
     expect(body.author).toBe("alice");
   });
 
-  it("POST → 422 when author tries to review own PR (PR authorId = userId)", async () => {
-    // bob is the PR author; bob tries to review his own PR
+  it("POST → 422 when the PR author approves their own PR", async () => {
+    // bob is the PR author; bob tries to approve his own PR
     const res = await app.inject({
       method: "POST",
       url: "/repos/alice/my-repo/pulls/1/reviews",
@@ -490,7 +491,51 @@ describe("POST /repos/:handle/:name/pulls/:number/reviews", () => {
       payload: { state: "approved", body: "Self-approving" },
     });
     expect(res.statusCode).toBe(422);
-    expect(res.json().error).toMatch(/own pull request/i);
+    expect(res.json().error).toMatch(/cannot approve their own pull request/i);
+    expect(vi.mocked(prisma.pullRequestReview.create)).not.toHaveBeenCalled();
+  });
+
+  it("POST → 422 when the PR author requests changes on their own PR", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: bobToken },
+      payload: { state: "changes_requested", body: "Self-blocking" },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/cannot request changes on their own pull request/i);
+    expect(vi.mocked(prisma.pullRequestReview.create)).not.toHaveBeenCalled();
+  });
+
+  it("POST → 201 when the PR author leaves a Comment review on their own PR (as on GitHub)", async () => {
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(
+      makePRReview({ authorId: BOB_ID, author: { handle: "bob" }, state: "COMMENTED" as const, body: "Note to reviewers" }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: bobToken },
+      payload: { state: "commented", body: "Note to reviewers" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().state).toBe("commented");
+    expect(vi.mocked(prisma.pullRequestReview.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ authorId: BOB_ID, state: "COMMENTED" }) }),
+    );
+  });
+
+  it("POST → 201 when the PR author starts a pending review on their own PR", async () => {
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(
+      makePendingReview({ authorId: BOB_ID, author: { handle: "bob" } }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/reviews",
+      headers: { authorization: bobToken },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().state).toBe("pending");
   });
 
   it("403s a repo:read PAT submitting a review; a session token passes (wave-B MAJOR-2)", async () => {
@@ -587,6 +632,45 @@ describe("PUT /repos/:handle/:name/pulls/:number/reviews/:reviewId", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().state).toBe("approved");
+  });
+
+  it("PUT → 422 when the PR author submits their own draft as an approval", async () => {
+    const bobToken = await authHeader(app, BOB_ID);
+    vi.mocked(prisma.pullRequestReview.findFirst).mockResolvedValue(
+      makePendingReview({ authorId: BOB_ID, author: { handle: "bob" } }) as never,
+    );
+    for (const state of ["approved", "changes_requested"]) {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/repos/alice/my-repo/pulls/1/reviews/review-pending-1",
+        headers: { authorization: bobToken },
+        payload: { state },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error).toMatch(/own pull request/i);
+    }
+    expect(vi.mocked(prisma.pullRequestReview.update)).not.toHaveBeenCalled();
+  });
+
+  it("PUT → 200 when the PR author submits their own draft (line comments) as a Comment", async () => {
+    const bobToken = await authHeader(app, BOB_ID);
+    vi.mocked(prisma.pullRequestReview.findFirst).mockResolvedValue(
+      makePendingReview({ authorId: BOB_ID, author: { handle: "bob" } }) as never,
+    );
+    vi.mocked(prisma.pullRequestReview.update).mockResolvedValue(
+      makePRReview({ id: "review-pending-1", authorId: BOB_ID, author: { handle: "bob" }, state: "COMMENTED" as const }) as never,
+    );
+    const res = await app.inject({
+      method: "PUT",
+      url: "/repos/alice/my-repo/pulls/1/reviews/review-pending-1",
+      headers: { authorization: bobToken },
+      payload: { state: "commented" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().state).toBe("commented");
+    expect(vi.mocked(prisma.pullRequestReview.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ state: "COMMENTED" }) }),
+    );
   });
 
   it("PUT → 422 if review is already submitted", async () => {
@@ -744,20 +828,38 @@ describe("POST /repos/:handle/:name/pulls/:number/review-comments", () => {
     expect(res.json().error).toMatch(/line/i);
   });
 
-  it("POST → 422 when commenting on own PR", async () => {
-    // bob is the PR author, and bob tries to post a review comment
+  it("POST → 201 when the PR author comments on a line of their own PR (as on GitHub)", async () => {
+    // bob is the PR author; his line comment opens his own pending review.
+    vi.mocked(prisma.pullRequestReview.create).mockResolvedValue(
+      makePendingReview({ authorId: BOB_ID, author: { handle: "bob" } }) as never,
+    );
+    vi.mocked(prisma.pullRequestReviewComment.create).mockResolvedValue(
+      makeReviewComment({
+        authorId: BOB_ID,
+        author: { handle: "bob" },
+        body: "Reviewers: this is the tricky part",
+        filePath: "config.txt",
+        position: JSON.stringify({ type: "text", line: 7, side: "incoming" }),
+      }) as never,
+    );
     const res = await app.inject({
       method: "POST",
       url: "/repos/alice/my-repo/pulls/1/review-comments",
       headers: { authorization: bobToken },
       payload: {
-        body: "Self-comment",
-        filePath: "assembly.gltf",
-        position: { type: "gltf", entityId: "assembly.part-a" },
+        body: "Reviewers: this is the tricky part",
+        filePath: "config.txt",
+        position: { type: "text", line: 7, side: "incoming" },
       },
     });
-    expect(res.statusCode).toBe(422);
-    expect(res.json().error).toMatch(/own pull request/i);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().author).toBe("bob");
+    expect(vi.mocked(prisma.pullRequestReview.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ authorId: BOB_ID, state: "PENDING" }) }),
+    );
+    expect(vi.mocked(prisma.pullRequestReviewComment.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ authorId: BOB_ID, filePath: "config.txt" }) }),
+    );
   });
 });
 
@@ -1054,6 +1156,29 @@ describe("review-comment suggestions (issue #119)", () => {
     expect(res.json().suggestionApplied).toBe(false);
     expect(vi.mocked(prisma.pullRequestReviewComment.create)).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ suggestion: "const x = 2;" }) }),
+    );
+  });
+
+  it("lets the PR author suggest a change on their own incoming-side line", async () => {
+    const bobToken = await authHeader(app, BOB_ID);
+    vi.mocked(prisma.pullRequestReviewComment.create).mockResolvedValue(
+      suggestionComment({ authorId: BOB_ID, author: { handle: "bob" } }) as never,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/repos/alice/my-repo/pulls/1/review-comments",
+      headers: { authorization: bobToken },
+      payload: {
+        body: "Self-suggestion",
+        filePath: "src/a.ts",
+        position: { type: "text", line: 2, side: "incoming" },
+        suggestion: "const x = 2;",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().suggestion).toBe("const x = 2;");
+    expect(vi.mocked(prisma.pullRequestReviewComment.create)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ authorId: BOB_ID, suggestion: "const x = 2;" }) }),
     );
   });
 

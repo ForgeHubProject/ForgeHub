@@ -874,6 +874,18 @@ describe("GET /repos/:handle/:name/pulls/:number — review summary", () => {
     expect(s.staleCount).toBe(1);         // ben
     expect(s.reviewers).toHaveLength(3);
   });
+
+  it("leaves the PR author's own Comment reviews out of the reviewer summary", async () => {
+    vi.mocked(prisma.pullRequestReview.findMany).mockResolvedValue([] as never);
+    const res = await app.inject({ method: "GET", url: "/repos/alice/my-repo/pulls/1" });
+    expect(res.statusCode).toBe(200);
+    // The author may comment on their own lines, but that doesn't make them a reviewer.
+    expect(vi.mocked(prisma.pullRequestReview.findMany)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ state: { not: "PENDING" }, authorId: { not: AUTHOR_ID } }),
+      }),
+    );
+  });
 });
 
 describe("POST /repos/:handle/:name/pulls/:number/revert", () => {

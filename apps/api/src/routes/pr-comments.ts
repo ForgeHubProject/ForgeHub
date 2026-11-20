@@ -165,6 +165,17 @@ function validatePosition(position: unknown): { valid: true; serialized: string 
   return { valid: false, error: `Unknown position type: '${type}'` };
 }
 
+/**
+ * GitHub's rule for reviewing your own pull request: the author may comment
+ * (inline threads, single comments, a "Comment" review) but may not approve it
+ * or request changes on it. Returns the 422 message for a forbidden verdict.
+ */
+function selfReviewVerdictError(state: string): string | null {
+  if (state === "approved") return "Authors cannot approve their own pull request";
+  if (state === "changes_requested") return "Authors cannot request changes on their own pull request";
+  return null;
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function prCommentRoutes(app: FastifyInstance) {
@@ -416,11 +427,6 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
       if (!ctx) return;
 
-      // Authors cannot review their own PR
-      if (ctx.pr.authorId === userId) {
-        return reply.status(422).send({ error: "Authors cannot review their own pull request" });
-      }
-
       const { state, body } = request.body as { state?: string; body?: string };
 
       const validStates = ["approved", "changes_requested", "commented"];
@@ -432,6 +438,10 @@ export async function prCommentRoutes(app: FastifyInstance) {
         if (!validStates.includes(state)) {
           return reply.status(400).send({ error: `state must be one of: ${validStates.join(", ")}` });
         }
+        // The PR author may leave a "Comment" review (or start a pending one),
+        // but never approve or request changes on their own pull request.
+        const selfVerdict = ctx.pr.authorId === userId ? selfReviewVerdictError(state) : null;
+        if (selfVerdict) return reply.status(422).send({ error: selfVerdict });
         dbState = state.toUpperCase();
         submittedAt = new Date();
         commitSha = await headShaOf(ctx.repo, ctx.pr);
@@ -547,6 +557,10 @@ export async function prCommentRoutes(app: FastifyInstance) {
       if (!state || !validStates.includes(state)) {
         return reply.status(400).send({ error: `state must be one of: ${validStates.join(", ")}` });
       }
+      // The author's draft (inline comments on their own PR) can only be
+      // submitted as a comment: the review stays PENDING otherwise.
+      const selfVerdict = ctx.pr.authorId === userId ? selfReviewVerdictError(state) : null;
+      if (selfVerdict) return reply.status(422).send({ error: selfVerdict });
 
       const commitSha = await headShaOf(ctx.repo, ctx.pr);
       const updated = await prisma.pullRequestReview.update({
@@ -666,11 +680,9 @@ export async function prCommentRoutes(app: FastifyInstance) {
       const ctx = await resolveRepoAndPR(handle, name, number, userId, reply as never);
       if (!ctx) return;
 
-      // Cannot comment on your own PR
-      if (ctx.pr.authorId === userId) {
-        return reply.status(422).send({ error: "Authors cannot post review comments on their own pull request" });
-      }
-
+      // The PR author may comment on (and suggest changes to) their own diff
+      // lines, as on GitHub; only the approve / request-changes verdicts are
+      // off-limits to them (enforced where a review is submitted).
       const { body, filePath, position, suggestion } = request.body as {
         body?: string;
         filePath?: string;
@@ -830,8 +842,7 @@ export async function prCommentRoutes(app: FastifyInstance) {
 
   // POST /repos/:handle/:name/pulls/:number/review-comments/:commentId/replies
   // Reply to a review thread. Attaches to the ROOT comment's review, so answering
-  // a reviewer never opens a new pending review — and the PR author may reply too
-  // (the "authors can't post review comments" rule is relaxed for replies).
+  // a reviewer never opens a new pending review. The PR author may reply too.
   app.post(
     "/repos/:handle/:name/pulls/:number/review-comments/:commentId/replies",
     { preHandler: [app.authenticate] },

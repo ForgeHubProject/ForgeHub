@@ -54,13 +54,22 @@ const EMPTY_SUMMARY: ReviewSummary = {
 /**
  * Compute the review summary for a PR. `headSha` is the current head SHA (null
  * when the repo has no git storage / the branch can't be resolved).
+ * `prAuthorId` leaves the PR author's own reviews out: the author may comment on
+ * their own diff (a "Comment" review), but, as on GitHub, that does not make
+ * them one of the PR's reviewers. Their threads still count as unresolved.
  */
 export async function computeReviewSummary(
   pullRequestId: string,
   headSha: string | null,
+  prAuthorId: string | null,
 ): Promise<ReviewSummary> {
   const submitted = await prisma.pullRequestReview.findMany({
-    where: { pullRequestId, state: { not: "PENDING" }, submittedAt: { not: null } },
+    where: {
+      pullRequestId,
+      state: { not: "PENDING" },
+      submittedAt: { not: null },
+      ...(prAuthorId ? { authorId: { not: prAuthorId } } : {}),
+    },
     orderBy: { submittedAt: "asc" },
     include: { author: { select: { handle: true } } },
   });

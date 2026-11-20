@@ -296,7 +296,10 @@ export function PullDetail({
   const hasPendingReview = pendingReview != null;
   const pendingCount = reviewComments.filter((c) => c.pending).length;
   const submittedReviews = reviews.filter((r) => r.state !== "pending" && r.submittedAt);
-  const canComment = !isAuthor && pr.state === "open" && !isGuest(user);
+  // Anyone signed in may comment on an open PR's lines, its author included
+  // (as on GitHub). Approve / Request changes are what the author can't do: the
+  // review panel disables them for the author, and the API refuses them.
+  const canComment = pr.state === "open" && !isGuest(user);
 
   async function onCreateReviewComment(
     filePath: string,
@@ -810,7 +813,7 @@ export function PullDetail({
                     width={420}
                     trigger={(_open, toggle) => (
                       <Button size="sm" variant={pendingCount > 0 ? "primary" : "default"} onClick={toggle}>
-                        {isAuthor ? "Review" : "Submit review"}
+                        Submit review
                         {pendingCount > 0 && <span className="ml-1.5 font-mono">{pendingCount}</span>}
                       </Button>
                     )}

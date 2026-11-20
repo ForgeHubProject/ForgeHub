@@ -22,7 +22,11 @@ export type ReviewInteraction = {
   reactionCtx?: ReactionCtx;
   /** The viewer has an unsubmitted draft review in progress. */
   hasPendingReview: boolean;
-  /** The viewer may open new inline comments (logged in, not the PR author, PR open). */
+  /**
+   * The viewer may open new inline comments (signed in, PR open). The PR author
+   * may too, as on GitHub; only the approve / request-changes verdicts are
+   * closed to them (see `reviewVerdictOptions`).
+   */
   canComment: boolean;
   /** Whether the viewer may resolve/unresolve a thread rooted by the given author. */
   canResolve: (rootAuthor: string) => boolean;
@@ -486,10 +490,37 @@ export function groupThreads(comments: ReviewComment[]): ReviewThreadData[] {
     .sort((a, b) => a.root.createdAt.localeCompare(b.root.createdAt));
 }
 
+export type VerdictOption = { value: Verdict; label: string; hint: string; disabled: boolean };
+
+/**
+ * The verdicts offered in "Finish your review". As on GitHub, the PR author can
+ * submit a Comment review (their own line comments) but Approve and Request
+ * changes stay listed and disabled, each saying why.
+ */
+export function reviewVerdictOptions(isAuthor: boolean): VerdictOption[] {
+  return [
+    { value: "commented", label: "Comment", hint: "General feedback without explicit approval", disabled: false },
+    {
+      value: "approved",
+      label: "Approve",
+      hint: isAuthor ? "Pull request authors can't approve their own pull request" : "Submit feedback and approve merging",
+      disabled: isAuthor,
+    },
+    {
+      value: "changes_requested",
+      label: "Request changes",
+      hint: isAuthor
+        ? "Pull request authors can't request changes on their own pull request"
+        : "Submit feedback that must be addressed before merging",
+      disabled: isAuthor,
+    },
+  ];
+}
+
 /**
  * The "finish your review" panel: an optional summary plus Comment / Approve /
  * Request changes. Submitting folds in any draft inline comments. The PR author
- * gets a note instead — they can still reply to and resolve threads.
+ * gets the same panel with only Comment enabled.
  */
 export function ReviewSubmitPanel({
   currentUser,
@@ -514,20 +545,8 @@ export function ReviewSubmitPanel({
   const [body, setBody] = useState("");
   const [choice, setChoice] = useState<Verdict>("commented");
 
-  if (isAuthor) {
-    return (
-      <div className="rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-fh-sm text-fh-fg-muted">
-        You can't submit a review on your own pull request. You can still reply to and resolve review threads.
-      </div>
-    );
-  }
-
-  const options: Array<{ value: Verdict; label: string; hint: string }> = [
-    { value: "commented", label: "Comment", hint: "General feedback without explicit approval" },
-    { value: "approved", label: "Approve", hint: "Submit feedback and approve merging" },
-    { value: "changes_requested", label: "Request changes", hint: "Submit feedback that must be addressed before merging" },
-  ];
-  const active = options.find((o) => o.value === choice)!;
+  const options = reviewVerdictOptions(isAuthor);
+  const active = options.find((o) => o.value === choice && !o.disabled) ?? options[0];
 
   return (
     <div className="rounded-md border border-fh-border bg-fh-surface overflow-hidden">
@@ -561,12 +580,16 @@ export function ReviewSubmitPanel({
         />
         <div className="flex flex-col gap-1.5">
           {options.map((o) => (
-            <label key={o.value} className="flex items-start gap-2 cursor-pointer text-fh-sm">
+            <label
+              key={o.value}
+              className={cx("flex items-start gap-2 text-fh-sm", o.disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer")}
+            >
               <input
                 type="radio"
                 name="review-verdict"
                 className="mt-1 accent-[var(--fh-accent-emphasis,currentColor)]"
-                checked={choice === o.value}
+                checked={active.value === o.value}
+                disabled={o.disabled}
                 onChange={() => setChoice(o.value)}
               />
               <span className="min-w-0">
@@ -582,10 +605,10 @@ export function ReviewSubmitPanel({
         <div className="flex justify-end">
           <Button
             type="button"
-            variant={choice === "changes_requested" ? "danger" : "primary"}
+            variant={active.value === "changes_requested" ? "danger" : "primary"}
             size="sm"
             loading={busy}
-            onClick={() => onSubmit(choice, body.trim())}
+            onClick={() => onSubmit(active.value, body.trim())}
           >
             Submit {active.label.toLowerCase()}
           </Button>
