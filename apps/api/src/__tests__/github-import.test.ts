@@ -87,8 +87,12 @@ describe("fetchGithubRepo", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("FORGEHUB_GITHUB_TOKEN", ""); // whatever the shell running the tests has
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
 
   const answer = (status: number, body: unknown, headers: Record<string, string> = {}) =>
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status, headers }));
@@ -145,6 +149,50 @@ describe("fetchGithubRepo", () => {
     const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
     expect(e!.status).toBe(503);
     expect(e!.message).toMatch(/60 GitHub requests/);
+    expect(e!.message).toMatch(/Try again later\.$/);
+  });
+
+  it("says how many requests the hour had and when they come back, from GitHub's headers", async () => {
+    vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "github_pat_test");
+    const reset = String(Math.floor(Date.now() / 1000) + 11 * 60 + 30);
+    answer(429, { message: "API rate limit exceeded" }, { "x-ratelimit-remaining": "0", "x-ratelimit-limit": "5000", "x-ratelimit-reset": reset });
+    const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
+    expect(e!.status).toBe(503);
+    expect(e!.message).toBe("This server has used up its 5,000 GitHub requests for the hour. Try again in 12 minutes.");
+  });
+
+  describe("with FORGEHUB_GITHUB_TOKEN set", () => {
+    it("sends it to GitHub's API, trimmed, for 5,000 requests an hour instead of 60", async () => {
+      vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "  github_pat_test\n");
+      answer(200, publicRepo);
+      await expect(fetchGithubRepo("octocat", "Hello-World")).resolves.toMatchObject({ name: "Hello-World" });
+      const [, init] = fetchMock.mock.calls[0]!;
+      expect(init.headers).toMatchObject({ Authorization: "Bearer github_pat_test", "User-Agent": "ForgeHub" });
+    });
+
+    it("still refuses a private repository the token's owner can see", async () => {
+      vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "github_pat_test");
+      answer(200, { ...publicRepo, private: true });
+      const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
+      expect(e!.status).toBe(404);
+      expect(e!.message).toMatch(/only public repositories/i);
+    });
+
+    it("says the token was refused, without showing it", async () => {
+      vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "github_pat_test");
+      answer(401, { message: "Bad credentials" });
+      const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
+      expect(e!.status).toBe(502);
+      expect(e!.message).toMatch(/refused this server's token/);
+      expect(e!.message).not.toContain("github_pat_test");
+    });
+
+    it("a blank one counts as unset", async () => {
+      vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "   ");
+      answer(200, publicRepo);
+      await fetchGithubRepo("octocat", "Hello-World");
+      expect(JSON.stringify(fetchMock.mock.calls[0]![1].headers)).not.toMatch(/authorization/i);
+    });
   });
 
   it("reports GitHub being unreachable", async () => {
@@ -194,6 +242,17 @@ describe("runGithubImport", () => {
     expect(setDefaultBranch).toHaveBeenCalledWith("ada/hello.git", "master");
     expect(prisma.repo.update).toHaveBeenCalledWith({ where: { id: "repo-1" }, data: { importStatus: null, importError: null } });
     expect(runPostReceiveEffects).toHaveBeenCalledWith(app, repo, "user-ada", "/srv/git/ada/hello.git", new Map());
+  });
+
+  it("never hands git the server's GitHub token", async () => {
+    vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "github_pat_test");
+    git(null);
+    await runGithubImport(app, repo, "user-ada", source);
+    vi.unstubAllEnvs();
+    const [, args, opts] = vi.mocked(execFile).mock.calls[0]! as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(JSON.stringify(args)).not.toContain("github_pat_test");
+    expect(opts.env).not.toHaveProperty("FORGEHUB_GITHUB_TOKEN");
+    expect(JSON.stringify(opts.env)).not.toContain("github_pat_test");
   });
 
   it("leaves HEAD alone for an empty repository", async () => {

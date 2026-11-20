@@ -46,14 +46,36 @@ export type GithubRepo = {
   defaultBranch: string | null;
 };
 
-/** A public repository's metadata, asked without a token; throws {@link ImportError} for what can't be imported (#289). */
+/**
+ * The server's optional GitHub token. GitHub's API allows 60 requests an hour per server address
+ * without one, 5,000 with one; each import or retry asks once. Only that request carries it:
+ * the git fetch never does, and a private repository is refused either way.
+ */
+function githubToken(): string | null {
+  return process.env["FORGEHUB_GITHUB_TOKEN"]?.trim() || null;
+}
+
+/** "Try again in 12 minutes", from GitHub's `x-ratelimit-reset` (seconds since the epoch). */
+function tryAgain(reset: string | null): string {
+  const ms = Number(reset) * 1000 - Date.now();
+  if (!reset || !Number.isFinite(ms)) return "Try again later.";
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  return `Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+}
+
+/** A public repository's metadata; throws {@link ImportError} for what can't be imported (#289). */
 export async function fetchGithubRepo(owner: string, name: string): Promise<GithubRepo> {
   const where = `github.com/${owner}/${name}`;
   const notPublic = new ImportError(404, `There is no public repository at ${where}. Only public repositories can be imported.`);
+  const token = githubToken();
   let res: Response;
   try {
     res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "ForgeHub" },
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "ForgeHub",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
@@ -63,13 +85,22 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
   if (res.status === 404) throw notPublic;
   if (!res.ok) {
     if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
-      throw new ImportError(503, "This server has used up its 60 GitHub requests for the hour. Try again later.");
+      const limit = Number(res.headers.get("x-ratelimit-limit")) || (token ? 5000 : 60);
+      throw new ImportError(
+        503,
+        `This server has used up its ${limit.toLocaleString("en-US")} GitHub requests for the hour. ${tryAgain(res.headers.get("x-ratelimit-reset"))}`,
+      );
+    }
+    // A revoked or expired token fails every import, public repositories included.
+    if (res.status === 401 && token) {
+      throw new ImportError(502, "GitHub refused this server's token. Ask the server's administrator to replace it.");
     }
     throw new ImportError(502, `GitHub answered ${res.status}. Try again later.`);
   }
   const body = (await res.json().catch(() => null)) as {
     full_name?: unknown; private?: unknown; size?: unknown; description?: unknown; topics?: unknown; default_branch?: unknown;
   } | null;
+  // With a token, a private repository its owner can see answers 200: refused the same way.
   if (body?.private !== false) throw notPublic;
   const canonical = parseGithubRepo(String(body.full_name ?? ""));
   if (!canonical || typeof body.size !== "number") throw new ImportError(502, "GitHub sent an unexpected answer. Try again later.");
@@ -85,6 +116,12 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
       .slice(0, 20),
     defaultBranch: typeof body.default_branch === "string" ? body.default_branch : null,
   };
+}
+
+/** git doesn't read it, but nothing git starts gets the server's token either. */
+function withoutGithubToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { FORGEHUB_GITHUB_TOKEN: _token, ...rest } = env;
+  return rest;
 }
 
 /** Branches and tags only, atomic and never forced: all refs land or none, and none already there moves (#289). */
@@ -105,7 +142,7 @@ async function fetchFromGithub(storageKey: string, source: { owner: string; name
     {
       cwd: dir,
       timeout: FETCH_TIMEOUT_MS,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_ALLOW_PROTOCOL: "https" },
+      env: { ...withoutGithubToken(process.env), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_ALLOW_PROTOCOL: "https" },
     },
   );
 }

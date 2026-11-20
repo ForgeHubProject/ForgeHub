@@ -514,7 +514,7 @@ export async function repoRoutes(app: FastifyInstance) {
       if (existing) {
         return reply.status(409).send({ error: nameTaken });
       }
-      // Asked last: the server has 60 GitHub requests an hour to share (#289).
+      // Asked last: the server's GitHub requests are counted, 60 an hour or 5,000 with FORGEHUB_GITHUB_TOKEN (#289).
       let source: GithubRepo | null = null;
       if (from) {
         try {
