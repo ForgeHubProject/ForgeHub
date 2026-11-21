@@ -14,7 +14,7 @@ import type { EventParams, NotificationReason } from "./notifications-service.js
  */
 
 /** Public origin used to build deep links + the unsubscribe URL. */
-function publicBase(): string {
+export function publicBase(): string {
   return (process.env["PUBLIC_URL"]?.trim() || "http://localhost:5173").replace(/\/+$/, "");
 }
 

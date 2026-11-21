@@ -579,9 +579,49 @@ export async function updateRepo(
   return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });
 }
 
-/** Transfer ownership (#256) to an organization you own, or to your own account. */
-export async function transferRepo(token: string, owner: string, repoName: string, newOwner: string): Promise<{ fullName: string }> {
+/** A transfer to another person, waiting for them to accept (#256). */
+export type PendingTransfer = { to: string; expiresAt: string };
+
+/**
+ * Transfer ownership (#256). To an organization you own, or to your own account,
+ * it moves at once (`fullName`); to another person it becomes a request they have
+ * a day to accept (`pending`).
+ */
+export async function transferRepo(
+  token: string, owner: string, repoName: string, newOwner: string,
+): Promise<{ fullName: string } | { pending: PendingTransfer }> {
   return req(`/repos/${owner}/${repoName}/transfer`, { method: "POST", token, body: JSON.stringify({ newOwner }) });
+}
+
+/** The transfer waiting for someone to accept, if any. */
+export async function getPendingTransfer(token: string, owner: string, repoName: string): Promise<{ pending: PendingTransfer | null }> {
+  return req(`/repos/${owner}/${repoName}/transfer`, { token });
+}
+
+export async function cancelTransfer(token: string, owner: string, repoName: string): Promise<void> {
+  return req(`/repos/${owner}/${repoName}/transfer`, { method: "DELETE", token });
+}
+
+/** A repository someone wants to transfer to you. */
+export type IncomingTransfer = {
+  id: string;
+  repoFullName: string;
+  visibility: "public" | "private";
+  description: string | null;
+  from: string;
+  expiresAt: string;
+};
+
+export async function listIncomingTransfers(token: string): Promise<{ transfers: IncomingTransfer[] }> {
+  return req(`/user/repo-transfers`, { token });
+}
+
+export async function acceptTransfer(token: string, id: string): Promise<{ fullName: string }> {
+  return req(`/user/repo-transfers/${encodeURIComponent(id)}/accept`, { method: "POST", token });
+}
+
+export async function declineTransfer(token: string, id: string): Promise<void> {
+  return req(`/user/repo-transfers/${encodeURIComponent(id)}/decline`, { method: "POST", token });
 }
 
 /** Rename a repository (#256); the old name keeps redirecting, for the web and for git. */

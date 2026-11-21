@@ -99,6 +99,8 @@ model User {
   savedReplies     SavedReply[]
   blocking         Block[]                    @relation("Blocker")
   blockedBy        Block[]                    @relation("Blocked")
+  repoTransfersSent     RepoTransfer[]         @relation("RepoTransfersSent")
+  repoTransfersReceived RepoTransfer[]         @relation("RepoTransfersReceived")
   threadMutes      ThreadMute[]
   watches          Watch[]
   reactions        Reaction[]
@@ -183,6 +185,7 @@ model Repo {
   archivedAt          DateTime?
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
+  pendingTransfer     RepoTransfer?
   refUpdates          RefUpdate[]
   attachments         Attachment[]
 
@@ -538,6 +541,25 @@ model Label {
 
 // A name a repository used to have (renamed, #256): `ownerHandle/name` keeps
 // leading to it, for the web and for git, until another repo takes the name.
+// A repository on its way to another person (#256). It moves only when they
+// accept, within a day, as on GitHub; one waits per repository at a time.
+model RepoTransfer {
+  id         String   @id @default(cuid())
+  repoId     String   @unique
+  fromUserId String
+  toUserId   String
+  // Who owned it when asked: accepting checks it hasn't changed hands since.
+  fromHandle String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  repo     Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  fromUser User @relation("RepoTransfersSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User @relation("RepoTransfersReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@index([toUserId])
+}
+
 model RepoRedirect {
   id          String   @id @default(cuid())
   ownerHandle String

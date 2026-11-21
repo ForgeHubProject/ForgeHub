@@ -8,6 +8,7 @@ import { RepoIcon } from "./listShared";
 import type { InboxAction, InboxReason, InboxView, Notification, User } from "../types";
 import { Button, EmptyState, RelativeTime, Select, Skeleton, Tooltip, cx, useToast } from "../ui";
 import { useDocumentTitle } from "./useDocumentTitle";
+import { IncomingTransfers } from "../components/IncomingTransfers";
 
 type Props = {
   token: string;
@@ -243,6 +244,7 @@ export function NotificationsPage({ token, user, onLogout }: Props) {
         </nav>
 
         <main className="min-w-0 flex-1">
+          <IncomingTransfers token={token} />
           {/* Toolbar: select all, then bulk actions or the view's own controls */}
           <div className="flex flex-wrap items-center gap-2 rounded-t-md border border-fh-border bg-fh-canvas px-4 py-2">
             <input
