@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { createPull, getRefCompare, getRefCompareDiff } from "../../api";
+import { getRefCompare, getRefCompareDiff } from "../../api";
+import { suggestedPullTitle } from "../../lib/pullTitle";
 import type { BranchInfo, CommitInfo, FileDiff, RefCompareResult, User } from "../../types";
-import { Avatar, Button, EmptyState, RelativeTime, Select, Skeleton, useToast } from "../../ui";
+import { Avatar, Button, EmptyState, RelativeTime, Select, Skeleton } from "../../ui";
 import { DiffCounts, DiffStatBar, ShaChip } from "./commitUi";
 import { FileDiffCard } from "./RepoCommitsTab";
 
@@ -57,7 +58,6 @@ function CommitList({ commits, base }: { commits: CommitInfo[]; base: string }) 
 
 export function RepoCompareTab({ token, handle, repoName, branches, defaultBranch, user, splat, base }: Props) {
   const navigate = useNavigate();
-  const { toast } = useToast();
   const parsed = useMemo(() => parseCompareSplat(splat), [splat]);
 
   const branchNames = branches.map((b) => b.name);
@@ -69,7 +69,6 @@ export function RepoCompareTab({ token, handle, repoName, branches, defaultBranc
   const [diffs, setDiffs] = useState<FileDiff[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
 
   const bothChosen = Boolean(baseRef && headRef);
   const sameRef = baseRef === headRef;
@@ -99,19 +98,11 @@ export function RepoCompareTab({ token, handle, repoName, branches, defaultBranc
   const baseIsBranch = branchNames.includes(baseRef);
   const canOpenPr = headIsBranch && baseIsBranch && !sameRef && (result?.ahead ?? 0) > 0;
 
-  async function openPullRequest() {
+  // As on GitHub, the comparison opens the pull request form filled in; nothing is created until it's sent.
+  function openPullRequest() {
     if (!result || !canOpenPr) return;
-    setCreating(true);
-    try {
-      const title = result.commits[0]?.subject || `${headRef} into ${baseRef}`;
-      const pr = await createPull(token, handle, repoName, title, headRef, baseRef);
-      toast(`Pull request #${pr.number} opened`, { tone: "success" });
-      navigate(`${base}/pulls/${pr.number}`);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Could not open pull request", { tone: "danger" });
-    } finally {
-      setCreating(false);
-    }
+    const q = new URLSearchParams({ from: headRef, to: baseRef, title: suggestedPullTitle(result.commits, headRef) });
+    navigate(`${base}/pulls/new?${q}`);
   }
 
   const totalAdd = diffs?.reduce((s, f) => s + f.additions, 0) ?? 0;
@@ -156,7 +147,6 @@ export function RepoCompareTab({ token, handle, repoName, branches, defaultBranc
           <Button
             variant="primary"
             size="sm"
-            loading={creating}
             disabled={!canOpenPr}
             title={canOpenPr ? "Open a pull request from this comparison" : "Pick two different branches with changes to open a PR"}
             onClick={openPullRequest}
