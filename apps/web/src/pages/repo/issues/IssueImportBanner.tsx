@@ -9,10 +9,12 @@ const POLL_MS = 10_000;
 /** "14:20" in the viewer's time. */
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** "140 issues and 212 comments" */
-export function importedSoFar(i: Pick<IssueImport, "issues" | "comments">): string {
+/** "140 issues and 212 comments", with "and 3 releases" once releases are coming. */
+export function importedSoFar(i: Pick<IssueImport, "issues" | "comments"> & { releases?: number }): string {
   const n = (k: number, one: string) => `${k.toLocaleString("en-US")} ${one}${k === 1 ? "" : "s"}`;
-  return `${n(i.issues, "issue")} and ${n(i.comments, "comment")}`;
+  return i.releases
+    ? `${n(i.issues, "issue")}, ${n(i.comments, "comment")} and ${n(i.releases, "release")}`
+    : `${n(i.issues, "issue")} and ${n(i.comments, "comment")}`;
 }
 
 /**
@@ -82,6 +84,8 @@ export function IssueImportBanner({ token, handle, repoName, onProgress }: {
           </>
         ) : state.stage === "labels" || state.stage === "milestones" ? (
           <>Bringing the issues over from {from}: labels and milestones first.</>
+        ) : state.stage === "releases" ? (
+          <>Bringing the releases and their files over from {from}: {importedSoFar(state)} so far.</>
         ) : (
           <>Bringing the issues over from {from}: {importedSoFar(state)} so far.</>
         )}
