@@ -19,7 +19,8 @@ const FETCH_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** An import refused before it starts: the HTTP status to answer and a message for the person. */
 export class ImportError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** When the server's hourly GitHub requests are used up: when they come back. */
+  constructor(readonly status: number, message: string, readonly resetAt: Date | null = null) {
     super(message);
   }
 }
@@ -63,14 +64,15 @@ function tryAgain(reset: string | null): string {
   return `Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
 }
 
-/** A public repository's metadata; throws {@link ImportError} for what can't be imported (#289). */
-export async function fetchGithubRepo(owner: string, name: string): Promise<GithubRepo> {
-  const where = `github.com/${owner}/${name}`;
-  const notPublic = new ImportError(404, `There is no public repository at ${where}. Only public repositories can be imported.`);
+/**
+ * One request to GitHub's API as this server, with its token when it has one; throws
+ * {@link ImportError} for anything but an answer to read (#289, #308).
+ */
+async function githubApi(path: string, notFound: ImportError): Promise<unknown> {
   const token = githubToken();
   let res: Response;
   try {
-    res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
+    res = await fetch(`https://api.github.com${path}`, {
       headers: {
         Accept: "application/vnd.github+json",
         "User-Agent": "ForgeHub",
@@ -82,13 +84,16 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
     throw new ImportError(502, "Could not reach GitHub. Try again later.");
   }
   // Asked without a token, GitHub answers a private repository with 404 too.
-  if (res.status === 404) throw notPublic;
+  if (res.status === 404) throw notFound;
   if (!res.ok) {
     if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
       const limit = Number(res.headers.get("x-ratelimit-limit")) || (token ? 5000 : 60);
+      const reset = res.headers.get("x-ratelimit-reset");
+      const resetAt = Number.isFinite(Number(reset)) && reset ? new Date(Number(reset) * 1000) : new Date(Date.now() + 60 * 60_000);
       throw new ImportError(
         503,
-        `This server has used up its ${limit.toLocaleString("en-US")} GitHub requests for the hour. ${tryAgain(res.headers.get("x-ratelimit-reset"))}`,
+        `This server has used up its ${limit.toLocaleString("en-US")} GitHub requests for the hour. ${tryAgain(reset)}`,
+        resetAt,
       );
     }
     // A revoked or expired token fails every import, public repositories included.
@@ -97,7 +102,14 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
     }
     throw new ImportError(502, `GitHub answered ${res.status}. Try again later.`);
   }
-  const body = (await res.json().catch(() => null)) as {
+  return res.json().catch(() => null);
+}
+
+/** A public repository's metadata; throws {@link ImportError} for what can't be imported (#289). */
+export async function fetchGithubRepo(owner: string, name: string): Promise<GithubRepo> {
+  const where = `github.com/${owner}/${name}`;
+  const notPublic = new ImportError(404, `There is no public repository at ${where}. Only public repositories can be imported.`);
+  const body = (await githubApi(`/repos/${owner}/${name}`, notPublic)) as {
     full_name?: unknown; private?: unknown; size?: unknown; description?: unknown; topics?: unknown; default_branch?: unknown;
   } | null;
   // With a token, a private repository its owner can see answers 200: refused the same way.
@@ -116,6 +128,64 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
       .slice(0, 20),
     defaultBranch: typeof body.default_branch === "string" ? body.default_branch : null,
   };
+}
+
+/** An organization's repositories are listed up to this many pages of 100 (#308). */
+export const MAX_ORG_REPO_PAGES = 10;
+
+/** `https://github.com/<org>[/]` or `<org>` (#308). */
+export function parseGithubOrg(input: string): string | null {
+  const m = /^(?:https:\/\/github\.com\/)?([^/]+?)\/?$/.exec(input.trim());
+  return m && handleSchema.safeParse(m[1]).success ? m[1]! : null;
+}
+
+/** A repository in an organization's list, as the person picks which to bring (#308). */
+export type GithubOrgRepo = { name: string; description: string | null; sizeKb: number; fork: boolean; archived: boolean };
+
+/** What an organization import takes from GitHub's API (#308). */
+export type GithubOrg = {
+  login: string;
+  displayName: string | null;
+  description: string | null;
+  repos: GithubOrgRepo[];
+  /** More than {@link MAX_ORG_REPO_PAGES} pages: the rest aren't listed. */
+  truncated: boolean;
+};
+
+const unexpected = () => new ImportError(502, "GitHub sent an unexpected answer. Try again later.");
+const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) || null : null);
+
+/**
+ * A GitHub organization and its public repositories (#308): one request for the
+ * organization and one per 100 repositories. Throws {@link ImportError}.
+ */
+export async function fetchGithubOrg(login: string): Promise<GithubOrg> {
+  const notFound = new ImportError(404, `There is no GitHub organization named ${login}.`);
+  const org = (await githubApi(`/orgs/${login}`, notFound)) as { login?: unknown; name?: unknown; description?: unknown } | null;
+  if (typeof org?.login !== "string" || !handleSchema.safeParse(org.login).success) throw unexpected();
+  const repos: GithubOrgRepo[] = [];
+  let truncated = false;
+  for (let page = 1; ; page++) {
+    const list = await githubApi(`/orgs/${org.login}/repos?type=public&sort=full_name&per_page=100&page=${page}`, notFound);
+    if (!Array.isArray(list)) throw unexpected();
+    for (const r of list as Array<Record<string, unknown> | null>) {
+      // With a token, an organization's private repositories can be listed too: never offered.
+      if (r?.private !== false || typeof r.name !== "string" || !REPO_NAME.test(r.name) || typeof r.size !== "number") continue;
+      repos.push({
+        name: r.name,
+        description: text(r.description, 2000),
+        sizeKb: r.size,
+        fork: r.fork === true,
+        archived: r.archived === true,
+      });
+    }
+    if (list.length < 100) break;
+    if (page === MAX_ORG_REPO_PAGES) {
+      truncated = true;
+      break;
+    }
+  }
+  return { login: org.login, displayName: text(org.name, 120), description: text(org.description, 2000), repos, truncated };
 }
 
 /** git doesn't read it, but nothing git starts gets the server's token either. */

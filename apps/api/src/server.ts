@@ -34,6 +34,7 @@ import { projectRoutes } from "./routes/projects.js";
 import { pullRoutes } from "./routes/pulls.js";
 import { releaseRoutes } from "./routes/releases.js";
 import { orgRoutes } from "./routes/orgs.js";
+import { githubOrgImportRoutes } from "./routes/github-org-import.js";
 import { repoRoutes } from "./routes/repos.js";
 import { searchRoutes } from "./routes/search.js";
 import { snapshotRoutes } from "./routes/snapshots.js";
@@ -76,6 +77,7 @@ import { backfillImplicitWatches } from "./watch-service.js";
 import { ciStartupRecovery } from "./ci/boot.js";
 import { failInterruptedImports } from "./github-import.js";
 import { resumeIssueImports } from "./github-issue-import.js";
+import { resumeImportQueues } from "./github-import-queue.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -185,6 +187,7 @@ export async function buildServer() {
   await app.register(tokenRoutes);
   await app.register(repoRoutes);
   await app.register(orgRoutes);
+  await app.register(githubOrgImportRoutes);
   await app.register(snapshotRoutes);
   await app.register(compareRoutes);
   await app.register(fhrRoutes);
@@ -279,6 +282,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // Issue imports whose git history is in carry on where they stopped (#289, phase 2).
       await resumeIssueImports(app).catch((err) => {
         app.log.warn({ err }, "GitHub issue import recovery failed");
+      });
+      // Imports waiting their turn carry on, one at a time per person (#308).
+      await resumeImportQueues(app).catch((err) => {
+        app.log.warn({ err }, "GitHub import queue recovery failed");
       });
       return app.listen({ port, host: "0.0.0.0" }).then(() => {
         app.log.info(`Listening on http://localhost:${port}`);

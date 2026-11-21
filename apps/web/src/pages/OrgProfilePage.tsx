@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiError, getMyOrgs, getOrg } from "../api";
+import { ApiError, getMyOrgs, getOrg, getOrgImports, type OrgImportRepo } from "../api";
+import { importPhase, stillGoing } from "../lib/orgImport";
 import { CreateRepoDialog } from "../components/CreateRepoDialog";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
@@ -62,6 +63,17 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
   const repos = data?.repos ?? [];
   const isOwner = org?.viewerRole === "OWNER";
   const isMember = org?.viewerRole !== null && org?.viewerRole !== undefined;
+
+  // Members see how an import from GitHub is going (#308).
+  const [imports, setImports] = useState<OrgImportRepo[]>([]);
+  useEffect(() => {
+    if (!isMember || !handle) return;
+    getOrgImports(token, handle)
+      .then((res) => setImports(res.repos))
+      .catch(() => setImports([]));
+  }, [isMember, token, handle]);
+  const importsFailed = imports.filter((r) => importPhase(r) === "failed").length;
+  const showImports = stillGoing(imports) || importsFailed > 0;
 
   function onCreated(repo: Repo) {
     setShowCreate(false);
@@ -164,6 +176,15 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
 
             {/* Main — repositories */}
             <main className="min-w-0 flex-1">
+              {showImports && (
+                <div role="status" className="mb-4 flex flex-wrap items-center gap-x-2 rounded-md border border-fh-accent-emphasis/40 bg-fh-accent-subtle px-4 py-3 text-fh-sm text-fh-fg">
+                  <span>
+                    Importing from GitHub: {imports.filter((r) => importPhase(r) === "imported").length} of {imports.length} imported
+                    {importsFailed > 0 && <>, {importsFailed} failed</>}.
+                  </span>
+                  <Link to={`/orgs/${handle}/imports`} className="font-semibold text-fh-accent-fg hover:underline">See progress</Link>
+                </div>
+              )}
               <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-fh-border pb-4">
                 <h2 className="flex items-center gap-2 text-fh-lg font-semibold text-fh-fg">
                   <RepoIcon className="text-fh-fg-muted" />

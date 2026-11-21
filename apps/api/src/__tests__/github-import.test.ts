@@ -28,7 +28,8 @@ import { prisma } from "../prisma.js";
 import { branchExists, setDefaultBranch } from "../git-utils.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
 import {
-  failInterruptedImports, fetchGithubRepo, ImportError, MAX_IMPORT_KB, parseGithubRepo, runGithubImport, type GithubRepo,
+  failInterruptedImports, fetchGithubOrg, fetchGithubRepo, ImportError, MAX_IMPORT_KB, MAX_ORG_REPO_PAGES, parseGithubOrg,
+  parseGithubRepo, runGithubImport, type GithubRepo,
 } from "../github-import.js";
 
 describe("parseGithubRepo", () => {
@@ -159,6 +160,8 @@ describe("fetchGithubRepo", () => {
     const e = await refusal(fetchGithubRepo("octocat", "Hello-World"));
     expect(e!.status).toBe(503);
     expect(e!.message).toBe("This server has used up its 5,000 GitHub requests for the hour. Try again in 12 minutes.");
+    // So a queue can wait for them (#308).
+    expect(e!.resetAt).toEqual(new Date(Number(reset) * 1000));
   });
 
   describe("with FORGEHUB_GITHUB_TOKEN set", () => {
@@ -298,5 +301,106 @@ describe("failInterruptedImports", () => {
       where: { importStatus: "importing" },
       data: { importStatus: "failed", importError: expect.stringMatching(/restarted/) },
     });
+  });
+});
+
+describe("parseGithubOrg (#308)", () => {
+  it.each([
+    ["pallets", "pallets"],
+    ["  octo-org  ", "octo-org"],
+    ["https://github.com/octo-org", "octo-org"],
+    ["https://github.com/octo-org/", "octo-org"],
+  ])("accepts %j", (input, login) => {
+    expect(parseGithubOrg(input)).toBe(login);
+  });
+
+  it.each([
+    "",
+    "octo-org/hello",
+    "https://github.com/octo-org/hello",
+    "http://github.com/octo-org",
+    "https://evil.example/octo-org",
+    "-octo",
+    "octo--org/..",
+    "../etc",
+    "a".repeat(40),
+  ])("refuses %j", (input) => {
+    expect(parseGithubOrg(input)).toBeNull();
+  });
+});
+
+describe("fetchGithubOrg (#308)", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const answer = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status, headers }));
+  const repo = (name: string, extra: Record<string, unknown> = {}) =>
+    ({ name, private: false, size: 10, description: null, fork: false, archived: false, ...extra });
+  const urls = () => fetchMock.mock.calls.map(([url]) => String(url));
+
+  it("asks for the organization, then its public repositories a page of 100 at a time", async () => {
+    answer(200, { login: "Pallets", name: "  Pallets  ", description: "Python projects" });
+    answer(200, Array.from({ length: 100 }, (_, i) => repo(`r${i}`)));
+    answer(200, [repo("werkzeug", { description: " WSGI ", size: 9000, fork: true, archived: true })]);
+    const org = await fetchGithubOrg("pallets");
+    expect(urls()).toEqual([
+      "https://api.github.com/orgs/pallets",
+      "https://api.github.com/orgs/Pallets/repos?type=public&sort=full_name&per_page=100&page=1",
+      "https://api.github.com/orgs/Pallets/repos?type=public&sort=full_name&per_page=100&page=2",
+    ]);
+    expect(org).toMatchObject({ login: "Pallets", displayName: "Pallets", description: "Python projects", truncated: false });
+    expect(org.repos).toHaveLength(101);
+    expect(org.repos.at(-1)).toEqual({ name: "werkzeug", description: "WSGI", sizeKb: 9000, fork: true, archived: true });
+  });
+
+  it("never lists a private repository, nor one whose name or size isn't GitHub's", async () => {
+    answer(200, { login: "acme" });
+    answer(200, [repo("open"), repo("secret", { private: true }), repo("odd", { private: undefined }), repo("../x"), repo("nosize", { size: "1" })]);
+    expect((await fetchGithubOrg("acme")).repos.map((r) => r.name)).toEqual(["open"]);
+  });
+
+  it(`stops after ${MAX_ORG_REPO_PAGES} full pages and says the list is cut short`, async () => {
+    answer(200, { login: "huge" });
+    for (let p = 0; p < MAX_ORG_REPO_PAGES; p++) answer(200, Array.from({ length: 100 }, (_, i) => repo(`p${p}-${i}`)));
+    const org = await fetchGithubOrg("huge");
+    expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_ORG_REPO_PAGES);
+    expect(org.repos).toHaveLength(100 * MAX_ORG_REPO_PAGES);
+    expect(org.truncated).toBe(true);
+  });
+
+  it("404 for a name that isn't an organization (a person's account answers 404 here too)", async () => {
+    answer(404, { message: "Not Found" });
+    await expect(fetchGithubOrg("octocat")).rejects.toMatchObject({ status: 404, message: "There is no GitHub organization named octocat." });
+  });
+
+  it("says when the server's hourly requests are used up, partway through the list too", async () => {
+    answer(200, { login: "acme" });
+    answer(403, { message: "API rate limit exceeded" }, { "x-ratelimit-remaining": "0" });
+    await expect(fetchGithubOrg("acme")).rejects.toMatchObject({ status: 503, message: expect.stringMatching(/60 GitHub requests/) });
+  });
+
+  it("sends the server's token when it has one", async () => {
+    vi.stubEnv("FORGEHUB_GITHUB_TOKEN", "github_pat_test");
+    answer(200, { login: "acme" });
+    answer(200, []);
+    await fetchGithubOrg("acme");
+    for (const [, init] of fetchMock.mock.calls) expect(init.headers).toMatchObject({ Authorization: "Bearer github_pat_test" });
+  });
+
+  it("refuses an answer that isn't an organization or a list", async () => {
+    answer(200, { message: "?" });
+    await expect(fetchGithubOrg("acme")).rejects.toMatchObject({ status: 502 });
+    answer(200, { login: "acme" });
+    answer(200, { not: "a list" });
+    await expect(fetchGithubOrg("acme")).rejects.toMatchObject({ status: 502 });
   });
 });
