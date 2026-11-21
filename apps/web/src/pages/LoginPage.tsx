@@ -6,6 +6,9 @@ import { Button, Field, TextInput } from "../ui";
 import type { User } from "../types";
 import { useDocumentTitle } from "./useDocumentTitle";
 
+/** Where the docs (the README) and the code live; the site footer's Source link goes here too. */
+const SOURCE_URL = "https://github.com/ForgeHubProject/ForgeHub";
+
 type Props = {
   onAuth: (token: string, user: User) => void;
 };
@@ -260,16 +263,14 @@ export function LoginPage({ onAuth }: Props) {
           )}
         </div>
 
+        {/* GitHub's sign-in footer also has Terms and Privacy: they come back when ForgeHub has those pages. */}
         <footer className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-fh-xs text-fh-fg-subtle">
-          <span>© 2026 ForgeHub</span>
-          <a href="#" className="hover:text-fh-accent-fg hover:underline">
-            Terms
-          </a>
-          <a href="#" className="hover:text-fh-accent-fg hover:underline">
-            Privacy
-          </a>
-          <a href="#" className="hover:text-fh-accent-fg hover:underline">
+          <span>© {new Date().getFullYear()} ForgeHub</span>
+          <a href={`${SOURCE_URL}#readme`} className="hover:text-fh-accent-fg hover:underline">
             Docs
+          </a>
+          <a href={SOURCE_URL} className="hover:text-fh-accent-fg hover:underline">
+            Source
           </a>
         </footer>
       </div>
