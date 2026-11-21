@@ -427,6 +427,9 @@ function ReleaseRow({
 
   const hasAssets = release.assets.length > 0;
 
+  // Brought over from GitHub (#289): who published it there.
+  const publishedBy = release.importedAuthor ?? release.author;
+  const publishedOnGithub = release.importedAuthor ? `${release.importedAuthor} on GitHub` : undefined;
   return (
     <div className="flex gap-4 md:gap-6">
       {/* Timeline meta rail — desktop only */}
@@ -436,9 +439,9 @@ function ReleaseRow({
           <span className="truncate">{release.tagName}</span>
         </span>
         <RelativeTime date={release.createdAt} className="text-fh-xs text-fh-fg-subtle" />
-        <span className="inline-flex items-center gap-1.5 text-fh-xs text-fh-fg-subtle">
-          <Avatar name={release.author} size={16} />
-          <span className="truncate">{release.author}</span>
+        <span className="inline-flex items-center gap-1.5 text-fh-xs text-fh-fg-subtle" title={publishedOnGithub}>
+          <Avatar name={publishedBy} size={16} />
+          <span className="truncate">{publishedBy}</span>
         </span>
       </div>
 
@@ -461,8 +464,8 @@ function ReleaseRow({
                 <span aria-hidden>·</span>
                 <RelativeTime date={release.createdAt} className="text-fh-fg-subtle" />
                 <span aria-hidden>·</span>
-                <span className="inline-flex items-center gap-1 text-fh-fg-subtle">
-                  <Avatar name={release.author} size={14} />{release.author}
+                <span className="inline-flex items-center gap-1 text-fh-fg-subtle" title={publishedOnGithub}>
+                  <Avatar name={publishedBy} size={14} />{publishedBy}
                 </span>
               </div>
             </div>

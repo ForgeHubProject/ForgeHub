@@ -16,20 +16,32 @@ vi.mock("../prisma.js", () => {
       pullRequestComment: { create: op("pullRequestComment.create") },
       repo: { updateMany: op("repo.updateMany"), findUniqueOrThrow: vi.fn() },
       githubIssueImport: { update: op("job.update"), updateMany: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+      release: { create: op("release.create"), findMany: vi.fn() },
       $transaction: vi.fn(async (ops: unknown[]) => ops),
     },
   };
 });
 vi.mock("../ghost.js", () => ({ ghostUser: vi.fn().mockResolvedValue({ id: "ghost-id" }) }));
 vi.mock("../git-utils.js", () => ({ git: vi.fn() }));
+vi.mock("../git-storage.js", () => ({
+  buildAssetStorageKey: (repo: string, release: string, name: string) => `${repo.replace(/\.git$/, "")}/${release}/${name}`,
+  // Reads the whole stream, as writing it to disk would.
+  writeAssetStream: vi.fn(async (_key: string, source: AsyncIterable<Buffer>) => {
+    let n = 0;
+    for await (const chunk of source) n += chunk.length;
+    return n;
+  }),
+  removeAsset: vi.fn().mockResolvedValue(undefined),
+}));
 
 import type { FastifyInstance } from "fastify";
 import type { GithubIssueImport } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { git } from "../git-utils.js";
 import {
-  githubGet, GithubFailed, GithubRateLimited, importStep, issueNumberFromUrl, PER_PAGE, runIssueImport,
+  downloadAsset, githubGet, GithubFailed, GithubRateLimited, importStep, issueNumberFromUrl, PER_PAGE, runIssueImport,
 } from "../github-issue-import.js";
+import { removeAsset } from "../git-storage.js";
 
 const fetchMock = vi.fn();
 beforeEach(() => {
@@ -41,6 +53,7 @@ beforeEach(() => {
   vi.mocked(prisma.milestone.findMany).mockResolvedValue([]);
   vi.mocked(prisma.issue.findMany).mockResolvedValue([]);
   vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+  vi.mocked(prisma.release.findMany).mockResolvedValue([]);
   vi.mocked(prisma.repo.findUniqueOrThrow).mockResolvedValue({ storageKey: "ada/hello.git" } as never);
 });
 afterEach(() => {
@@ -51,7 +64,7 @@ afterEach(() => {
 const answer = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status, headers }));
 const job = (overrides: Partial<GithubIssueImport> = {}): GithubIssueImport => ({
-  repoId: "repo-1", stage: "labels", page: 1, issues: 0, pulls: 0, comments: 0, waitUntil: null, error: null,
+  repoId: "repo-1", stage: "labels", page: 1, issues: 0, pulls: 0, comments: 0, releases: 0, waitUntil: null, error: null,
   createdAt: new Date(), updatedAt: new Date(), ...overrides,
 });
 const source = { owner: "octocat", name: "Hello-World" };
@@ -187,7 +200,7 @@ describe("importStep", () => {
     expect(ops("pullRequestComment.create").map((o) => o.args.data!)).toEqual([
       { pullRequestId: "pr-2", authorId: "ghost-id", importedAuthor: "hubot", body: "LGTM", createdAt: new Date("2025-01-02T10:00:00Z"), updatedAt: new Date("2025-01-02T10:00:00Z") },
     ]);
-    expect(cursor()).toEqual({ stage: "done", page: 1, comments: { increment: 2 } });
+    expect(cursor()).toEqual({ stage: "releases", page: 1, comments: { increment: 2 } });
   });
 
   describe("pulls", () => {
@@ -281,10 +294,72 @@ describe("importStep", () => {
     });
   });
 
+  it("releases: notes, author and files come over; a file over the cap stays on GitHub and the notes say so", async () => {
+    vi.stubEnv("RELEASE_ASSET_MAX_BYTES", "1000");
+    vi.mocked(prisma.release.findMany).mockResolvedValueOnce([{ tagName: "v0.9" }] as never);
+    const dl = (name: string) => `https://github.com/octocat/Hello-World/releases/download/v1.0/${name}`;
+    answer([
+      { tag_name: "v1.0", name: "First light", body: "Lanterns!", prerelease: true, author: { login: "mona" }, published_at: "2025-03-01T00:00:00Z",
+        assets: [
+          { name: "game.zip", size: 5, content_type: "application/zip", browser_download_url: dl("game.zip") },
+          { name: "trailer.mp4", size: 50_000, content_type: "video/mp4", browser_download_url: dl("trailer.mp4") },
+        ] },
+      { tag_name: "v0.9", name: "Already here", assets: [] },
+      { tag_name: "v2.0-draft", draft: true, assets: [] },
+    ]);
+    fetchMock.mockResolvedValueOnce(new Response("12345", { status: 200 }));
+    await importStep(job({ stage: "releases" }), source, "ghost-id");
+
+    expect(fetchMock.mock.calls[0]![0]).toContain("/releases?per_page=10&page=1");
+    expect(String(fetchMock.mock.calls[1]![0])).toBe(dl("game.zip"));
+    expect(fetchMock).toHaveBeenCalledTimes(2); // the trailer isn't downloaded
+    const [release] = ops("release.create").map((o) => o.args.data!) as Array<Record<string, unknown> & { assets: { create: Array<Record<string, unknown>> } }>;
+    expect(ops("release.create")).toHaveLength(1);
+    expect(release).toMatchObject({
+      repoId: "repo-1", tagName: "v1.0", name: "First light", isPrerelease: true, authorId: "ghost-id", importedAuthor: "mona",
+      createdAt: new Date("2025-03-01T00:00:00Z"),
+    });
+    expect(release.body).toBe("Lanterns!\n\n---\nThis file was too big to bring over and is still on GitHub: `trailer.mp4`.");
+    expect(release.assets.create).toEqual([{
+      name: "game.zip", size: 5, contentType: "application/zip", storageKey: `ada/hello/${String(release.id)}/game.zip`,
+      uploadedBy: { connect: { id: "ghost-id" } },
+    }]);
+    expect(cursor()).toEqual({ stage: "done", page: 1, releases: { increment: 1 } });
+  });
+
+  it("releases: when a page fails, the files it downloaded go too", async () => {
+    answer([{ tag_name: "v1.0", assets: [{ name: "game.zip", size: 5, browser_download_url: "https://github.com/o/n/releases/download/v1.0/game.zip" }] }]);
+    fetchMock.mockResolvedValueOnce(new Response("12345", { status: 200 }));
+    vi.mocked(prisma.$transaction).mockRejectedValueOnce(new Error("database is locked"));
+    await expect(importStep(job({ stage: "releases" }), source, "ghost-id")).rejects.toThrow("database is locked");
+    expect(removeAsset).toHaveBeenCalledWith(expect.stringMatching(/^ada\/hello\/[^/]+\/game\.zip$/));
+  });
+
   it("an answer that isn't a list stops the step", async () => {
     answer({ message: "Moved Permanently" });
     await expect(importStep(job(), source, "ghost-id")).rejects.toBeInstanceOf(GithubFailed);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("downloadAsset", () => {
+  it("only from github.com", async () => {
+    await expect(downloadAsset("https://evil.example/x.zip", "k", 100)).rejects.toThrow("unexpected file link");
+    await expect(downloadAsset("http://github.com/o/n/releases/download/v1/x.zip", "k", 100)).rejects.toThrow("unexpected file link");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("and not when GitHub's redirect lands somewhere else", async () => {
+    const res = new Response("x", { status: 200 });
+    Object.defineProperty(res, "url", { value: "https://evil.example/x.zip" });
+    fetchMock.mockResolvedValueOnce(res);
+    await expect(downloadAsset("https://github.com/o/n/releases/download/v1/x.zip", "k", 100)).rejects.toThrow("unexpected host");
+  });
+
+  it("stops at the cap even when GitHub said it was smaller", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("x".repeat(500), { status: 200 }));
+    await expect(downloadAsset("https://github.com/o/n/releases/download/v1/x.zip", "k", 100)).rejects.toThrow("bigger than GitHub said");
+    expect(removeAsset).toHaveBeenCalledWith("k");
   });
 });
 

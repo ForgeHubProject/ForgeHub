@@ -47,6 +47,8 @@ function formatRelease(r: {
   assets?: AssetRecord[];
   createdAt: Date;
   updatedAt: Date;
+  // Brought over from GitHub (#289): who published it there.
+  importedAuthor?: string | null;
 }) {
   return {
     id: r.id,
@@ -56,6 +58,7 @@ function formatRelease(r: {
     isDraft: r.isDraft,
     isPrerelease: r.isPrerelease,
     author: r.author.handle,
+    importedAuthor: r.importedAuthor ?? null,
     assets: (r.assets ?? []).map(formatAsset),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),

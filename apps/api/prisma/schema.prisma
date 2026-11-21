@@ -568,13 +568,14 @@ model RepoTransfer {
 // so a restart or GitHub's hourly limit only pauses it.
 model GithubIssueImport {
   repoId    String    @id
-  // labels → milestones → issues → pulls → comments → done
+  // labels → milestones → issues → pulls → comments → releases → done
   stage     String    @default("labels")
   // The next page of the current stage's listing.
   page      Int       @default(1)
   issues    Int       @default(0)
   pulls     Int       @default(0)
   comments  Int       @default(0)
+  releases  Int       @default(0)
   // GitHub's limit for the hour is used up: carries on then.
   waitUntil DateTime?
   // Stopped on something other than the limit; Retry carries on from here.
@@ -1005,6 +1006,8 @@ model Release {
   authorId     String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  // Brought over from GitHub (#289), as on Issue: `author` is then the ghost.
+  importedAuthor String?
 
   repo   Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author User @relation("ReleaseAuthor", fields: [authorId], references: [id])
