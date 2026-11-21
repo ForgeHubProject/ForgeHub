@@ -17,6 +17,7 @@ import { Avatar, Button, ConfirmDialog, EmptyState, RelativeTime, Skeleton, TabI
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
 import { GithubAuthor } from "../issues/parts";
+import type { Participant } from "./PullSidebar";
 import { Popover } from "../issues/pickers";
 import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
@@ -441,15 +442,15 @@ export function PullDetail({
     ...submittedReviews.map((rv) => ({ kind: "review" as const, at: rv.submittedAt ?? rv.createdAt, review: rv })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
-  // Everyone who took part, author first: the sidebar's Participants.
+  // Everyone who took part, author first: the sidebar's Participants. Someone brought
+  // over from GitHub (#289) is their GitHub username, not the ghost.
+  const who = (author: string, imported?: string | null): Participant => (imported ? { name: imported, github: true } : { name: author });
   const participants = [
-    ...new Set([
-      pr.author,
-      ...comments.map((c) => c.author),
-      ...reviews.filter((r) => r.state !== "pending").map((r) => r.author),
-      ...reviewComments.filter((c) => !c.pending).map((c) => c.author),
-    ]),
-  ];
+    who(pr.author, pr.importedAuthor),
+    ...comments.map((c) => who(c.author, c.importedAuthor)),
+    ...reviews.filter((r) => r.state !== "pending").map((r) => who(r.author)),
+    ...reviewComments.filter((c) => !c.pending).map((c) => who(c.author)),
+  ].filter((p, i, all) => all.findIndex((q) => q.name === p.name && !!q.github === !!p.github) === i);
 
   const canEditTitle = isAuthor || canWrite;
   const commitWord = commits ? `${commits.length} ${commits.length === 1 ? "commit" : "commits"}` : "";
