@@ -16,6 +16,9 @@ import { ReviewersPanel } from "./ReviewersPanel";
  * Labels, Milestone, Development (the issues it closes), Participants. The
  * issue page's sections are reused; this owns their persistence.
  */
+/** Someone who took part: a person here, or, for what came from GitHub (#289), a GitHub username. */
+export type Participant = { name: string; github?: boolean };
+
 export function PullSidebar({
   token,
   handle,
@@ -33,8 +36,8 @@ export function PullSidebar({
   repoName: string;
   pr: PullRequest;
   user: { handle: string };
-  /** Handles of everyone who took part: the author, commenters, reviewers. */
-  participants: string[];
+  /** Everyone who took part: the author, commenters, reviewers. */
+  participants: Participant[];
   canWrite: boolean;
   canConvertToDraft: boolean;
   onChange: (patch: Partial<PullRequest>) => void;
@@ -183,13 +186,21 @@ export function PullSidebar({
       <section>
         <SidebarHeader title={`${participants.length} ${participants.length === 1 ? "participant" : "participants"}`} />
         <div className="flex flex-wrap gap-1">
-          {participants.map((p) => (
-            <Tooltip key={p} label={p}>
-              <Link to={`/${p}`} aria-label={p}>
-                <Avatar name={p} size={24} />
-              </Link>
-            </Tooltip>
-          ))}
+          {participants.map((p) =>
+            p.github ? (
+              <Tooltip key={`github:${p.name}`} label={`${p.name} on GitHub`}>
+                <a href={`https://github.com/${encodeURIComponent(p.name)}`} target="_blank" rel="noopener noreferrer" aria-label={`${p.name} on GitHub`}>
+                  <Avatar name={p.name} size={24} />
+                </a>
+              </Tooltip>
+            ) : (
+              <Tooltip key={p.name} label={p.name}>
+                <Link to={`/${p.name}`} aria-label={p.name}>
+                  <Avatar name={p.name} size={24} />
+                </Link>
+              </Tooltip>
+            ),
+          )}
         </div>
       </section>
     </aside>

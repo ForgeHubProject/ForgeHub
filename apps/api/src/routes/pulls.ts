@@ -184,6 +184,8 @@ export async function pullRoutes(app: FastifyInstance) {
         isDraft: p.isDraft,
         mergedAt: p.mergedAt?.toISOString() ?? null,
         author: p.author.handle,
+        // Brought over from GitHub (#289): its author's GitHub username; `author` is then the ghost.
+        importedAuthor: p.importedAuthor ?? null,
         ...formatAssigneeAndLabels(p),
         milestone: p.milestone
           ? { id: p.milestone.id, number: p.milestone.number, title: p.milestone.title, state: p.milestone.state.toLowerCase() }
@@ -356,6 +358,7 @@ export async function pullRoutes(app: FastifyInstance) {
       mergedAt: pr.mergedAt?.toISOString() ?? null,
       mergeMethod: pr.mergeMethod ?? null,
       author: pr.author.handle,
+      importedAuthor: pr.importedAuthor ?? null,
       ...formatAssigneeAndLabels(pr),
       milestone: pr.milestone
         ? { id: pr.milestone.id, number: pr.milestone.number, title: pr.milestone.title, state: pr.milestone.state.toLowerCase() }

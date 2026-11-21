@@ -633,6 +633,8 @@ export type PullRequest = {
   mergedAt: string | null;
   mergeMethod?: "merge" | "squash" | "rebase" | null;
   author: string;
+  /** Brought over from GitHub (#289): its author's GitHub username; `author` is then the ghost. */
+  importedAuthor?: string | null;
   /** Sidebar fields (#252) — optional so older payloads still parse. */
   assignee?: string | null;
   labels?: Label[];

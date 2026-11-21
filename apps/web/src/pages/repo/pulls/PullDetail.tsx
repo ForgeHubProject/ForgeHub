@@ -16,6 +16,8 @@ import type {
 import { Avatar, Button, ConfirmDialog, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput, cx, useToast } from "../../../ui";
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
+import { GithubAuthor } from "../issues/parts";
+import type { Participant } from "./PullSidebar";
 import { Popover } from "../issues/pickers";
 import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
@@ -440,15 +442,15 @@ export function PullDetail({
     ...submittedReviews.map((rv) => ({ kind: "review" as const, at: rv.submittedAt ?? rv.createdAt, review: rv })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
-  // Everyone who took part, author first: the sidebar's Participants.
+  // Everyone who took part, author first: the sidebar's Participants. Someone brought
+  // over from GitHub (#289) is their GitHub username, not the ghost.
+  const who = (author: string, imported?: string | null): Participant => (imported ? { name: imported, github: true } : { name: author });
   const participants = [
-    ...new Set([
-      pr.author,
-      ...comments.map((c) => c.author),
-      ...reviews.filter((r) => r.state !== "pending").map((r) => r.author),
-      ...reviewComments.filter((c) => !c.pending).map((c) => c.author),
-    ]),
-  ];
+    who(pr.author, pr.importedAuthor),
+    ...comments.map((c) => who(c.author, c.importedAuthor)),
+    ...reviews.filter((r) => r.state !== "pending").map((r) => who(r.author)),
+    ...reviewComments.filter((c) => !c.pending).map((c) => who(c.author)),
+  ].filter((p, i, all) => all.findIndex((q) => q.name === p.name && !!q.github === !!p.github) === i);
 
   const canEditTitle = isAuthor || canWrite;
   const commitWord = commits ? `${commits.length} ${commits.length === 1 ? "commit" : "commits"}` : "";
@@ -495,7 +497,11 @@ export function PullDetail({
       <div className="flex items-center gap-3 flex-wrap mb-4">
         <StatePill state={pr.state} draft={pr.isDraft} />
         <p className="text-fh-sm text-fh-fg-muted inline-flex items-center gap-1.5 flex-wrap">
-          <Link to={`/${pr.author}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">{pr.author}</Link>
+          {pr.importedAuthor ? (
+            <GithubAuthor login={pr.importedAuthor} />
+          ) : (
+            <Link to={`/${pr.author}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">{pr.author}</Link>
+          )}
           <span>
             {pr.state === "merged" ? "merged" : "wants to merge"}
             {commitWord && ` ${commitWord}`} into
@@ -536,9 +542,9 @@ export function PullDetail({
             {/* Opening comment */}
             <div id="pr-body" className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
               <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas">
-                <Avatar name={pr.author} size={24} />
+                <Avatar name={pr.importedAuthor ?? pr.author} size={24} />
                 <span className="text-fh-sm">
-                  <span className="font-semibold text-fh-fg">{pr.author}</span>{" "}
+                  {pr.importedAuthor ? <GithubAuthor login={pr.importedAuthor} /> : <span className="font-semibold text-fh-fg">{pr.author}</span>}{" "}
                   <span className="text-fh-fg-muted">
                     opened <RelativeTime date={pr.createdAt} />
                   </span>
@@ -582,8 +588,12 @@ export function PullDetail({
               item.kind === "comment" ? (
                 <div key={`c-${item.comment.id}`} id={`issuecomment-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
                   <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
-                    <Avatar name={item.comment.author} size={22} />
-                    <span className="font-semibold text-fh-fg">{item.comment.author}</span>
+                    <Avatar name={item.comment.importedAuthor ?? item.comment.author} size={22} />
+                    {item.comment.importedAuthor ? (
+                      <span><GithubAuthor login={item.comment.importedAuthor} /></span>
+                    ) : (
+                      <span className="font-semibold text-fh-fg">{item.comment.author}</span>
+                    )}
                     <span className="text-fh-fg-muted">commented <RelativeTime date={item.comment.createdAt} /></span>
                     <CommentMenu
                       anchor={`issuecomment-${item.comment.id}`}

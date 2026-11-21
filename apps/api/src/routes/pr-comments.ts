@@ -25,11 +25,14 @@ function formatPRComment(comment: {
   author: { handle: string };
   createdAt: Date;
   updatedAt: Date;
+  // Brought over from GitHub (#289): its author's GitHub username.
+  importedAuthor?: string | null;
 }, rollup?: ReactionRollup) {
   return {
     id: comment.id,
     body: comment.body,
     author: comment.author.handle,
+    importedAuthor: comment.importedAuthor ?? null,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
     // Emoji reactions (#90) — empty when no rollup was fetched (new comments).

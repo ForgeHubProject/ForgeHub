@@ -4,36 +4,40 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { FastifyInstance } from "fastify";
 import type { GithubIssueImport, Prisma } from "@prisma/client";
 import { buildAssetStorageKey, removeAsset, writeAssetStream } from "./git-storage.js";
-import { githubToken, parseGithubRepo } from "./github-import.js";
+import { fetchPullHeads, githubToken, parseGithubRepo } from "./github-import.js";
+import { git } from "./git-utils.js";
 import { ghostUser } from "./ghost.js";
 import { prisma } from "./prisma.js";
 import { sanitizeAssetName } from "./routes/releases.js";
 
 /*
- * GitHub import, phase 2 (#289): after the git history, the repository's labels,
- * milestones, issues and their comments, then its releases and their files.
+ * GitHub import, phases 2 and 3 (#289): after the git history, the repository's
+ * labels, milestones, issues, pull requests, and the comments on both, then its
+ * releases and their files.
  *
  * One page of GitHub's listing per step, written in one transaction together with
  * the job's cursor, so a page lands whole or not at all and a restart carries on
  * where it stopped. GitHub's hourly limit only pauses it until the reset.
  *
- * Issues keep their GitHub numbers. Pull requests (and their comments) are left
- * for phase 3; since issues and pull requests share one sequence (#259), their
- * numbers stay free, and the repository's counter is raised past every number
- * GitHub has used, so nothing made here meanwhile takes one.
+ * Issues and pull requests keep their GitHub numbers: they share one sequence here
+ * as there (#259), and the repository's counter is raised past every number GitHub
+ * has used, so nothing made here meanwhile takes one. A closed or merged pull
+ * request records the commits it spans (pull-range.ts), so it needs no branch; its
+ * head comes from GitHub's refs/pull/<n>/head. An open one from a fork gets a branch,
+ * named as GitLab's GitHub importer names them: github/fork/<owner>/<number>/<branch>.
  *
  * Authors have no account here: what they wrote belongs to the ghost, with their
  * GitHub username kept beside it (`importedAuthor`).
  */
 
 export const PER_PAGE = 100;
-export type Stage = "labels" | "milestones" | "issues" | "comments" | "releases" | "done";
+export type Stage = "labels" | "milestones" | "issues" | "pulls" | "comments" | "releases" | "done";
 const NEXT: Record<Exclude<Stage, "done">, Stage> = {
-  labels: "milestones", milestones: "issues", issues: "comments", comments: "releases", releases: "done",
+  labels: "milestones", milestones: "issues", issues: "pulls", pulls: "comments", comments: "releases", releases: "done",
 };
 /** Items per page of each listing. Releases come a few at a time: their files are downloaded within the step. */
 export const PAGE_SIZE: Record<Exclude<Stage, "done">, number> = {
-  labels: PER_PAGE, milestones: PER_PAGE, issues: PER_PAGE, comments: PER_PAGE, releases: 10,
+  labels: PER_PAGE, milestones: PER_PAGE, issues: PER_PAGE, pulls: PER_PAGE, comments: PER_PAGE, releases: 10,
 };
 
 /** GitHub's requests for the hour are used up; carry on at `resetAt`. */
@@ -114,7 +118,7 @@ export function issueNumberFromUrl(url: unknown): number | null {
 
 /** The job's cursor after a page of `n` items: the next page, or the next stage's first. */
 function advance(
-  job: GithubIssueImport, n: number, counts: { issues?: number; comments?: number; releases?: number } = {},
+  job: GithubIssueImport, n: number, counts: { issues?: number; pulls?: number; comments?: number; releases?: number } = {},
 ): Prisma.PrismaPromise<unknown> {
   const stage = job.stage as Exclude<Stage, "done">;
   return prisma.githubIssueImport.update({
@@ -122,6 +126,7 @@ function advance(
     data: {
       ...(n < PAGE_SIZE[stage] ? { stage: NEXT[stage], page: 1 } : { page: job.page + 1 }),
       ...(counts.issues ? { issues: { increment: counts.issues } } : {}),
+      ...(counts.pulls ? { pulls: { increment: counts.pulls } } : {}),
       ...(counts.comments ? { comments: { increment: counts.comments } } : {}),
       ...(counts.releases ? { releases: { increment: counts.releases } } : {}),
     },
@@ -129,7 +134,12 @@ function advance(
 }
 
 /** One page of the job's current stage, written with the cursor in one transaction. */
-export async function importStep(job: GithubIssueImport, source: { owner: string; name: string }, ghostId: string): Promise<void> {
+export async function importStep(
+  job: GithubIssueImport,
+  source: { owner: string; name: string },
+  ghostId: string,
+  fetchHeads: typeof fetchPullHeads = fetchPullHeads,
+): Promise<void> {
   const repoId = job.repoId;
   const at = `/repos/${source.owner}/${source.name}`;
   const page = `per_page=${PAGE_SIZE[job.stage as Exclude<Stage, "done">] ?? PER_PAGE}&page=${job.page}`;
@@ -227,27 +237,37 @@ export async function importStep(job: GithubIssueImport, source: { owner: string
     return;
   }
 
+  if (job.stage === "pulls") {
+    await importPulls(job, source, ghostId, `${at}/pulls?state=all&sort=created&direction=asc&${page}`, fetchHeads);
+    return;
+  }
+
   if (job.stage === "comments") {
-    // One listing for the whole repository: far fewer requests than one per issue.
+    // One listing for the whole repository, issues' and pull requests' conversations
+    // alike: far fewer requests than one per issue.
     const items = list<GhComment>(await githubGet(`${at}/issues/comments?sort=created&direction=asc&${page}`));
     const numbers = [...new Set(items.map((c) => issueNumberFromUrl(c.issue_url)).filter((n): n is number => n !== null))];
-    const issues = await prisma.issue.findMany({ where: { repoId, number: { in: numbers } }, select: { id: true, number: true } });
+    const [issues, pulls] = await Promise.all([
+      prisma.issue.findMany({ where: { repoId, number: { in: numbers } }, select: { id: true, number: true } }),
+      prisma.pullRequest.findMany({ where: { repoId, number: { in: numbers } }, select: { id: true, number: true } }),
+    ]);
     const issueId = new Map(issues.map((i) => [i.number, i.id]));
-    const ops = items.flatMap((c) => {
-      // A pull request's conversation: phase 3.
-      const id = issueId.get(issueNumberFromUrl(c.issue_url) ?? -1);
-      if (!id) return [];
+    const pullId = new Map(pulls.map((p) => [p.number, p.id]));
+    const ops = items.flatMap((c): Prisma.PrismaPromise<unknown>[] => {
+      const number = issueNumberFromUrl(c.issue_url) ?? -1;
       const createdAt = date(c.created_at);
-      return [prisma.issueComment.create({
-        data: {
-          issueId: id,
-          authorId: ghostId,
-          importedAuthor: login(c.user),
-          body: typeof c.body === "string" ? c.body.slice(0, 262_144) : "",
-          createdAt,
-          updatedAt: date(c.updated_at) ?? createdAt,
-        },
-      })];
+      const data = {
+        authorId: ghostId,
+        importedAuthor: login(c.user),
+        body: typeof c.body === "string" ? c.body.slice(0, 262_144) : "",
+        createdAt,
+        updatedAt: date(c.updated_at) ?? createdAt,
+      };
+      const issue = issueId.get(number);
+      if (issue) return [prisma.issueComment.create({ data: { issueId: issue, ...data } })];
+      const pull = pullId.get(number);
+      if (pull) return [prisma.pullRequestComment.create({ data: { pullRequestId: pull, ...data } })];
+      return [];
     });
     await prisma.$transaction([...ops, advance(job, items.length, { comments: ops.length })]);
     return;
@@ -365,6 +385,140 @@ async function importReleases(job: GithubIssueImport, source: { owner: string; n
     await Promise.all(stored.map((k) => removeAsset(k).catch(() => undefined)));
     throw err;
   }
+}
+
+type GhPull = GhIssue & {
+  draft?: unknown; merged_at?: unknown; merge_commit_sha?: unknown;
+  head?: { ref?: unknown; sha?: unknown; repo?: { full_name?: unknown; owner?: GhUser } | null } | null;
+  base?: { ref?: unknown; sha?: unknown } | null;
+};
+
+const SHA = /^[0-9a-f]{40}$/;
+const sha = (v: unknown): string | null => (typeof v === "string" && SHA.test(v) ? v : null);
+
+async function tryGit(storageKey: string, args: string[]): Promise<string | null> {
+  try {
+    return (await git(storageKey, args)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The commit, when this repository has it. */
+async function commit(storageKey: string, rev: string | null): Promise<string | null> {
+  return rev ? tryGit(storageKey, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]) : null;
+}
+
+/**
+ * The branch an open pull request from a fork reads from here: GitLab's name for it,
+ * github/fork/<owner>/<number>/<branch>, made at its head (or the one a page done
+ * before a restart made). Null when the name isn't a valid branch or it can't be made.
+ */
+async function forkBranch(storageKey: string, owner: string, number: number, ref: string, head: string): Promise<string | null> {
+  const name = `github/fork/${owner}/${number}/${ref}`;
+  if (!(await tryGit(storageKey, ["check-ref-format", "--branch", name]))) return null;
+  if (await tryGit(storageKey, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])) return name;
+  // "" as the old value: only if no branch has the name.
+  try {
+    await git(storageKey, ["update-ref", `refs/heads/${name}`, head, ""]);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A page of pull requests. Page 1 first fetches every pull request's head from GitHub.
+ * Closed and merged ones record the commits they span: their head, and its merge base
+ * with where they were going. Open ones read from their branch: their own when it's in
+ * this repository, else one made for them from the fork's head.
+ */
+async function importPulls(
+  job: GithubIssueImport, source: { owner: string; name: string }, ghostId: string, url: string,
+  fetchHeads: typeof fetchPullHeads,
+): Promise<void> {
+  const repoId = job.repoId;
+  const { storageKey } = await prisma.repo.findUniqueOrThrow({ where: { id: repoId }, select: { storageKey: true } });
+  if (!storageKey) throw new GithubFailed("This repository has no git storage");
+  if (job.page === 1) {
+    try {
+      await fetchHeads(storageKey, source);
+    } catch {
+      throw new GithubFailed("Could not fetch the pull requests' commits from GitHub");
+    }
+  }
+  const items = list<GhPull>(await githubGet(url)).filter((p) => count(p.number) && text(p.title, 1));
+  const numbers = items.map((p) => count(p.number)!);
+  const [labels, milestones, issues, pulls] = await Promise.all([
+    prisma.label.findMany({ where: { repoId }, select: { id: true, name: true } }),
+    prisma.milestone.findMany({ where: { repoId }, select: { id: true, number: true } }),
+    prisma.issue.findMany({ where: { repoId, number: { in: numbers } }, select: { number: true } }),
+    prisma.pullRequest.findMany({ where: { repoId, number: { in: numbers } }, select: { number: true } }),
+  ]);
+  const labelId = new Map(labels.map((l) => [l.name, l.id]));
+  const milestoneId = new Map(milestones.map((m) => [m.number, m.id]));
+  const skip = new Set([...issues, ...pulls].map((x) => x.number));
+  const sameRepo = `${source.owner}/${source.name}`.toLowerCase();
+
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  for (const p of items) {
+    const number = count(p.number)!;
+    if (skip.has(number)) continue;
+    const fromRef = text(p.head?.ref, 255) ?? `pull/${number}`;
+    const toBranch = text(p.base?.ref, 255) ?? "main";
+    const head = await commit(storageKey, sha(p.head?.sha));
+    const merged = date(p.merged_at);
+    let state: "OPEN" | "CLOSED" | "MERGED" = merged ? "MERGED" : p.state === "closed" ? "CLOSED" : "OPEN";
+    let fromBranch = fromRef;
+    let range: { baseSha: string | null; headSha: string | null } = { baseSha: null, headSha: null };
+    if (state === "OPEN") {
+      const ownBranch = String(p.head?.repo?.full_name ?? "").toLowerCase() === sameRepo
+        && (await tryGit(storageKey, ["rev-parse", "--verify", "--quiet", `refs/heads/${fromRef}`]));
+      if (!ownBranch) {
+        const owner = login(p.head?.repo?.owner) ?? "unknown";
+        const made = head ? await forkBranch(storageKey, owner, number, fromRef, head) : null;
+        // Without its commits an open pull request can't be shown: it comes over closed.
+        if (made) fromBranch = made;
+        else state = "CLOSED";
+      }
+    }
+    if (state !== "OPEN" && head) {
+      const base = (await tryGit(storageKey, ["merge-base", sha(p.base?.sha) ?? toBranch, head]))
+        ?? (await tryGit(storageKey, ["merge-base", toBranch, head]));
+      if (base) range = { baseSha: base, headSha: head };
+    }
+    const names = (Array.isArray(p.labels) ? p.labels : [])
+      .map((l) => text(typeof l === "string" ? l : (l as GhLabel | null)?.name, 50))
+      .filter((n): n is string => !!n && labelId.has(n));
+    const createdAt = date(p.created_at);
+    ops.push(prisma.pullRequest.create({
+      data: {
+        repoId,
+        number,
+        title: text(p.title, 256)!,
+        description: text(p.body, 262_144),
+        fromBranch,
+        toBranch,
+        state,
+        isDraft: state === "OPEN" && p.draft === true,
+        mergedAt: merged ?? null,
+        mergeCommitSha: merged ? await commit(storageKey, sha(p.merge_commit_sha)) : null,
+        ...range,
+        createdAt,
+        updatedAt: date(p.updated_at) ?? createdAt,
+        authorId: ghostId,
+        importedAuthor: login(p.user),
+        milestoneId: milestoneId.get(count(p.milestone?.number) ?? -1) ?? null,
+        labels: { create: [...new Set(names)].map((n) => ({ labelId: labelId.get(n)! })) },
+      },
+    }));
+  }
+  const highest = Math.max(0, ...numbers);
+  await prisma.$transaction([
+    ...ops,
+    prisma.repo.updateMany({ where: { id: repoId, lastNumber: { lt: highest } }, data: { lastNumber: highest } }),
+    advance(job, items.length, { pulls: ops.length }),
+  ]);
 }
 
 /** Raise the counter past GitHub's newest issue or pull request before the first issue lands. */
