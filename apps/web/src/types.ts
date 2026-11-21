@@ -908,6 +908,8 @@ export type Release = {
   isDraft: boolean;
   isPrerelease: boolean;
   author: string;
+  /** Brought over from GitHub (#289): who published it there; `author` is then the ghost. */
+  importedAuthor?: string | null;
   assets: ReleaseAsset[];
   createdAt: string;
   updatedAt: string;

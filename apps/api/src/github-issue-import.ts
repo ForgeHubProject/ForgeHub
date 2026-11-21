@@ -1,12 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { Readable, Transform } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { FastifyInstance } from "fastify";
 import type { GithubIssueImport, Prisma } from "@prisma/client";
+import { buildAssetStorageKey, removeAsset, writeAssetStream } from "./git-storage.js";
 import { githubToken, parseGithubRepo } from "./github-import.js";
 import { ghostUser } from "./ghost.js";
 import { prisma } from "./prisma.js";
+import { sanitizeAssetName } from "./routes/releases.js";
 
 /*
  * GitHub import, phase 2 (#289): after the git history, the repository's labels,
- * milestones, issues and their comments.
+ * milestones, issues and their comments, then its releases and their files.
  *
  * One page of GitHub's listing per step, written in one transaction together with
  * the job's cursor, so a page lands whole or not at all and a restart carries on
@@ -22,8 +27,14 @@ import { prisma } from "./prisma.js";
  */
 
 export const PER_PAGE = 100;
-export type Stage = "labels" | "milestones" | "issues" | "comments" | "done";
-const NEXT: Record<Exclude<Stage, "done">, Stage> = { labels: "milestones", milestones: "issues", issues: "comments", comments: "done" };
+export type Stage = "labels" | "milestones" | "issues" | "comments" | "releases" | "done";
+const NEXT: Record<Exclude<Stage, "done">, Stage> = {
+  labels: "milestones", milestones: "issues", issues: "comments", comments: "releases", releases: "done",
+};
+/** Items per page of each listing. Releases come a few at a time: their files are downloaded within the step. */
+export const PAGE_SIZE: Record<Exclude<Stage, "done">, number> = {
+  labels: PER_PAGE, milestones: PER_PAGE, issues: PER_PAGE, comments: PER_PAGE, releases: 10,
+};
 
 /** GitHub's requests for the hour are used up; carry on at `resetAt`. */
 export class GithubRateLimited extends Error {
@@ -102,14 +113,17 @@ export function issueNumberFromUrl(url: unknown): number | null {
 }
 
 /** The job's cursor after a page of `n` items: the next page, or the next stage's first. */
-function advance(job: GithubIssueImport, n: number, counts: { issues?: number; comments?: number } = {}): Prisma.PrismaPromise<unknown> {
+function advance(
+  job: GithubIssueImport, n: number, counts: { issues?: number; comments?: number; releases?: number } = {},
+): Prisma.PrismaPromise<unknown> {
   const stage = job.stage as Exclude<Stage, "done">;
   return prisma.githubIssueImport.update({
     where: { repoId: job.repoId },
     data: {
-      ...(n < PER_PAGE ? { stage: NEXT[stage], page: 1 } : { page: job.page + 1 }),
+      ...(n < PAGE_SIZE[stage] ? { stage: NEXT[stage], page: 1 } : { page: job.page + 1 }),
       ...(counts.issues ? { issues: { increment: counts.issues } } : {}),
       ...(counts.comments ? { comments: { increment: counts.comments } } : {}),
+      ...(counts.releases ? { releases: { increment: counts.releases } } : {}),
     },
   });
 }
@@ -118,7 +132,7 @@ function advance(job: GithubIssueImport, n: number, counts: { issues?: number; c
 export async function importStep(job: GithubIssueImport, source: { owner: string; name: string }, ghostId: string): Promise<void> {
   const repoId = job.repoId;
   const at = `/repos/${source.owner}/${source.name}`;
-  const page = `per_page=${PER_PAGE}&page=${job.page}`;
+  const page = `per_page=${PAGE_SIZE[job.stage as Exclude<Stage, "done">] ?? PER_PAGE}&page=${job.page}`;
 
   if (job.stage === "labels") {
     const items = list<GhLabel>(await githubGet(`${at}/labels?${page}`));
@@ -236,6 +250,120 @@ export async function importStep(job: GithubIssueImport, source: { owner: string
       })];
     });
     await prisma.$transaction([...ops, advance(job, items.length, { comments: ops.length })]);
+    return;
+  }
+
+  if (job.stage === "releases") await importReleases(job, source, ghostId, `${at}/releases?${page}`);
+}
+
+type GhAsset = { name?: unknown; size?: unknown; content_type?: unknown; browser_download_url?: unknown };
+type GhRelease = {
+  tag_name?: unknown; name?: unknown; body?: unknown; draft?: unknown; prerelease?: unknown;
+  author?: GhUser; created_at?: unknown; published_at?: unknown; assets?: unknown;
+};
+
+/** The largest file a release can hold: the same cap as an upload here. */
+export function maxAssetBytes(): number {
+  return Number(process.env["RELEASE_ASSET_MAX_BYTES"] ?? 100 * 1024 * 1024);
+}
+
+/**
+ * A release file's bytes, from GitHub's own download hosts only, streamed to storage.
+ * Throws GithubFailed when GitHub won't give it, or it's bigger than `max` after all.
+ */
+export async function downloadAsset(url: unknown, key: string, max: number): Promise<number> {
+  const from = typeof url === "string" ? new URL(url) : null;
+  if (!from || from.protocol !== "https:" || from.hostname !== "github.com") throw new GithubFailed("GitHub sent an unexpected file link");
+  let res: Response;
+  try {
+    res = await fetch(from, { headers: { "User-Agent": "ForgeHub" }, redirect: "follow", signal: AbortSignal.timeout(10 * 60_000) });
+  } catch {
+    throw new GithubFailed("Could not download a release file from GitHub");
+  }
+  const landed = new URL(res.url || from.href).hostname;
+  if (landed !== "github.com" && !landed.endsWith(".githubusercontent.com")) throw new GithubFailed("GitHub sent a release file from an unexpected host");
+  if (!res.ok || !res.body) throw new GithubFailed(`GitHub answered ${res.status} for a release file`);
+  let seen = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      seen += chunk.length;
+      done(seen > max ? new GithubFailed("A release file is bigger than GitHub said") : null, chunk);
+    },
+  });
+  try {
+    return await writeAssetStream(key, Readable.fromWeb(res.body as WebReadableStream<Uint8Array>).pipe(cap));
+  } catch (err) {
+    await removeAsset(key).catch(() => undefined);
+    throw err instanceof GithubFailed ? err : new GithubFailed("Could not download a release file from GitHub");
+  }
+}
+
+/**
+ * A page of releases: each one's files are downloaded first, then every release on the
+ * page is written with the cursor in one transaction. Files over the cap stay on GitHub,
+ * and the release's notes say so. A release already here (a page done before a restart)
+ * is skipped; drafts aren't listed without the owner's token anyway.
+ */
+async function importReleases(job: GithubIssueImport, source: { owner: string; name: string }, ghostId: string, url: string): Promise<void> {
+  const repoId = job.repoId;
+  const items = list<GhRelease>(await githubGet(url));
+  const repo = await prisma.repo.findUniqueOrThrow({ where: { id: repoId }, select: { storageKey: true } });
+  const tags = items.map((r) => text(r.tag_name, 255)).filter((t): t is string => !!t);
+  const existing = new Set((await prisma.release.findMany({ where: { repoId, tagName: { in: tags } }, select: { tagName: true } })).map((r) => r.tagName));
+  const max = maxAssetBytes();
+  const stored: string[] = [];
+  try {
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    for (const r of items) {
+      const tagName = text(r.tag_name, 255);
+      if (!tagName || r.draft === true || existing.has(tagName)) continue;
+      existing.add(tagName);
+      const id = randomUUID();
+      const assets: Prisma.ReleaseAssetCreateWithoutReleaseInput[] = [];
+      const leftOnGithub: string[] = [];
+      const names = new Set<string>();
+      for (const a of Array.isArray(r.assets) ? (r.assets as GhAsset[]) : []) {
+        const name = sanitizeAssetName(typeof a.name === "string" ? a.name : null);
+        const size = typeof a.size === "number" ? a.size : Number.POSITIVE_INFINITY;
+        if (!name || names.has(name)) continue;
+        if (size > max) {
+          leftOnGithub.push(name);
+          continue;
+        }
+        names.add(name);
+        const storageKey = buildAssetStorageKey(repo.storageKey ?? repoId, id, name);
+        stored.push(storageKey);
+        const written = await downloadAsset(a.browser_download_url, storageKey, max);
+        assets.push({
+          name, size: written, storageKey,
+          contentType: text(a.content_type, 255) ?? "application/octet-stream",
+          uploadedBy: { connect: { id: ghostId } },
+        });
+      }
+      const body = text(r.body, 262_144);
+      const note = leftOnGithub.length
+        ? `\n\n---\n${leftOnGithub.length === 1 ? "This file was" : "These files were"} too big to bring over and ${leftOnGithub.length === 1 ? "is" : "are"} still on GitHub: ${leftOnGithub.map((n) => `\`${n}\``).join(", ")}.`
+        : "";
+      const when = date(r.published_at) ?? date(r.created_at);
+      ops.push(prisma.release.create({
+        data: {
+          id, repoId, tagName,
+          name: text(r.name, 255) ?? tagName,
+          body: body || note ? `${body ?? ""}${note}`.trim() : null,
+          isPrerelease: r.prerelease === true,
+          authorId: ghostId,
+          importedAuthor: login(r.author),
+          createdAt: when,
+          updatedAt: when,
+          assets: { create: assets },
+        },
+      }));
+    }
+    await prisma.$transaction([...ops, advance(job, items.length, { releases: ops.length })]);
+  } catch (err) {
+    // Nothing of this page was written: its files go too, and the page is tried again.
+    await Promise.all(stored.map((k) => removeAsset(k).catch(() => undefined)));
+    throw err;
   }
 }
 

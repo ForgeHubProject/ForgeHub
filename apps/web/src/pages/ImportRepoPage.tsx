@@ -67,7 +67,7 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
         <h1 className="text-fh-2xl font-semibold text-fh-fg">Import a repository from GitHub</h1>
         <p className="mt-1 text-fh-base text-fh-fg-muted">
           Brings over every branch and tag, the default branch, the description and topics, and if you like its
-          issues, labels and milestones. Pull requests and releases stay on GitHub for now.
+          issues, labels, milestones and releases. Pull requests stay on GitHub for now.
         </p>
 
         <form onSubmit={submit} className="mt-6 flex flex-col gap-5 rounded-md border border-fh-border bg-fh-surface p-6">
@@ -131,9 +131,10 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
               onChange={(e) => setWithIssues(e.target.checked)}
             />
             <span>
-              Also bring its issues, labels and milestones
+              Also bring its issues, labels, milestones and releases
               <span className="block text-fh-xs text-fh-fg-subtle">
-                With their comments and original numbers, after the code. Pull requests come later.
+                Issues with their comments and original numbers, releases with their files, after the code. Pull
+                requests come later.
               </span>
             </span>
           </label>
