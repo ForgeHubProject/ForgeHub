@@ -173,7 +173,7 @@ export function MilestoneDetailView({ token, handle, repoName, number }: {
                       #{issue.number}{" "}
                       {issue.state === "open" ? "opened " : "closed "}
                       <RelativeTime date={issue.state === "open" ? issue.createdAt : (issue.closedAt ?? issue.updatedAt)} />
-                      {" by "}{issue.author}
+                      {" by "}{issue.importedAuthor ?? issue.author}
                     </div>
                   </div>
                   {issue.commentCount > 0 && (

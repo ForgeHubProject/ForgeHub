@@ -7,6 +7,7 @@ import {
 } from "../git-storage.js";
 import { seedFromTemplate } from "../repo-template.js";
 import { fetchGithubRepo, ImportError, parseGithubRepo, runGithubImport, type GithubRepo } from "../github-import.js";
+import { startIssueImport, startIssueImportIfAsked } from "../github-issue-import.js";
 import { fillMissingFormats, parseFormats } from "../repo-formats.js";
 import { resolveActorIdentity } from "../pull-merge.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
@@ -553,6 +554,8 @@ export async function repoRoutes(app: FastifyInstance) {
               importSource: `${source.owner}/${source.name}`,
               importStatus: "importing",
               topics: { create: source.topics.map((topic) => ({ topic })) },
+              // Waits for the git history, then starts (#289, phase 2).
+              ...(parsed.data.importIssues && { issueImport: { create: {} } }),
             }),
           },
           include: { owner: { select: { handle: true } }, org: { select: { handle: true } }, ...topicsInclude },
@@ -567,7 +570,10 @@ export async function repoRoutes(app: FastifyInstance) {
       }
       // The creator implicitly watches their new repo at ALL (issue #88).
       await ensureImplicitWatch(repo.id, ownerId);
-      if (source) void runGithubImport(app, { id: repo.id, storageKey }, ownerId, source);
+      if (source) {
+        const repoId = repo.id;
+        void runGithubImport(app, { id: repoId, storageKey }, ownerId, source).then(() => startIssueImportIfAsked(app, repoId));
+      }
       if (templateKey) {
         try {
           await seedFromTemplate(storageKey, templateKey, await resolveActorIdentity(ownerId));
@@ -757,10 +763,39 @@ export async function repoRoutes(app: FastifyInstance) {
         data: { importStatus: "importing", importError: null },
       });
       if (count === 0) return reply.status(409).send({ error: "This repository has no failed import to retry" });
-      void runGithubImport(app, { id: repo.id, storageKey: repo.storageKey }, userId, source);
+      void runGithubImport(app, { id: repo.id, storageKey: repo.storageKey }, userId, source).then(() => startIssueImportIfAsked(app, repo.id));
       return reply.status(202).send({ importStatus: "importing" });
     },
   );
+
+  // GET /repos/:handle/:name/import/issues — how far bringing the issues over from GitHub has got (#289, phase 2).
+  app.get("/repos/:handle/:name/import/issues", { preHandler: [app.optionalAuthenticate] }, async (request, reply) => {
+    const { handle, name } = request.params as { handle: string; name: string };
+    const userId = (request as { user?: { sub: string } }).user?.sub;
+    const repo = await resolveRepo(handle, name);
+    if (!repo || !canRead(repo, userId)) return reply.status(404).send({ error: "Repository not found" });
+    const job = await prisma.githubIssueImport.findUnique({ where: { repoId: repo.id } });
+    return reply.send({
+      import: job && {
+        source: repo.importSource,
+        stage: job.stage,
+        issues: job.issues,
+        comments: job.comments,
+        waitUntil: job.waitUntil && job.waitUntil > new Date() ? job.waitUntil.toISOString() : null,
+        error: job.error,
+      },
+    });
+  });
+
+  // POST /repos/:handle/:name/import/issues/retry — carry on after it stopped.
+  app.post("/repos/:handle/:name/import/issues/retry", { preHandler: [app.authenticate, adminScope] }, async (request, reply) => {
+    const repo = await adminRepo(request, reply);
+    if (!repo) return reply;
+    const { count } = await prisma.githubIssueImport.updateMany({ where: { repoId: repo.id, error: { not: null } }, data: { error: null } });
+    if (count === 0) return reply.status(409).send({ error: "This repository has no stopped issue import to retry" });
+    startIssueImport(app, repo.id);
+    return reply.status(202).send({ stage: "importing" });
+  });
 
   // POST /repos/:handle/:name/rename { name } — rename (#256): any repo the
   // caller administers, personal or org. The bare repository moves with it, and

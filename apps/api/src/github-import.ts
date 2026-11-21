@@ -51,7 +51,7 @@ export type GithubRepo = {
  * without one, 5,000 with one; each import or retry asks once. Only that request carries it:
  * the git fetch never does, and a private repository is refused either way.
  */
-function githubToken(): string | null {
+export function githubToken(): string | null {
   return process.env["FORGEHUB_GITHUB_TOKEN"]?.trim() || null;
 }
 

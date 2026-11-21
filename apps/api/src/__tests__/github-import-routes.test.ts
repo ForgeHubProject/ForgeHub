@@ -13,7 +13,12 @@ vi.mock("../prisma.js", () => ({
     repo: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), count: vi.fn(), updateMany: vi.fn(), delete: vi.fn() },
     repoRedirect: { findUnique: vi.fn().mockResolvedValue(null) },
     watch: { upsert: vi.fn() },
+    githubIssueImport: { findUnique: vi.fn(), updateMany: vi.fn() },
   },
+}));
+vi.mock("../github-issue-import.js", () => ({
+  startIssueImport: vi.fn(),
+  startIssueImportIfAsked: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../git-storage.js", async (orig) => ({
   ...(await orig<typeof import("../git-storage.js")>()),
@@ -30,6 +35,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { createBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { runGithubImport } from "../github-import.js";
+import { startIssueImport, startIssueImportIfAsked } from "../github-issue-import.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
 
 const ADA = "user-ada";
@@ -158,6 +164,21 @@ describe("GitHub import routes", () => {
       expect(source).toMatchObject({ owner: "octocat", name: "Hello-World", defaultBranch: "master" });
     });
 
+    it("with importIssues: the issue import waits for the git history, then starts (#289, phase 2)", async () => {
+      github(200, publicRepo);
+      await importRepo({ name: "hello-world", importFrom: "octocat/Hello-World", importIssues: true });
+      const { data } = vi.mocked(prisma.repo.create).mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(data.issueImport).toEqual({ create: {} });
+      await vi.waitFor(() => expect(startIssueImportIfAsked).toHaveBeenCalledWith(expect.anything(), "repo-1"));
+    });
+
+    it("without it: no issue import", async () => {
+      github(200, publicRepo);
+      await importRepo({ name: "hello-world", importFrom: "octocat/Hello-World" });
+      const { data } = vi.mocked(prisma.repo.create).mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(data).not.toHaveProperty("issueImport");
+    });
+
     it("keeps a description the caller gave", async () => {
       github(200, publicRepo);
       await importRepo({ name: "hello-world", description: "Mine now", importFrom: "octocat/Hello-World" });
@@ -236,6 +257,40 @@ describe("GitHub import routes", () => {
       vi.mocked(prisma.repo.updateMany).mockResolvedValue({ count: 0 } as never);
       expect((await retry()).statusCode).toBe(409);
       expect(runGithubImport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the issue import (#289, phase 2)", () => {
+    const imported = {
+      id: "repo-1", name: "hello-world", visibility: "PUBLIC", storageKey: "ada/hello-world.git", ownerId: ADA,
+      orgId: null, org: null, collaborators: [], teamAccess: [], archivedAt: null, importSource: "octocat/Hello-World", importStatus: null,
+    };
+    beforeEach(() => {
+      vi.mocked(prisma.repo.findFirst).mockResolvedValue(imported as never);
+    });
+
+    it("anyone who can read the repository sees how far it has got", async () => {
+      vi.mocked(prisma.githubIssueImport.findUnique).mockResolvedValueOnce({
+        repoId: "repo-1", stage: "comments", page: 3, issues: 140, comments: 212, waitUntil: new Date(Date.now() + 600_000), error: null,
+      } as never);
+      const res = await app.inject({ method: "GET", url: "/repos/ada/hello-world/import/issues", headers: { authorization: bob } });
+      expect(res.json()).toEqual({
+        import: { source: "octocat/Hello-World", stage: "comments", issues: 140, comments: 212, waitUntil: expect.any(String), error: null },
+      });
+      vi.mocked(prisma.githubIssueImport.findUnique).mockResolvedValueOnce(null);
+      expect((await app.inject({ method: "GET", url: "/repos/ada/hello-world/import/issues" })).json()).toEqual({ import: null });
+    });
+
+    it("Retry: admins only, and only a stopped one", async () => {
+      const retry = (token: string) => app.inject({ method: "POST", url: "/repos/ada/hello-world/import/issues/retry", headers: { authorization: token } });
+      expect((await retry(bob)).statusCode).toBe(403);
+      vi.mocked(prisma.githubIssueImport.updateMany).mockResolvedValueOnce({ count: 0 } as never);
+      expect((await retry(ada)).statusCode).toBe(409);
+      expect(startIssueImport).not.toHaveBeenCalled();
+      vi.mocked(prisma.githubIssueImport.updateMany).mockResolvedValueOnce({ count: 1 } as never);
+      expect((await retry(ada)).statusCode).toBe(202);
+      expect(prisma.githubIssueImport.updateMany).toHaveBeenLastCalledWith({ where: { repoId: "repo-1", error: { not: null } }, data: { error: null } });
+      expect(startIssueImport).toHaveBeenCalledWith(expect.anything(), "repo-1");
     });
   });
 

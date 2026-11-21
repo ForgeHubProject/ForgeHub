@@ -75,6 +75,7 @@ import { sessionActive } from "./session-service.js";
 import { backfillImplicitWatches } from "./watch-service.js";
 import { ciStartupRecovery } from "./ci/boot.js";
 import { failInterruptedImports } from "./github-import.js";
+import { resumeIssueImports } from "./github-issue-import.js";
 
 export async function buildServer() {
   const secret = process.env["JWT_SECRET"];
@@ -274,6 +275,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // A restart ends any running GitHub import (#289): mark it failed so it can be retried.
       await failInterruptedImports().catch((err) => {
         app.log.warn({ err }, "GitHub import recovery failed");
+      });
+      // Issue imports whose git history is in carry on where they stopped (#289, phase 2).
+      await resumeIssueImports(app).catch((err) => {
+        app.log.warn({ err }, "GitHub issue import recovery failed");
       });
       return app.listen({ port, host: "0.0.0.0" }).then(() => {
         app.log.info(`Listening on http://localhost:${port}`);

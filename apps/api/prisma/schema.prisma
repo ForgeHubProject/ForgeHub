@@ -186,6 +186,7 @@ model Repo {
   deleteBranchOnMerge Boolean   @default(false)
   redirects           RepoRedirect[]
   pendingTransfer     RepoTransfer?
+  issueImport         GithubIssueImport?
   refUpdates          RefUpdate[]
   attachments         Attachment[]
 
@@ -560,6 +561,27 @@ model RepoTransfer {
   @@index([toUserId])
 }
 
+// The rest of a GitHub import after its git history (#289, phase 2): labels,
+// milestones, issues and their comments, a page of GitHub's listing at a time,
+// so a restart or GitHub's hourly limit only pauses it.
+model GithubIssueImport {
+  repoId    String    @id
+  // labels → milestones → issues → comments → done
+  stage     String    @default("labels")
+  // The next page of the current stage's listing.
+  page      Int       @default(1)
+  issues    Int       @default(0)
+  comments  Int       @default(0)
+  // GitHub's limit for the hour is used up: carries on then.
+  waitUntil DateTime?
+  // Stopped on something other than the limit; Retry carries on from here.
+  error     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+}
+
 model RepoRedirect {
   id          String   @id @default(cuid())
   ownerHandle String
@@ -623,6 +645,10 @@ model Issue {
   // the issue. Writer-gated via the PATCH route + the /milestone quick action.
   milestoneId String?
 
+  // Brought over from GitHub (#289): the GitHub username of its author, who has no
+  // account here; `author` is then the ghost.
+  importedAuthor String?
+
   repo     Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
   author   User          @relation("IssueAuthor",   fields: [authorId],   references: [id])
   assignee User?         @relation("IssueAssignee", fields: [assigneeId], references: [id])
@@ -651,6 +677,8 @@ model IssueComment {
   body      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Brought over from GitHub (#289), as on Issue.
+  importedAuthor String?
 
   issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User  @relation("IssueCommentAuthor", fields: [authorId], references: [id])

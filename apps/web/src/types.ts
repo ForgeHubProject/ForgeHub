@@ -773,6 +773,8 @@ export type Issue = {
   body: string | null;
   state: "open" | "closed";
   author: string;
+  /** Brought over from GitHub (#289): its author's GitHub username; `author` is then the ghost. */
+  importedAuthor?: string | null;
   assignee: string | null;
   labels: Label[];
   commentCount: number;
@@ -869,6 +871,8 @@ export type IssueComment = {
   id: string;
   body: string;
   author: string;
+  /** Brought over from GitHub (#289), as on Issue. */
+  importedAuthor?: string | null;
   createdAt: string;
   updatedAt: string;
   // Emoji reactions (#90) — optional so older payloads still parse.

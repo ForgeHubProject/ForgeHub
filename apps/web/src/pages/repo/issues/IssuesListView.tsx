@@ -13,6 +13,7 @@ import type { Issue, Label, Milestone, SavedFilter } from "../../../types";
 import { StateIcon } from "./parts";
 import { FilterTrigger, Popover } from "./pickers";
 import { BookmarkIcon, CommentIcon, IssueOpenedIcon, MilestoneIcon, PersonIcon, PinIcon, SortIcon, TagIcon } from "./icons";
+import { IssueImportBanner } from "./IssueImportBanner";
 
 type Sort = "newest" | "oldest";
 
@@ -47,9 +48,12 @@ export function IssuesListView({ token, handle, repoName }: {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const appliedViewRef = useRef<string | null>(null);
+  // Bumped while a GitHub import brings issues in (#289), to show them as they land.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    setLoading(true);
+    // A reload for newly imported issues keeps the list on screen meanwhile.
+    if (reloadKey === 0) setLoading(true);
     setError(null);
     Promise.all([
       listIssues(token, handle, repoName, "all"),
@@ -67,7 +71,7 @@ export function IssuesListView({ token, handle, repoName }: {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load issues"))
       .finally(() => setLoading(false));
-  }, [token, handle, repoName]);
+  }, [token, handle, repoName, reloadKey]);
 
   /** Serialize the current filter combo to a query string (for a saved view). */
   function currentQuery(): string {
@@ -378,6 +382,7 @@ export function IssuesListView({ token, handle, repoName }: {
 
   return (
     <div>
+      <IssueImportBanner token={token} handle={handle} repoName={repoName} onProgress={() => setReloadKey((k) => k + 1)} />
       <div className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 min-w-0">
           <SearchIcon size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fh-fg-muted pointer-events-none" />
@@ -505,7 +510,7 @@ export function IssuesListView({ token, handle, repoName }: {
                       #{issue.number}{" "}
                       {issue.state === "open" ? "opened " : "closed "}
                       <RelativeTime date={issue.state === "open" ? issue.createdAt : (issue.closedAt ?? issue.updatedAt)} />
-                      {" by "}{issue.author}
+                      {" by "}{issue.importedAuthor ?? issue.author}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0 pl-2">
