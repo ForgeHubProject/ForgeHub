@@ -780,6 +780,7 @@ export async function repoRoutes(app: FastifyInstance) {
         source: repo.importSource,
         stage: job.stage,
         issues: job.issues,
+        pulls: job.pulls,
         comments: job.comments,
         waitUntil: job.waitUntil && job.waitUntil > new Date() ? job.waitUntil.toISOString() : null,
         error: job.error,

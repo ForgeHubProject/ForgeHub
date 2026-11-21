@@ -587,8 +587,9 @@ export async function updateRepo(
 /** How far bringing a repository's issues over from GitHub has got (#289, phase 2). */
 export type IssueImport = {
   source: string | null;
-  stage: "labels" | "milestones" | "issues" | "comments" | "done";
+  stage: "labels" | "milestones" | "issues" | "pulls" | "comments" | "done";
   issues: number;
+  pulls: number;
   comments: number;
   /** GitHub's limit for the hour is used up: it carries on then. */
   waitUntil: string | null;

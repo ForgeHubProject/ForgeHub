@@ -16,6 +16,7 @@ import type {
 import { Avatar, Button, ConfirmDialog, EmptyState, RelativeTime, Skeleton, TabItem, TabNav, TextInput, cx, useToast } from "../../../ui";
 import { SignatureBadge } from "../commitUi";
 import { CommentIcon } from "../issues/icons";
+import { GithubAuthor } from "../issues/parts";
 import { Popover } from "../issues/pickers";
 import { MergeBox } from "./MergeBox";
 import { PRChecks } from "./PRChecks";
@@ -495,7 +496,11 @@ export function PullDetail({
       <div className="flex items-center gap-3 flex-wrap mb-4">
         <StatePill state={pr.state} draft={pr.isDraft} />
         <p className="text-fh-sm text-fh-fg-muted inline-flex items-center gap-1.5 flex-wrap">
-          <Link to={`/${pr.author}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">{pr.author}</Link>
+          {pr.importedAuthor ? (
+            <GithubAuthor login={pr.importedAuthor} />
+          ) : (
+            <Link to={`/${pr.author}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">{pr.author}</Link>
+          )}
           <span>
             {pr.state === "merged" ? "merged" : "wants to merge"}
             {commitWord && ` ${commitWord}`} into
@@ -536,9 +541,9 @@ export function PullDetail({
             {/* Opening comment */}
             <div id="pr-body" className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
               <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas">
-                <Avatar name={pr.author} size={24} />
+                <Avatar name={pr.importedAuthor ?? pr.author} size={24} />
                 <span className="text-fh-sm">
-                  <span className="font-semibold text-fh-fg">{pr.author}</span>{" "}
+                  {pr.importedAuthor ? <GithubAuthor login={pr.importedAuthor} /> : <span className="font-semibold text-fh-fg">{pr.author}</span>}{" "}
                   <span className="text-fh-fg-muted">
                     opened <RelativeTime date={pr.createdAt} />
                   </span>
@@ -582,8 +587,12 @@ export function PullDetail({
               item.kind === "comment" ? (
                 <div key={`c-${item.comment.id}`} id={`issuecomment-${item.comment.id}`} className="rounded-md border border-fh-border bg-fh-surface overflow-hidden scroll-mt-20">
                   <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-fh-border bg-fh-canvas text-fh-sm">
-                    <Avatar name={item.comment.author} size={22} />
-                    <span className="font-semibold text-fh-fg">{item.comment.author}</span>
+                    <Avatar name={item.comment.importedAuthor ?? item.comment.author} size={22} />
+                    {item.comment.importedAuthor ? (
+                      <span><GithubAuthor login={item.comment.importedAuthor} /></span>
+                    ) : (
+                      <span className="font-semibold text-fh-fg">{item.comment.author}</span>
+                    )}
                     <span className="text-fh-fg-muted">commented <RelativeTime date={item.comment.createdAt} /></span>
                     <CommentMenu
                       anchor={`issuecomment-${item.comment.id}`}

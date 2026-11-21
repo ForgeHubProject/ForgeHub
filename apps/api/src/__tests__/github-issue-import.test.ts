@@ -12,18 +12,21 @@ vi.mock("../prisma.js", () => {
       milestone: { upsert: op("milestone.upsert"), findMany: vi.fn() },
       issue: { create: op("issue.create"), findMany: vi.fn() },
       issueComment: { create: op("issueComment.create") },
-      pullRequest: { findMany: vi.fn() },
-      repo: { updateMany: op("repo.updateMany") },
+      pullRequest: { create: op("pullRequest.create"), findMany: vi.fn() },
+      pullRequestComment: { create: op("pullRequestComment.create") },
+      repo: { updateMany: op("repo.updateMany"), findUniqueOrThrow: vi.fn() },
       githubIssueImport: { update: op("job.update"), updateMany: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
       $transaction: vi.fn(async (ops: unknown[]) => ops),
     },
   };
 });
 vi.mock("../ghost.js", () => ({ ghostUser: vi.fn().mockResolvedValue({ id: "ghost-id" }) }));
+vi.mock("../git-utils.js", () => ({ git: vi.fn() }));
 
 import type { FastifyInstance } from "fastify";
 import type { GithubIssueImport } from "@prisma/client";
 import { prisma } from "../prisma.js";
+import { git } from "../git-utils.js";
 import {
   githubGet, GithubFailed, GithubRateLimited, importStep, issueNumberFromUrl, PER_PAGE, runIssueImport,
 } from "../github-issue-import.js";
@@ -38,6 +41,7 @@ beforeEach(() => {
   vi.mocked(prisma.milestone.findMany).mockResolvedValue([]);
   vi.mocked(prisma.issue.findMany).mockResolvedValue([]);
   vi.mocked(prisma.pullRequest.findMany).mockResolvedValue([]);
+  vi.mocked(prisma.repo.findUniqueOrThrow).mockResolvedValue({ storageKey: "ada/hello.git" } as never);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,7 +51,7 @@ afterEach(() => {
 const answer = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status, headers }));
 const job = (overrides: Partial<GithubIssueImport> = {}): GithubIssueImport => ({
-  repoId: "repo-1", stage: "labels", page: 1, issues: 0, comments: 0, waitUntil: null, error: null,
+  repoId: "repo-1", stage: "labels", page: 1, issues: 0, pulls: 0, comments: 0, waitUntil: null, error: null,
   createdAt: new Date(), updatedAt: new Date(), ...overrides,
 });
 const source = { owner: "octocat", name: "Hello-World" };
@@ -157,7 +161,7 @@ describe("importStep", () => {
     // The counter: GitHub's newest (9) first, then the page's highest, the pull request's #2 included.
     expect(vi.mocked(prisma.repo.updateMany).mock.calls[0]![0]).toEqual({ where: { id: "repo-1", lastNumber: { lt: 9 } }, data: { lastNumber: 9 } });
     expect(ops("repo.updateMany")[0]!.args).toEqual({ where: { id: "repo-1", lastNumber: { lt: 7 } }, data: { lastNumber: 7 } });
-    expect(cursor()).toEqual({ stage: "comments", page: 1, issues: { increment: 2 } });
+    expect(cursor()).toEqual({ stage: "pulls", page: 1, issues: { increment: 2 } });
   });
 
   it("issues: a page done before a restart isn't doubled", async () => {
@@ -168,18 +172,113 @@ describe("importStep", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // no reservation after page 1
   });
 
-  it("comments: on imported issues only (a pull request's wait for phase 3), by the ghost with their GitHub name", async () => {
+  it("comments: to the issue or pull request they were on, by the ghost with their GitHub name", async () => {
     vi.mocked(prisma.issue.findMany).mockResolvedValueOnce([{ id: "is-1", number: 1 }] as never);
+    vi.mocked(prisma.pullRequest.findMany).mockResolvedValueOnce([{ id: "pr-2", number: 2 }] as never);
     answer([
       { body: "Same here", user: { login: "mona" }, created_at: "2025-01-01T10:00:00Z", issue_url: "https://api.github.com/repos/octocat/Hello-World/issues/1" },
-      { body: "LGTM", user: { login: "hubot" }, issue_url: "https://api.github.com/repos/octocat/Hello-World/issues/2" },
+      { body: "LGTM", user: { login: "hubot" }, created_at: "2025-01-02T10:00:00Z", issue_url: "https://api.github.com/repos/octocat/Hello-World/issues/2" },
+      { body: "On something not here", user: { login: "x" }, issue_url: "https://api.github.com/repos/octocat/Hello-World/issues/99" },
     ]);
     await importStep(job({ stage: "comments" }), source, "ghost-id");
-    const created = ops("issueComment.create").map((o) => o.args.data!);
-    expect(created).toEqual([
+    expect(ops("issueComment.create").map((o) => o.args.data!)).toEqual([
       { issueId: "is-1", authorId: "ghost-id", importedAuthor: "mona", body: "Same here", createdAt: new Date("2025-01-01T10:00:00Z"), updatedAt: new Date("2025-01-01T10:00:00Z") },
     ]);
-    expect(cursor()).toEqual({ stage: "done", page: 1, comments: { increment: 1 } });
+    expect(ops("pullRequestComment.create").map((o) => o.args.data!)).toEqual([
+      { pullRequestId: "pr-2", authorId: "ghost-id", importedAuthor: "hubot", body: "LGTM", createdAt: new Date("2025-01-02T10:00:00Z"), updatedAt: new Date("2025-01-02T10:00:00Z") },
+    ]);
+    expect(cursor()).toEqual({ stage: "done", page: 1, comments: { increment: 2 } });
+  });
+
+  describe("pulls", () => {
+    const H = (c: string) => c.repeat(40);
+    const BASE = H("b");
+    /** A repository with these commits and branches; merge-base answers BASE. */
+    function repoHas(commits: string[], branches: Record<string, string>) {
+      const made: string[][] = [];
+      vi.mocked(git).mockImplementation((async (_key: string, args: string[]) => {
+        const [cmd, ...rest] = args;
+        if (cmd === "rev-parse") {
+          const rev = rest.at(-1)!;
+          if (rev.startsWith("refs/heads/")) {
+            const b = branches[rev.slice("refs/heads/".length)];
+            if (b) return b;
+            throw new Error("no such branch");
+          }
+          const c = rev.replace("^{commit}", "");
+          if (commits.includes(c)) return c;
+          throw new Error("no such commit");
+        }
+        if (cmd === "merge-base") return BASE;
+        if (cmd === "check-ref-format") return rest.at(-1)!;
+        if (cmd === "update-ref") {
+          made.push(rest);
+          return "";
+        }
+        throw new Error(`unexpected git ${args.join(" ")}`);
+      }) as never);
+      return made;
+    }
+    const fetchHeads = vi.fn().mockResolvedValue(undefined);
+    const pull = (o: Record<string, unknown>) => ({
+      title: "A change", state: "closed", user: { login: "mona" }, created_at: "2025-01-01T00:00:00Z",
+      head: { ref: "feature", sha: H("1"), repo: { full_name: "octocat/Hello-World", owner: { login: "octocat" } } },
+      base: { ref: "main", sha: H("0") }, ...o,
+    });
+
+    it("page 1 fetches every pull request's head first; closed and merged ones record the commits they span", async () => {
+      repoHas([H("1"), H("2"), H("9")], {});
+      answer([
+        pull({ number: 4, merged_at: "2025-01-03T00:00:00Z", merge_commit_sha: H("9"), labels: [{ name: "bug" }] }),
+        pull({ number: 5, head: { ref: "gone", sha: H("2"), repo: null } }),
+      ]);
+      vi.mocked(prisma.label.findMany).mockResolvedValueOnce([{ id: "lb-bug", name: "bug" }] as never);
+      await importStep(job({ stage: "pulls" }), source, "ghost-id", fetchHeads);
+      expect(fetchHeads).toHaveBeenCalledWith("ada/hello.git", source);
+      const [merged, closed] = ops("pullRequest.create").map((o) => o.args.data!);
+      expect(merged).toMatchObject({
+        repoId: "repo-1", number: 4, state: "MERGED", fromBranch: "feature", toBranch: "main", mergedAt: new Date("2025-01-03T00:00:00Z"),
+        mergeCommitSha: H("9"), baseSha: BASE, headSha: H("1"), authorId: "ghost-id", importedAuthor: "mona", isDraft: false,
+        labels: { create: [{ labelId: "lb-bug" }] },
+      });
+      expect(closed).toMatchObject({ number: 5, state: "CLOSED", fromBranch: "gone", mergedAt: null, mergeCommitSha: null, baseSha: BASE, headSha: H("2") });
+      expect(cursor()).toEqual({ stage: "comments", page: 1, pulls: { increment: 2 } });
+      expect(ops("repo.updateMany")[0]!.args).toEqual({ where: { id: "repo-1", lastNumber: { lt: 5 } }, data: { lastNumber: 5 } });
+    });
+
+    it("an open one reads its own branch; one from a fork gets github/fork/<owner>/<number>/<branch>", async () => {
+      const made = repoHas([H("1"), H("3")], { feature: H("1") });
+      answer([
+        pull({ number: 6, state: "open", draft: true }),
+        pull({ number: 7, state: "open", head: { ref: "fix-typo", sha: H("3"), repo: { full_name: "mona/Hello-World", owner: { login: "mona" } } } }),
+      ]);
+      await importStep(job({ stage: "pulls", page: 2 }), source, "ghost-id", fetchHeads);
+      expect(fetchHeads).not.toHaveBeenCalled(); // only on page 1
+      const [own, fork] = ops("pullRequest.create").map((o) => o.args.data!);
+      expect(own).toMatchObject({ number: 6, state: "OPEN", isDraft: true, fromBranch: "feature", baseSha: null, headSha: null });
+      expect(fork).toMatchObject({ number: 7, state: "OPEN", fromBranch: "github/fork/mona/7/fix-typo", baseSha: null, headSha: null });
+      expect(made).toEqual([["refs/heads/github/fork/mona/7/fix-typo", H("3"), ""]]);
+    });
+
+    it("an open one whose commits GitHub didn't give comes over closed; a number already here is skipped", async () => {
+      repoHas([], {});
+      vi.mocked(prisma.issue.findMany).mockResolvedValueOnce([{ number: 8 }] as never);
+      answer([
+        pull({ number: 8, state: "open" }),
+        pull({ number: 9, state: "open", head: { ref: "x", sha: H("4"), repo: { full_name: "mona/Hello-World", owner: { login: "mona" } } } }),
+      ]);
+      await importStep(job({ stage: "pulls", page: 2 }), source, "ghost-id", fetchHeads);
+      const created = ops("pullRequest.create").map((o) => o.args.data!);
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({ number: 9, state: "CLOSED", fromBranch: "x", baseSha: null, headSha: null });
+    });
+
+    it("a failed fetch of the heads stops the step with a plain message", async () => {
+      await expect(importStep(job({ stage: "pulls" }), source, "ghost-id", vi.fn().mockRejectedValue(new Error("fatal: …/srv/git")))).rejects.toThrow(
+        new GithubFailed("Could not fetch the pull requests' commits from GitHub"),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("an answer that isn't a list stops the step", async () => {

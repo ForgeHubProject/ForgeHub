@@ -124,8 +124,8 @@ function withoutGithubToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return rest;
 }
 
-/** Branches and tags only, atomic and never forced: all refs land or none, and none already there moves (#289). */
-async function fetchFromGithub(storageKey: string, source: { owner: string; name: string }): Promise<void> {
+/** A fetch from a public GitHub repository: no credentials offered, no redirects, https only, never interactive. */
+async function fetchRefs(storageKey: string, source: { owner: string; name: string }, flags: string[], refspecs: string[]): Promise<void> {
   const dir = bareRepoPathFromKey(storageKey);
   await execFile(
     "git",
@@ -134,10 +134,9 @@ async function fetchFromGithub(storageKey: string, source: { owner: string; name
       // A public repository needs no credentials, so none of the server's are offered.
       "-c", "credential.helper=",
       "-c", "http.followRedirects=false",
-      "fetch", "--atomic", "--no-tags", "--quiet", "--",
+      "fetch", ...flags, "--no-tags", "--quiet", "--",
       `https://github.com/${source.owner}/${source.name}.git`,
-      "refs/heads/*:refs/heads/*",
-      "refs/tags/*:refs/tags/*",
+      ...refspecs,
     ],
     {
       cwd: dir,
@@ -145,6 +144,21 @@ async function fetchFromGithub(storageKey: string, source: { owner: string; name
       env: { ...withoutGithubToken(process.env), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_ALLOW_PROTOCOL: "https" },
     },
   );
+}
+
+/** Branches and tags only, atomic and never forced: all refs land or none, and none already there moves (#289). */
+async function fetchFromGithub(storageKey: string, source: { owner: string; name: string }): Promise<void> {
+  await fetchRefs(storageKey, source, ["--atomic"], ["refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"]);
+}
+
+/**
+ * Every pull request's head, as GitHub keeps it, into refs/pull/<n>/head (#289, phase 3):
+ * the commits of pull requests from forks or with deleted branches live nowhere else.
+ * Forced, since a pull request's head moves when it's pushed to; ForgeHub keeps none of
+ * its own refs there.
+ */
+export async function fetchPullHeads(storageKey: string, source: { owner: string; name: string }): Promise<void> {
+  await fetchRefs(storageKey, source, [], ["+refs/pull/*/head:refs/pull/*/head"]);
 }
 
 /** The background job; never throws, a failure is recorded for the repository's page to offer Retry (#289). */

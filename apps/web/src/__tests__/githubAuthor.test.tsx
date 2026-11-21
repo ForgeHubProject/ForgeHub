@@ -32,5 +32,6 @@ describe("importedSoFar", () => {
   it("counts issues and comments", () => {
     expect(importedSoFar({ issues: 1, comments: 0 })).toBe("1 issue and 0 comments");
     expect(importedSoFar({ issues: 1240, comments: 1 })).toBe("1,240 issues and 1 comment");
+    expect(importedSoFar({ issues: 3, pulls: 1, comments: 7 })).toBe("3 issues, 1 pull request and 7 comments");
   });
 });

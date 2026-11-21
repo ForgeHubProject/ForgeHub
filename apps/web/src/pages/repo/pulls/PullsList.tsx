@@ -143,7 +143,7 @@ export function PullsList({ token, handle, repoName }: { token: string; handle: 
                     <p className="mt-1 text-fh-sm text-fh-fg-muted">
                       <span className="text-fh-fg-subtle">#{pr.number}</span>{" "}
                       {pr.state === "open" ? "opened" : pr.state} <RelativeTime date={pr.createdAt} /> by{" "}
-                      <span className="text-fh-fg-muted">{pr.author}</span>
+                      <span className="text-fh-fg-muted">{pr.importedAuthor ?? pr.author}</span>
                     </p>
                     <div className="mt-2">
                       <BranchFlow from={pr.fromBranch} to={pr.toBranch} />

@@ -271,11 +271,11 @@ describe("GitHub import routes", () => {
 
     it("anyone who can read the repository sees how far it has got", async () => {
       vi.mocked(prisma.githubIssueImport.findUnique).mockResolvedValueOnce({
-        repoId: "repo-1", stage: "comments", page: 3, issues: 140, comments: 212, waitUntil: new Date(Date.now() + 600_000), error: null,
+        repoId: "repo-1", stage: "comments", page: 3, issues: 140, pulls: 37, comments: 212, waitUntil: new Date(Date.now() + 600_000), error: null,
       } as never);
       const res = await app.inject({ method: "GET", url: "/repos/ada/hello-world/import/issues", headers: { authorization: bob } });
       expect(res.json()).toEqual({
-        import: { source: "octocat/Hello-World", stage: "comments", issues: 140, comments: 212, waitUntil: expect.any(String), error: null },
+        import: { source: "octocat/Hello-World", stage: "comments", issues: 140, pulls: 37, comments: 212, waitUntil: expect.any(String), error: null },
       });
       vi.mocked(prisma.githubIssueImport.findUnique).mockResolvedValueOnce(null);
       expect((await app.inject({ method: "GET", url: "/repos/ada/hello-world/import/issues" })).json()).toEqual({ import: null });
