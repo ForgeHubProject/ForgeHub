@@ -1,5 +1,5 @@
 import { sshClientConfig } from "../ssh/config.js";
-import type { CollaboratorRole, Repo, RepoVisibility } from "@prisma/client";
+import type { CollaboratorRole, Prisma, Repo, RepoVisibility } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import {
@@ -12,6 +12,8 @@ import { resolveActorIdentity } from "../pull-merge.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
 import { detectRepoLicense } from "../license.js";
 import { prisma } from "../prisma.js";
+import { isBlocked } from "../blocks.js";
+import { sendRepoTransferEmail } from "../repo-transfer-mail.js";
 import { canAdmin, canRead, redirectedRepoId, repoAccessInclude, repoByOwningHandleWhere, resolveRepo, viewerPermission } from "../repo-access.js";
 import { branchExists, setDefaultBranch } from "../git-utils.js";
 import { repoMergePolicy } from "../merge-policy.js";
@@ -26,6 +28,9 @@ import {
 
 /** Moving or deleting the directory a GitHub import is fetching into would corrupt or orphan it (#289). */
 const STILL_IMPORTING = "This repository is still importing. Try again when it's done.";
+
+/** A person has a day to accept a repository transferred to them, as on GitHub (#256). */
+const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000;
 
 function toApiVisibility(v: RepoVisibility) {
   return v === "PUBLIC" ? "public" : "private";
@@ -811,10 +816,61 @@ export async function repoRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /repos/:handle/:name/transfer { newOwner } — transfer ownership (#256)
-  // to an organization the caller owns, or to the caller's own account. Moving
-  // it to another person would need them to accept, which ForgeHub doesn't do
-  // yet. The old address keeps redirecting, like a rename.
+  /**
+   * Moves a repository into `target`'s namespace (#256): the bare repository, its
+   * owner, and a redirect from the old address, like a rename. Answers a name
+   * clash itself (409) and returns false; `alsoRun` joins the same transaction.
+   */
+  async function moveRepoTo(
+    repo: { id: string; name: string; storageKey: string | null },
+    currentHandle: string,
+    target: string,
+    next: { orgId: string | null; ownerId: string },
+    reply: FastifyReply,
+    alsoRun: Prisma.PrismaPromise<unknown>[] = [],
+  ): Promise<boolean> {
+    const clash = () => reply.status(409).send({ error: `${target}/${repo.name} already exists` });
+    const taken = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(target, repo.name), select: { id: true } });
+    if (taken) {
+      clash();
+      return false;
+    }
+    const newStorageKey = repo.storageKey ? buildStorageKey(target, repo.name) : null;
+    let moved = false;
+    try {
+      if (repo.storageKey && newStorageKey) {
+        await moveBareRepo(repo.storageKey, newStorageKey);
+        moved = true;
+      }
+      await prisma.$transaction([
+        prisma.repo.update({ where: { id: repo.id }, data: { ...next, storageKey: newStorageKey } }),
+        prisma.repoRedirect.deleteMany({ where: { ownerHandle: target, name: repo.name } }),
+        prisma.repoRedirect.upsert({
+          where: { ownerHandle_name: { ownerHandle: currentHandle, name: repo.name } },
+          create: { ownerHandle: currentHandle, name: repo.name, repoId: repo.id },
+          update: { repoId: repo.id },
+        }),
+        // A transfer still waiting for someone is settled by this move.
+        prisma.repoTransfer.deleteMany({ where: { repoId: repo.id } }),
+        ...alsoRun,
+      ]);
+    } catch (e: unknown) {
+      if (moved && repo.storageKey && newStorageKey) await moveBareRepo(newStorageKey, repo.storageKey).catch(() => undefined);
+      const code = errorCode(e);
+      if (code === "P2002" || code === "EEXIST") {
+        clash();
+        return false;
+      }
+      throw e;
+    }
+    if (moved && repo.storageKey) await removeEmptyOwnerDir(repo.storageKey);
+    return true;
+  }
+
+  // POST /repos/:handle/:name/transfer { newOwner } — transfer ownership (#256).
+  // To an organization the caller owns, or to the caller's own account: at once.
+  // To another person: a request they have a day to accept, as on GitHub; the
+  // repository stays where it is until then. The old address keeps redirecting.
   app.post(
     "/repos/:handle/:name/transfer",
     { preHandler: [app.authenticate, adminScope] },
@@ -838,7 +894,7 @@ export async function repoRoutes(app: FastifyInstance) {
           select: { id: true, memberships: { where: { userId, role: "OWNER" }, select: { userId: true } } },
         }),
         prisma.user.findUnique({ where: { id: userId }, select: { handle: true } }),
-        prisma.user.findUnique({ where: { handle: target }, select: { id: true } }),
+        prisma.user.findUnique({ where: { handle: target }, select: { id: true, email: true } }),
       ]);
       let next: { orgId: string | null; ownerId: string };
       if (org) {
@@ -846,43 +902,116 @@ export async function repoRoutes(app: FastifyInstance) {
         next = { orgId: org.id, ownerId: repo.ownerId };
       } else if (me?.handle === target) {
         next = { orgId: null, ownerId: userId };
-      } else if (person) {
-        return reply.status(400).send({
-          error: "Transferring to another person needs them to accept it, which ForgeHub doesn't support yet. Transfer it to an organization you both own instead.",
-        });
+      } else if (person && me) {
+        if (await isBlocked(person.id, userId)) return reply.status(403).send({ error: `You can't transfer repositories to ${target}` });
+        const taken = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(target, repo.name), select: { id: true } });
+        if (taken) return reply.status(409).send({ error: `${target} already has a repository called ${repo.name}` });
+        const expiresAt = new Date(Date.now() + TRANSFER_TTL_MS);
+        const request_ = { fromUserId: userId, toUserId: person.id, fromHandle: currentHandle, expiresAt };
+        // A new request replaces one still waiting, to the same person or another.
+        await prisma.repoTransfer.upsert({ where: { repoId: repo.id }, create: { repoId: repo.id, ...request_ }, update: { ...request_, createdAt: new Date() } });
+        void sendRepoTransferEmail({ to: person.email, fromHandle: me.handle, repoFullName: `${currentHandle}/${repo.name}`, expiresAt });
+        return reply.status(202).send({ pending: { to: target, expiresAt: expiresAt.toISOString() } });
       } else {
         return reply.status(404).send({ error: `No user or organization is called ${target}` });
       }
 
-      const taken = await prisma.repo.findFirst({ where: repoByOwningHandleWhere(target, repo.name), select: { id: true } });
-      if (taken) return reply.status(409).send({ error: `${target}/${repo.name} already exists` });
-
-      const newStorageKey = repo.storageKey ? buildStorageKey(target, repo.name) : null;
-      let moved = false;
-      try {
-        if (repo.storageKey && newStorageKey) {
-          await moveBareRepo(repo.storageKey, newStorageKey);
-          moved = true;
-        }
-        await prisma.$transaction([
-          prisma.repo.update({ where: { id: repo.id }, data: { ...next, storageKey: newStorageKey } }),
-          prisma.repoRedirect.deleteMany({ where: { ownerHandle: target, name: repo.name } }),
-          prisma.repoRedirect.upsert({
-            where: { ownerHandle_name: { ownerHandle: currentHandle, name: repo.name } },
-            create: { ownerHandle: currentHandle, name: repo.name, repoId: repo.id },
-            update: { repoId: repo.id },
-          }),
-        ]);
-      } catch (e: unknown) {
-        if (moved && repo.storageKey && newStorageKey) await moveBareRepo(newStorageKey, repo.storageKey).catch(() => undefined);
-        const code = errorCode(e);
-        if (code === "P2002" || code === "EEXIST") return reply.status(409).send({ error: `${target}/${repo.name} already exists` });
-        throw e;
-      }
-      if (moved && repo.storageKey) await removeEmptyOwnerDir(repo.storageKey);
+      if (!(await moveRepoTo(repo, currentHandle, target, next, reply))) return reply;
       return reply.send({ fullName: `${target}/${repo.name}` });
     },
   );
+
+  // GET /repos/:handle/:name/transfer — the transfer waiting for someone to accept, for the settings page.
+  app.get("/repos/:handle/:name/transfer", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const repo = await adminRepo(request, reply);
+    if (!repo) return reply;
+    const t = await prisma.repoTransfer.findUnique({ where: { repoId: repo.id }, select: { expiresAt: true, toUser: { select: { handle: true } } } });
+    const live = t && t.expiresAt > new Date();
+    return reply.send({ pending: live ? { to: t.toUser.handle, expiresAt: t.expiresAt.toISOString() } : null });
+  });
+
+  // DELETE /repos/:handle/:name/transfer — cancel it.
+  app.delete("/repos/:handle/:name/transfer", { preHandler: [app.authenticate, adminScope] }, async (request, reply) => {
+    const repo = await adminRepo(request, reply);
+    if (!repo) return reply;
+    await prisma.repoTransfer.deleteMany({ where: { repoId: repo.id } });
+    return reply.status(204).send();
+  });
+
+  // GET /user/repo-transfers — repositories people want to transfer to you, still within their day.
+  app.get("/user/repo-transfers", { preHandler: [app.authenticate] }, async (request) => {
+    const rows = await prisma.repoTransfer.findMany({
+      where: { toUserId: request.user.sub, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, expiresAt: true, fromHandle: true,
+        fromUser: { select: { handle: true } },
+        repo: { select: { name: true, visibility: true, description: true } },
+      },
+    });
+    return {
+      transfers: rows.map((t) => ({
+        id: t.id,
+        repoFullName: `${t.fromHandle}/${t.repo.name}`,
+        visibility: t.repo.visibility.toLowerCase(),
+        description: t.repo.description,
+        from: t.fromUser.handle,
+        expiresAt: t.expiresAt.toISOString(),
+      })),
+    };
+  });
+
+  /** The caller's own transfer request by id; answers 404 / 410 itself and returns null. */
+  async function incomingTransfer(request: FastifyRequest, reply: FastifyReply) {
+    const { id } = request.params as { id: string };
+    const t = await prisma.repoTransfer.findUnique({
+      where: { id },
+      select: {
+        id: true, toUserId: true, fromHandle: true, expiresAt: true,
+        repo: { select: { id: true, name: true, storageKey: true, archivedAt: true, importStatus: true, owner: { select: { handle: true } }, org: { select: { handle: true } } } },
+      },
+    });
+    if (!t || t.toUserId !== request.user.sub) {
+      reply.status(404).send({ error: "No such transfer request" });
+      return null;
+    }
+    if (t.expiresAt <= new Date()) {
+      await prisma.repoTransfer.deleteMany({ where: { id: t.id } });
+      reply.status(410).send({ error: "This transfer request has expired. Ask for a new one." });
+      return null;
+    }
+    return t;
+  }
+
+  // POST /user/repo-transfers/:id/accept — the repository becomes yours.
+  app.post("/user/repo-transfers/:id/accept", { preHandler: [app.authenticate, adminScope] }, async (request, reply) => {
+    const t = await incomingTransfer(request, reply);
+    if (!t) return reply;
+    const currentHandle = (t.repo.org?.handle ?? t.repo.owner.handle).toLowerCase();
+    if (currentHandle !== t.fromHandle) {
+      await prisma.repoTransfer.deleteMany({ where: { id: t.id } });
+      return reply.status(409).send({ error: "This repository has moved since the request. Ask for a new one." });
+    }
+    if (t.repo.archivedAt) return reply.status(409).send({ error: "This repository was archived after the request. Ask its owner to unarchive it." });
+    if (t.repo.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
+    const userId = request.user.sub;
+    const me = await prisma.user.findUnique({ where: { id: userId }, select: { handle: true } });
+    if (!me) return reply.status(401).send({ error: "Unauthorized" });
+    // As the owner you no longer need a collaborator's seat on it.
+    const ok = await moveRepoTo(t.repo, currentHandle, me.handle, { orgId: null, ownerId: userId }, reply, [
+      prisma.repoCollaborator.deleteMany({ where: { repoId: t.repo.id, userId } }),
+    ]);
+    if (!ok) return reply;
+    return reply.send({ fullName: `${me.handle}/${t.repo.name}` });
+  });
+
+  // POST /user/repo-transfers/:id/decline — it stays where it is.
+  app.post("/user/repo-transfers/:id/decline", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const t = await incomingTransfer(request, reply);
+    if (!t) return reply;
+    await prisma.repoTransfer.deleteMany({ where: { id: t.id } });
+    return reply.status(204).send();
+  });
 
   app.patch(
     "/repos/:name/rename",

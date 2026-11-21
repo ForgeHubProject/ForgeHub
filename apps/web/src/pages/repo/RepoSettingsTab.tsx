@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import {
   addCollaborator, addDeployKey, addProtectedTag, Collaborator, createLabel, createWebhook, deleteBranchProtection, deleteDeployKey, deleteLabel, deleteRepo, deleteSocialPreview, deleteWebhook,
   fetchSocialPreview, getBranchProtection, getRepo, getTopics, listBranches, listCollaborators, listDeployKeys, listLabels, listProtectedTags, listWebhooks, listWebhookDeliveries,
-  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, transferRepo, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
-  uploadSocialPreview, type MergeMethod,
+  putBranchProtection, redeliverWebhookDelivery, removeCollaborator, removeProtectedTag, renameRepo, transferRepo, cancelTransfer, getPendingTransfer, updateLabel, updateRepo, updateRepoMergePolicy, updateTopics, updateWebhook,
+  uploadSocialPreview, type MergeMethod, type PendingTransfer,
 } from "../../api";
+import { expiresIn } from "../../lib/expiresIn";
 import { UserSearchInput } from "../../components/UserSearchInput";
 import type {
   BranchInfo, BranchProtectionRules, DeployKey, Label, ProtectedTag, Repo, SearchUserResult, User, Webhook, WebhookDelivery, WebhookEvent,
@@ -2010,21 +2011,43 @@ function VisibilityRow({ token, handle, repoName }: { token: string; handle: str
   );
 }
 
-/** Transfer ownership (#256): to an organization you own, or to your own account. */
+/**
+ * Transfer ownership (#256): to an organization you own or your own account at
+ * once; to another person as a request they have a day to accept, as on GitHub.
+ */
 function TransferRow({ token, handle, repoName }: { token: string; handle: string; repoName: string }) {
   const [open, setOpen] = useState(false);
   const [newOwner, setNewOwner] = useState("");
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingTransfer | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  useEffect(() => {
+    let live = true;
+    getPendingTransfer(token, handle, repoName)
+      .then((r) => { if (live) setPending(r.pending); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [token, handle, repoName]);
 
   async function transfer() {
     setBusy(true);
     setError(null);
     try {
       const res = await transferRepo(token, handle, repoName, newOwner.trim().replace(/^@/, ""));
+      if ("pending" in res) {
+        setPending(res.pending);
+        setOpen(false);
+        setNewOwner("");
+        setTyped("");
+        setBusy(false);
+        toast(`Transfer requested. @${res.pending.to} has a day to accept it.`, { tone: "success" });
+        return;
+      }
       toast(`Transferred to ${res.fullName}`, { tone: "success" });
       navigate(`/${res.fullName}/settings`);
     } catch (err) {
@@ -2033,16 +2056,39 @@ function TransferRow({ token, handle, repoName }: { token: string; handle: strin
     }
   }
 
+  async function cancel() {
+    setCancelling(true);
+    try {
+      await cancelTransfer(token, handle, repoName);
+      setPending(null);
+      toast("Transfer cancelled", { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't cancel the transfer", { tone: "danger" });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   const ready = !!newOwner.trim() && typed.trim() === repoName;
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-4">
       <div className="min-w-0">
         <p className="text-fh-base font-semibold text-fh-fg">Transfer ownership</p>
-        <p className="text-fh-sm text-fh-fg-muted mt-0.5">
-          Move this repository to an organization you own, or to your own account. Its old address keeps redirecting.
-        </p>
+        {pending ? (
+          <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+            Waiting for <span className="font-semibold text-fh-fg">@{pending.to}</span> to accept. The request expires {expiresIn(pending.expiresAt)}.
+          </p>
+        ) : (
+          <p className="text-fh-sm text-fh-fg-muted mt-0.5">
+            Move this repository to another person, an organization you own, or your own account. A person has a day to accept. Its old address keeps redirecting.
+          </p>
+        )}
       </div>
-      <Button variant="danger" onClick={() => setOpen(true)}>Transfer</Button>
+      {pending ? (
+        <Button variant="default" loading={cancelling} onClick={() => void cancel()}>Cancel transfer</Button>
+      ) : (
+        <Button variant="danger" onClick={() => setOpen(true)}>Transfer</Button>
+      )}
       <Dialog
         open={open}
         onClose={busy ? () => {} : () => setOpen(false)}
@@ -2056,7 +2102,7 @@ function TransferRow({ token, handle, repoName }: { token: string; handle: strin
         }
       >
         <div className="space-y-3">
-          <Field label="New owner" hint="An organization you own, or your username.">
+          <Field label="New owner" hint="A username, or an organization you own. A person gets a day to accept it.">
             {(id) => <TextInput id={id} value={newOwner} onChange={(e) => setNewOwner(e.target.value)} autoFocus autoComplete="off" />}
           </Field>
           <Field label="Confirm the repository name" hint={<>Type <span className="font-mono font-semibold text-fh-fg">{repoName}</span> to confirm.</>}>

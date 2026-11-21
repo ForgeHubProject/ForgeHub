@@ -9,6 +9,7 @@ import { Avatar, Button, EmptyState, Icons, Skeleton, TabItem, TabNav, TextInput
 import { FeedList } from "./FeedPage";
 import { PlusIcon, RepoIcon } from "./listShared";
 import { WorkRow } from "./YourWorkPage";
+import { IncomingTransfers } from "../components/IncomingTransfers";
 
 type Props = {
   token: string;
@@ -181,6 +182,7 @@ export function RepoListPage({ token, user, onLogout }: Props) {
 
           {/* Main — GitHub's dashboard: Home (your work) and Feed */}
           <main className="min-w-0 flex-1">
+            <IncomingTransfers token={token} />
             <TabNav aria-label="Dashboard" className="mb-5">
               <TabItem active={tab === "home"} onClick={() => setParams({})}>Home</TabItem>
               <TabItem active={tab === "feed"} onClick={() => setParams({ tab: "feed" })}>Feed</TabItem>
