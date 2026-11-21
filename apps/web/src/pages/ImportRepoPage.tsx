@@ -34,6 +34,7 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
   const [name, setName] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [namespace, setNamespace] = useState(PERSONAL);
+  const [withIssues, setWithIssues] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const repoName = name ?? repoNameFromUrl(url);
@@ -50,7 +51,7 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
     setError(null);
     try {
       const owner = namespace === PERSONAL ? undefined : namespace;
-      const repo = await createRepo(token, repoName.trim(), undefined, "public", owner, undefined, url.trim());
+      const repo = await createRepo(token, repoName.trim(), undefined, "public", owner, undefined, url.trim(), withIssues);
       toast("Import started", { tone: "success" });
       navigate(`/${repo.fullName}`);
     } catch (err) {
@@ -65,8 +66,8 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
       <div className="mx-auto w-full max-w-[640px] flex-1 px-4 py-8">
         <h1 className="text-fh-2xl font-semibold text-fh-fg">Import a repository from GitHub</h1>
         <p className="mt-1 text-fh-base text-fh-fg-muted">
-          Brings over every branch and tag, the default branch, the description and topics. Issues, pull requests and
-          releases stay on GitHub for now.
+          Brings over every branch and tag, the default branch, the description and topics, and if you like its
+          issues, labels and milestones. Pull requests and releases stay on GitHub for now.
         </p>
 
         <form onSubmit={submit} className="mt-6 flex flex-col gap-5 rounded-md border border-fh-border bg-fh-surface p-6">
@@ -121,6 +122,21 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
               />
             )}
           </Field>
+
+          <label className="flex items-start gap-2 text-fh-sm text-fh-fg cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-fh-accent-emphasis"
+              checked={withIssues}
+              onChange={(e) => setWithIssues(e.target.checked)}
+            />
+            <span>
+              Also bring its issues, labels and milestones
+              <span className="block text-fh-xs text-fh-fg-subtle">
+                With their comments and original numbers, after the code. Pull requests come later.
+              </span>
+            </span>
+          </label>
 
           {error && (
             <p role="alert" className="rounded-md bg-fh-danger-muted px-3 py-2 text-fh-sm text-fh-danger-fg">{error}</p>

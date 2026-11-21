@@ -5,6 +5,7 @@ import { prisma } from "../prisma.js";
 import { ident } from "../sql.js";
 import { buildStorageKey, moveBareRepo, removeAttachments, removeBareRepo, removeEmptyOwnerDir } from "../git-storage.js";
 import { newHandleSchema } from "../validation.js";
+import { GHOST_HANDLE, ghostUser } from "../ghost.js";
 
 /**
  * Account settings (#258): change your username, export your data, delete
@@ -12,9 +13,7 @@ import { newHandleSchema } from "../validation.js";
  * signed-in person on the website, not to a script.
  */
 
-/** Who authored content belongs to once its author deletes their account (GitHub's "ghost"). */
-export const GHOST_HANDLE = "ghost";
-const GHOST_EMAIL = "ghost@users.forgehub.invalid";
+export { GHOST_HANDLE } from "../ghost.js";
 
 // Every required reference to a user that outlives them: reassigned to the ghost.
 // Raw SQL so the reassignment doesn't bump each row's @updatedAt.
@@ -196,16 +195,5 @@ export async function accountRoutes(app: FastifyInstance) {
     }
     if (personal[0]?.storageKey) await removeEmptyOwnerDir(personal[0].storageKey);
     return reply.status(204).send();
-  });
-}
-
-/** The ghost account, created on first use; null when a real person holds the name. */
-async function ghostUser(): Promise<{ id: string } | null> {
-  const existing = await prisma.user.findUnique({ where: { handle: GHOST_HANDLE }, select: { id: true, email: true } });
-  if (existing) return existing.email === GHOST_EMAIL ? existing : null;
-  // An unusable password hash: nobody can sign in as the ghost.
-  return prisma.user.create({
-    data: { handle: GHOST_HANDLE, email: GHOST_EMAIL, passwordHash: "!", displayName: "Ghost", bio: "This account was deleted." },
-    select: { id: true },
   });
 }

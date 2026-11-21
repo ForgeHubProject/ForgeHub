@@ -510,11 +510,16 @@ export async function createRepo(
   template?: string,
   /** Import a public GitHub repository (#289): its URL or "owner/name". */
   importFrom?: string,
+  /** With importFrom: bring its labels, milestones, issues and comments too (#289, phase 2). */
+  importIssues?: boolean,
 ): Promise<Repo> {
   return req("/repos", {
     method: "POST",
     token,
-    body: JSON.stringify({ name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined, importFrom: importFrom || undefined }),
+    body: JSON.stringify({
+      name, description: description || undefined, visibility, owner: owner || undefined, template: template || undefined,
+      importFrom: importFrom || undefined, importIssues: importFrom ? importIssues : undefined,
+    }),
   });
 }
 
@@ -577,6 +582,26 @@ export async function updateRepo(
   },
 ): Promise<Repo> {
   return req(`/repos/${owner}/${repoName}/settings`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** How far bringing a repository's issues over from GitHub has got (#289, phase 2). */
+export type IssueImport = {
+  source: string | null;
+  stage: "labels" | "milestones" | "issues" | "comments" | "done";
+  issues: number;
+  comments: number;
+  /** GitHub's limit for the hour is used up: it carries on then. */
+  waitUntil: string | null;
+  /** It stopped; an admin can Retry. */
+  error: string | null;
+};
+
+export async function getIssueImport(token: string | null, owner: string, repoName: string): Promise<{ import: IssueImport | null }> {
+  return req(`/repos/${owner}/${repoName}/import/issues`, { token: token ?? undefined });
+}
+
+export async function retryIssueImport(token: string, owner: string, repoName: string): Promise<void> {
+  await req(`/repos/${owner}/${repoName}/import/issues/retry`, { method: "POST", token });
 }
 
 /** A transfer to another person, waiting for them to accept (#256). */

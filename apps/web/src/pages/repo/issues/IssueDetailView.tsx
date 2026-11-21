@@ -16,7 +16,7 @@ import { ReactionBar } from "../../../components/ReactionBar";
 import { TimelineEventRow } from "../../../components/TimelineEventRow";
 import { DesignsSection } from "./DesignsSection";
 import type { Issue, IssueComment, Label, Milestone, TimelineEvent, User } from "../../../types";
-import { StatePill, UserLink } from "./parts";
+import { StatePill, UserLink, AuthorLink } from "./parts";
 import { SidebarLabels, SidebarAssignee, SidebarMilestone, SidebarTimeTracking } from "./Sidebar";
 import {
   ChevronLeftIcon, IssueClosedIcon, IssueOpenedIcon, KebabIcon, LockIcon,
@@ -30,6 +30,7 @@ import { SignInToComment } from "../../../components/SignInToComment";
 function TimelineCard({
   id,
   author,
+  importedAuthor,
   date,
   badge,
   menu,
@@ -38,6 +39,8 @@ function TimelineCard({
   /** Element id, for links to this comment. */
   id?: string;
   author: string;
+  /** Brought over from GitHub (#289): shown instead of `author`, the ghost. */
+  importedAuthor?: string | null;
   date: string;
   badge?: React.ReactNode;
   /** The comment's "…" menu (#253). */
@@ -47,8 +50,8 @@ function TimelineCard({
   return (
     <div id={id} className="border border-fh-border rounded-md overflow-hidden scroll-mt-20">
       <div className="flex items-center gap-2 px-4 py-2 bg-fh-surface-muted border-b border-fh-border text-fh-sm">
-        <Avatar name={author} size={20} />
-        <UserLink handle={author} />
+        <Avatar name={importedAuthor ?? author} size={20} />
+        <AuthorLink author={author} importedAuthor={importedAuthor} />
         <span className="text-fh-fg-muted">commented <RelativeTime date={date} /></span>
         {badge && <span className="ml-1">{badge}</span>}
         {menu}
@@ -431,7 +434,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
           </span>
         )}
         <span className="text-fh-sm text-fh-fg-muted">
-          <UserLink handle={issue.author} /> opened this issue <RelativeTime date={issue.createdAt} />
+          <AuthorLink author={issue.author} importedAuthor={issue.importedAuthor} /> opened this issue <RelativeTime date={issue.createdAt} />
           {" · "}
           {comments.length} comment{comments.length !== 1 ? "s" : ""}
         </span>
@@ -443,6 +446,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
           <TimelineCard
             id="issue-body"
             author={issue.author}
+            importedAuthor={issue.importedAuthor}
             date={issue.createdAt}
             badge={<Badge tone="neutral">Author</Badge>}
             menu={
@@ -497,6 +501,7 @@ export function IssueDetailView({ token, handle, repoName, user, number }: {
                 key={`c-${item.comment.id}`}
                 id={`issuecomment-${item.comment.id}`}
                 author={item.comment.author}
+                importedAuthor={item.comment.importedAuthor}
                 date={item.comment.createdAt}
                 menu={
                   <CommentMenu

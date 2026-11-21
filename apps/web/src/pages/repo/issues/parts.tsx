@@ -28,6 +28,32 @@ export function StatePill({ state }: { state: "open" | "closed" }) {
 }
 
 /** A repo-handle link that reads as a person, stopping row-click propagation. */
+/**
+ * Who wrote something brought over from GitHub (#289): their GitHub username, linking
+ * to their GitHub profile. Never to /<login> here, where that name may be someone else's.
+ */
+export function GithubAuthor({ login, className }: { login: string; className?: string }) {
+  return (
+    <>
+      <a
+        href={`https://github.com/${encodeURIComponent(login)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className={cx("font-semibold text-fh-fg hover:text-fh-accent-fg hover:underline", className)}
+      >
+        {login}
+      </a>
+      <span className="text-fh-fg-muted"> on GitHub</span>
+    </>
+  );
+}
+
+/** An issue or comment's author: their ForgeHub profile, or their GitHub name when it came from GitHub. */
+export function AuthorLink({ author, importedAuthor }: { author: string; importedAuthor?: string | null }) {
+  return importedAuthor ? <GithubAuthor login={importedAuthor} /> : <UserLink handle={author} />;
+}
+
 export function UserLink({ handle, className }: { handle: string; className?: string }) {
   return (
     <Link

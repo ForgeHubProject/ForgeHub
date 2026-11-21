@@ -31,6 +31,8 @@ function formatIssue(issue: {
   lockReason?: string | null;
   // Milestone association (#83) — optional so mocked/legacy rows still format.
   milestone?: { id: string; number: number; title: string; state: string } | null;
+  // Brought over from GitHub (#289): its author's GitHub username.
+  importedAuthor?: string | null;
 }, rollup?: ReactionRollup) {
   return {
     id: issue.id,
@@ -39,6 +41,8 @@ function formatIssue(issue: {
     body: issue.body,
     state: issue.state.toLowerCase(),
     author: issue.author.handle,
+    // Set when it came from GitHub (#289): `author` is then the ghost.
+    importedAuthor: issue.importedAuthor ?? null,
     assignee: issue.assignee?.handle ?? null,
     labels: issue.labels.map((il) => ({
       id: il.label.id,
@@ -74,11 +78,13 @@ function formatComment(comment: {
   author: { handle: string };
   createdAt: Date;
   updatedAt: Date;
+  importedAuthor?: string | null;
 }, rollup?: ReactionRollup) {
   return {
     id: comment.id,
     body: comment.body,
     author: comment.author.handle,
+    importedAuthor: comment.importedAuthor ?? null,
     createdAt: comment.createdAt.toISOString(),
     updatedAt: comment.updatedAt.toISOString(),
     // Emoji reactions (#90) — empty when no rollup was fetched (new comments).

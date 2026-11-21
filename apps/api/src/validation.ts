@@ -85,6 +85,8 @@ export const createRepoBodySchema = z.object({
    * description (unless one is given), topics and default branch.
    */
   importFrom: z.string().max(200).optional(),
+  /** With `importFrom`: bring its labels, milestones, issues and comments too (#289, phase 2). */
+  importIssues: z.boolean().optional(),
 });
 
 /** A pull-request merge method (issue #119). */
