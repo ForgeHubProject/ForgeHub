@@ -22,11 +22,14 @@ export class ApiError extends Error {
   readonly status: number;
   /** Per-field messages from a zod 400 (`details.fieldErrors`), when the server sent them. */
   readonly fieldErrors?: Record<string, string[]>;
-  constructor(status: number, message: string, fieldErrors?: Record<string, string[]>) {
+  /** Names the server refused, when it said which (#308). */
+  readonly taken?: string[];
+  constructor(status: number, message: string, fieldErrors?: Record<string, string[]>, taken?: string[]) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.taken = taken;
   }
 }
 
@@ -194,8 +197,10 @@ export async function fetchRawBlob(
     const body = (await res.json().catch(() => ({}))) as {
       error?: string;
       details?: { fieldErrors?: Record<string, string[]> };
+      taken?: unknown;
     };
-    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors);
+    const taken = Array.isArray(body.taken) ? body.taken.filter((n): n is string => typeof n === "string") : undefined;
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body.details?.fieldErrors, taken);
   }
   return res.blob();
 }
@@ -524,7 +529,7 @@ export async function createRepo(
 }
 
 /** Run a failed GitHub import again (#289). Admins only. */
-export async function retryImport(token: string, handle: string, repoName: string): Promise<{ importStatus: "importing" }> {
+export async function retryImport(token: string, handle: string, repoName: string): Promise<{ importStatus: "importing" | "queued" }> {
   return req(`/repos/${handle}/${repoName}/import/retry`, { method: "POST", token });
 }
 
@@ -604,6 +609,49 @@ export async function getIssueImport(token: string | null, owner: string, repoNa
 
 export async function retryIssueImport(token: string, owner: string, repoName: string): Promise<void> {
   await req(`/repos/${owner}/${repoName}/import/issues/retry`, { method: "POST", token });
+}
+
+/** A public repository of a GitHub organization, to pick for an import (#308). */
+export type GithubOrgRepo = { name: string; description: string | null; sizeKb: number; fork: boolean; archived: boolean };
+
+export type GithubOrg = {
+  login: string;
+  displayName: string | null;
+  description: string | null;
+  repos: GithubOrgRepo[];
+  /** Over 1,000 repositories: the rest aren't listed. */
+  truncated: boolean;
+  /** Repositories over this many KB can't be imported. */
+  maxSizeKb: number;
+};
+
+export async function lookupGithubOrg(token: string, login: string): Promise<GithubOrg> {
+  return req(`/import/github/orgs/${encodeURIComponent(login)}`, { token });
+}
+
+export type OrgImportTarget =
+  | { create: true; handle: string; displayName?: string; description?: string }
+  | { create: false; handle: string };
+
+export async function importGithubOrg(
+  token: string,
+  login: string,
+  body: { into: OrgImportTarget; repos: Array<{ name: string; as: string }>; importIssues: boolean },
+): Promise<{ org: string; queued: string[]; skipped: string[] }> {
+  return req(`/import/github/orgs/${encodeURIComponent(login)}`, { method: "POST", token, body: JSON.stringify(body) });
+}
+
+/** One of an organization's imported repositories, and how its import is getting on (#308). */
+export type OrgImportRepo = {
+  name: string;
+  source: string;
+  status: "queued" | "importing" | "failed" | "done";
+  error: string | null;
+  issues: Omit<IssueImport, "source"> | null;
+};
+
+export async function getOrgImports(token: string, handle: string): Promise<{ viewerRole: "OWNER" | "MEMBER"; repos: OrgImportRepo[] }> {
+  return req(`/orgs/${handle}/imports`, { token });
 }
 
 /** A transfer to another person, waiting for them to accept (#256). */

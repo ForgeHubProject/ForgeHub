@@ -245,7 +245,7 @@ export type Repo = {
   deleteBranchOnMerge?: boolean;
   /** Imported from GitHub (#289): its "owner/name" there, and the import's state until done. */
   importSource?: string | null;
-  importStatus?: "importing" | "failed" | null;
+  importStatus?: "queued" | "importing" | "failed" | null;
   importError?: string | null;
   /** SSH transport port from server config (issue #116); null/absent = SSH disabled. */
   sshPort?: number | null;

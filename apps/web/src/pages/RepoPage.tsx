@@ -246,13 +246,17 @@ export function RepoPage({ token, user, onLogout }: Props) {
     refreshProjectCount();
   }, [token, h, r]);
 
-  // A GitHub import runs in the background (#289): check on it until it's done.
+  // A GitHub import runs in the background (#289), maybe after others (#308): check on it until it's done.
+  const importUnderWay = repo?.importStatus === "importing" || repo?.importStatus === "queued";
   useEffect(() => {
-    if (repo?.importStatus !== "importing") return;
+    if (!importUnderWay) return;
     const timer = setInterval(() => {
       getRepo(token, h, r)
         .then(async (next) => {
-          if (next.importStatus === "importing") return;
+          if (next.importStatus === "importing" || next.importStatus === "queued") {
+            setRepo((cur) => (cur && cur.importStatus !== next.importStatus ? { ...cur, importStatus: next.importStatus } : cur));
+            return;
+          }
           const branchData = await listBranches(token, h, r);
           setBranches(branchData.branches);
           setDefaultBranch(branchData.defaultBranch);
@@ -262,13 +266,13 @@ export function RepoPage({ token, user, onLogout }: Props) {
         .catch(() => {});
     }, 3000);
     return () => clearInterval(timer);
-  }, [repo?.importStatus, token, h, r]);
+  }, [importUnderWay, token, h, r]);
 
   async function handleRetryImport() {
     setRetrying(true);
     try {
-      await retryImport(token, h, r);
-      setRepo((cur) => cur && { ...cur, importStatus: "importing", importError: null });
+      const { importStatus } = await retryImport(token, h, r);
+      setRepo((cur) => cur && { ...cur, importStatus, importError: null });
     } catch (e) {
       toast(e instanceof Error ? e.message : "Could not retry the import", { tone: "danger" });
     } finally {
@@ -644,6 +648,15 @@ export function RepoPage({ token, user, onLogout }: Props) {
           </div>
         </div>
       )}
+      {repo.importStatus === "queued" && (
+        <div className={`w-full ${column} mx-auto pt-4`}>
+          <div role="status" className="flex items-center gap-2 rounded-md border border-fh-border bg-fh-surface px-4 py-3 text-fh-sm text-fh-fg">
+            <Spinner size={14} />
+            Waiting to import from github.com/{repo.importSource}: imports run one at a time, and others are ahead of it.
+            This page updates when it's done.
+          </div>
+        </div>
+      )}
       {repo.importStatus === "failed" && (
         <div className={`w-full ${column} mx-auto pt-4`}>
           <div role="alert" className="rounded-md border border-fh-danger-emphasis/40 bg-fh-danger-muted px-4 py-3">
@@ -672,7 +685,7 @@ export function RepoPage({ token, user, onLogout }: Props) {
         </div>
       )}
       {/* Nothing to show while an import runs (#289); the tabs load once it's done. */}
-      {repo.importStatus === "importing" ? <div className="flex-1" /> : (
+      {importUnderWay ? <div className="flex-1" /> : (
       <RepoPermissionProvider value={repo.viewerPermission ?? null}>
       <RepoArchivedProvider value={!!repo.archived}>
       <div className={`flex-1 w-full ${column} mx-auto py-6`}>

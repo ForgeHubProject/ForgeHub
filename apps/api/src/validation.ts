@@ -203,6 +203,27 @@ export const createOrgBodySchema = z.object({
   description: z.string().max(2000).optional(),
 });
 
+/**
+ * POST /import/github/orgs/:login (#308): into a new organization or one the caller
+ * owns, which of its public repositories, and the name each gets here.
+ */
+export const importGithubOrgBodySchema = z.object({
+  into: z.discriminatedUnion("create", [
+    z.object({
+      create: z.literal(true),
+      handle: newHandleSchema,
+      displayName: z.string().trim().min(1).max(120).optional(),
+      description: z.string().max(2000).optional(),
+    }),
+    z.object({ create: z.literal(false), handle: handleSchema }),
+  ]),
+  repos: z
+    .array(z.object({ name: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/), as: repoNameSchema }))
+    .min(1)
+    .max(1000),
+  importIssues: z.boolean().optional().default(false),
+});
+
 /** PATCH /orgs/:handle — org profile settings (OWNER only). */
 export const updateOrgBodySchema = z.object({
   displayName: z.string().min(1).max(120).optional(),

@@ -212,7 +212,8 @@ model Repo {
   formats             String?
 
   // Imported from GitHub (#289): the "owner/name" it came from, and its background
-  // job's state: "importing", "failed" (with importError), or null once done.
+  // job's state: "queued" behind the person's other imports (#308), "importing",
+  // "failed" (with importError), or null once done.
   importSource        String?
   importStatus        String?
   importError         String?

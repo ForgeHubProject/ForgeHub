@@ -8,6 +8,7 @@ import {
 import { seedFromTemplate } from "../repo-template.js";
 import { fetchGithubRepo, ImportError, parseGithubRepo, runGithubImport, type GithubRepo } from "../github-import.js";
 import { startIssueImport, startIssueImportIfAsked } from "../github-issue-import.js";
+import { hasImportsUnderWay, IMPORT_BUSY, runImportQueue } from "../github-import-queue.js";
 import { fillMissingFormats, parseFormats } from "../repo-formats.js";
 import { resolveActorIdentity } from "../pull-merge.js";
 import { runPostReceiveEffects } from "../git-push-shared.js";
@@ -492,9 +493,6 @@ export async function repoRoutes(app: FastifyInstance) {
         if (!from) {
           return reply.status(400).send({ error: "Enter a GitHub repository as https://github.com/owner/name or owner/name" });
         }
-        if (await prisma.repo.count({ where: { ownerId, importStatus: "importing" } })) {
-          return reply.status(429).send({ error: "Wait for your other import to finish first" });
-        }
       }
 
       // Starting from a template (#256): one the caller can read and that is marked as a template.
@@ -522,6 +520,8 @@ export async function repoRoutes(app: FastifyInstance) {
       }
       // Asked last: the server's GitHub requests are counted, 60 an hour or 5,000 with FORGEHUB_GITHUB_TOKEN (#289).
       let source: GithubRepo | null = null;
+      // Behind the person's other imports when one is under way (#308).
+      let queued = false;
       if (from) {
         try {
           source = await fetchGithubRepo(from.owner, from.name);
@@ -529,6 +529,7 @@ export async function repoRoutes(app: FastifyInstance) {
           if (e instanceof ImportError) return reply.status(e.status).send({ error: e.message });
           throw e;
         }
+        queued = await hasImportsUnderWay(ownerId);
       }
       try {
         await createBareRepo(storageKey);
@@ -552,7 +553,7 @@ export async function repoRoutes(app: FastifyInstance) {
             orgId,
             ...(source && {
               importSource: `${source.owner}/${source.name}`,
-              importStatus: "importing",
+              importStatus: queued ? "queued" : "importing",
               topics: { create: source.topics.map((topic) => ({ topic })) },
               // Waits for the git history, then starts (#289, phase 2).
               ...(parsed.data.importIssues && { issueImport: { create: {} } }),
@@ -570,9 +571,13 @@ export async function repoRoutes(app: FastifyInstance) {
       }
       // The creator implicitly watches their new repo at ALL (issue #88).
       await ensureImplicitWatch(repo.id, ownerId);
-      if (source) {
+      if (source && queued) {
+        void runImportQueue(app, ownerId);
+      } else if (source) {
         const repoId = repo.id;
-        void runGithubImport(app, { id: repoId, storageKey }, ownerId, source).then(() => startIssueImportIfAsked(app, repoId));
+        void runGithubImport(app, { id: repoId, storageKey }, ownerId, source)
+          .then(() => startIssueImportIfAsked(app, repoId))
+          .then(() => runImportQueue(app, ownerId));
       }
       if (templateKey) {
         try {
@@ -747,8 +752,15 @@ export async function repoRoutes(app: FastifyInstance) {
         return reply.status(409).send({ error: "This repository has no failed import to retry" });
       }
       const userId = request.user.sub;
-      if (await prisma.repo.count({ where: { ownerId: userId, importStatus: "importing" } })) {
-        return reply.status(429).send({ error: "Wait for your other import to finish first" });
+      // Imports are in line by the person who started them (#308): behind the others when any are under way.
+      if (await hasImportsUnderWay(repo.ownerId)) {
+        const { count } = await prisma.repo.updateMany({
+          where: { id: repo.id, importStatus: "failed" },
+          data: { importStatus: "queued", importError: null },
+        });
+        if (count === 0) return reply.status(409).send({ error: "This repository has no failed import to retry" });
+        void runImportQueue(app, repo.ownerId);
+        return reply.status(202).send({ importStatus: "queued" });
       }
       let source: GithubRepo;
       try {
@@ -763,7 +775,9 @@ export async function repoRoutes(app: FastifyInstance) {
         data: { importStatus: "importing", importError: null },
       });
       if (count === 0) return reply.status(409).send({ error: "This repository has no failed import to retry" });
-      void runGithubImport(app, { id: repo.id, storageKey: repo.storageKey }, userId, source).then(() => startIssueImportIfAsked(app, repo.id));
+      void runGithubImport(app, { id: repo.id, storageKey: repo.storageKey }, userId, source)
+        .then(() => startIssueImportIfAsked(app, repo.id))
+        .then(() => runImportQueue(app, repo.ownerId));
       return reply.status(202).send({ importStatus: "importing" });
     },
   );
@@ -917,7 +931,7 @@ export async function repoRoutes(app: FastifyInstance) {
       const repo = await adminRepo(request, reply);
       if (!repo) return reply;
       if (repo.archivedAt) return reply.status(409).send({ error: "This repository is archived. Unarchive it to transfer it." });
-      if (repo.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
+      if (IMPORT_BUSY.includes(repo.importStatus ?? "")) return reply.status(409).send({ error: STILL_IMPORTING });
 
       const userId = request.user.sub;
       const target = parsed.data.newOwner.toLowerCase();
@@ -1030,7 +1044,7 @@ export async function repoRoutes(app: FastifyInstance) {
       return reply.status(409).send({ error: "This repository has moved since the request. Ask for a new one." });
     }
     if (t.repo.archivedAt) return reply.status(409).send({ error: "This repository was archived after the request. Ask its owner to unarchive it." });
-    if (t.repo.importStatus === "importing") return reply.status(409).send({ error: STILL_IMPORTING });
+    if (IMPORT_BUSY.includes(t.repo.importStatus ?? "")) return reply.status(409).send({ error: STILL_IMPORTING });
     const userId = request.user.sub;
     const me = await prisma.user.findUnique({ where: { id: userId }, select: { handle: true } });
     if (!me) return reply.status(401).send({ error: "Unauthorized" });

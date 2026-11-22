@@ -30,11 +30,16 @@ vi.mock("../github-import.js", async (orig) => ({
   ...(await orig<typeof import("../github-import.js")>()),
   runGithubImport: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../github-import-queue.js", async (orig) => ({
+  ...(await orig<typeof import("../github-import-queue.js")>()),
+  runImportQueue: vi.fn().mockResolvedValue(undefined),
+}));
 
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { createBareRepo, moveBareRepo, removeBareRepo } from "../git-storage.js";
 import { runGithubImport } from "../github-import.js";
+import { runImportQueue } from "../github-import-queue.js";
 import { startIssueImport, startIssueImportIfAsked } from "../github-issue-import.js";
 import { authHeader, createTestServer } from "./helpers/server.js";
 
@@ -141,11 +146,17 @@ describe("GitHub import routes", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("429 while another of the caller's imports is running", async () => {
+    it("while another of the caller's imports is under way: in line behind it (#308)", async () => {
       vi.mocked(prisma.repo.count).mockResolvedValue(1);
+      github(200, publicRepo);
       const res = await importRepo({ name: "hello-world", importFrom: "octocat/Hello-World" });
-      expect(res.statusCode).toBe(429);
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({ importStatus: "queued" });
+      expect(prisma.repo.count).toHaveBeenCalledWith({ where: { ownerId: ADA, importStatus: { in: ["importing", "queued"] } } });
+      const { data } = vi.mocked(prisma.repo.create).mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(data).toMatchObject({ importStatus: "queued", description: "My first repository" });
+      expect(runGithubImport).not.toHaveBeenCalled();
+      expect(runImportQueue).toHaveBeenCalledWith(expect.anything(), ADA);
     });
 
     it("201: a public repository in the importing state, with GitHub's description and topics, and the job started", async () => {
@@ -162,6 +173,8 @@ describe("GitHub import routes", () => {
       const [, repo, actor, source] = vi.mocked(runGithubImport).mock.calls[0]!;
       expect([repo, actor]).toEqual([{ id: "repo-1", storageKey: "ada/hello-world.git" }, ADA]);
       expect(source).toMatchObject({ owner: "octocat", name: "Hello-World", defaultBranch: "master" });
+      // Then whatever waits behind it (#308).
+      await vi.waitFor(() => expect(runImportQueue).toHaveBeenCalledWith(expect.anything(), ADA));
     });
 
     it("with importIssues: the issue import waits for the git history, then starts (#289, phase 2)", async () => {
@@ -250,6 +263,21 @@ describe("GitHub import routes", () => {
       const [, repo, actor, source] = vi.mocked(runGithubImport).mock.calls[0]!;
       expect([repo, actor]).toEqual([{ id: "repo-1", storageKey: "ada/hello-world.git" }, ADA]);
       expect(source).toMatchObject({ name: "Hello-World" });
+    });
+
+    it("while the owner's other imports are under way: back in line instead (#308)", async () => {
+      vi.mocked(prisma.repo.count).mockImplementation((async (args: { where: { importStatus?: unknown } }) =>
+        (args.where.importStatus ? 1 : 0)) as never);
+      const res = await retry();
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toEqual({ importStatus: "queued" });
+      expect(prisma.repo.updateMany).toHaveBeenCalledWith({
+        where: { id: "repo-1", importStatus: "failed" },
+        data: { importStatus: "queued", importError: null },
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runGithubImport).not.toHaveBeenCalled();
+      expect(runImportQueue).toHaveBeenCalledWith(expect.anything(), ADA);
     });
 
     it("409 when another retry got there first", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createRepo, getMyOrgs } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
@@ -68,6 +68,10 @@ export function ImportRepoPage({ token, user, onLogout }: Props) {
         <p className="mt-1 text-fh-base text-fh-fg-muted">
           Brings over every branch and tag, the default branch, the description and topics, and if you like its
           issues, pull requests, labels, milestones and releases.
+        </p>
+        <p className="mt-2 text-fh-sm text-fh-fg-muted">
+          Moving a whole organization?{" "}
+          <Link to="/new/import/org" className="text-fh-accent-fg hover:underline">Import an organization</Link>
         </p>
 
         <form onSubmit={submit} className="mt-6 flex flex-col gap-5 rounded-md border border-fh-border bg-fh-surface p-6">
