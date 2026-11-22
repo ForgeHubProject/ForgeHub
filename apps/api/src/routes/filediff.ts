@@ -6,7 +6,7 @@ import {
   readBlobAsBuffer,
   statBlob,
   openBlobStream,
-  activeFormatsAtCommit,
+  formatsAtCommit,
   DIFF_BUFFER_MAX,
 } from "../git-utils.js";
 import type { BlobReadResult } from "../git-utils.js";
@@ -42,13 +42,13 @@ export async function fileDiffRoutes(app: FastifyInstance) {
 
       // FHR's manifest is the single source of truth for what is semantically
       // diffable: a file qualifies iff the manifest maps its extension to an
-      // official handler AND the repo opted the extension in (its .forge/formats
-      // at this commit). ForgeHub holds no format knowledge of its own and no
+      // official handler AND the repo's .forge/formats at this commit has it in
+      // effect: listed, or no list at all, and not ignored (formatsInEffect). ForgeHub holds no format knowledge of its own and no
       // longer consults its built-in handler registry to decide this — that
       // built-in TS fallback has been retired from this path (#74). A community
       // (non-official) extension resolves to null here and is never run
       // server-side; that path belongs to the consented client sandbox (#70).
-      const activeExts = await activeFormatsAtCommit(storageKey, sha);
+      const { active: activeExts, ignored } = await formatsAtCommit(storageKey, sha);
       const ext = extname(filePath).toLowerCase();
       let handlerId: string | null;
       try {
@@ -57,10 +57,11 @@ export async function fileDiffRoutes(app: FastifyInstance) {
         // Manifest unreachable with no cached copy — can't authorize a diff.
         return reply.status(503).send({ error: "Official FHR handler unavailable and no local fallback" });
       }
-      if (!handlerId) {
-        // Genuinely unsupported: no official handler exists for this extension
-        // at all — nothing to opt into, so the honest 404 stands and the client
-        // falls back to its raw/text diff.
+      if (!handlerId || ignored.has(ext)) {
+        // Genuinely unsupported (no official handler exists for this extension
+        // at all, nothing to opt into) or deliberately ignored by the repo
+        // (`forge formats ignore`, which silences the nudge): the honest 404
+        // stands and the client falls back to its raw/text diff.
         return reply.status(404).send({ error: "No semantic handler for this file" });
       }
       if (!activeExts.has(ext)) {

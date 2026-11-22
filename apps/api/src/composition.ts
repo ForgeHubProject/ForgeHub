@@ -4,8 +4,8 @@ import { officialFormats } from "./fhr/manifest.js";
 import { GLTF_SCENE_HANDLER_ID, PLAIN_TEXT_HANDLER_ID } from "./handlers/types.js";
 
 // ForgeHub's answer to GitHub's language bar: bin a repo's bytes by artifact
-// FORMAT/DOMAIN rather than programming language. Formats the repo opted into
-// semantic handling (`.forge/formats`) that the FHR manifest maps to an official
+// FORMAT/DOMAIN rather than programming language. Formats the repo has semantic
+// handling on for (`.forge/formats`, formatsInEffect) that the FHR manifest maps to an official
 // handler are grouped by that handler's *domain* (e.g. all opted-in .gltf/.glb →
 // one "glTF scene" segment, flagged optedIn) — the visible payoff of the FHR
 // premise. Everything else falls back to its extension, with a long tail folded
@@ -77,8 +77,8 @@ type Agg = { format: string; label: string; bytes: number; fileCount: number; op
 /**
  * Pure composition math over a list of blob sizes. Exposed for unit testing;
  * `getComposition` wraps it with the git + manifest lookups. `official` maps a
- * lowercased extension (".gltf") to its handler id; `activeExts` is the repo's
- * `.forge/formats` opt-in set.
+ * lowercased extension (".gltf") to its handler id; `activeExts` is the set the
+ * repo's `.forge/formats` puts in effect.
  */
 export function buildComposition(
   blobs: BlobSize[],

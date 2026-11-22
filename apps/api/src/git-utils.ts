@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { bareRepoPathFromKey } from "./git-storage.js";
-import { loadActiveFormats } from "./forge-formats.js";
+import { formatsInEffect, loadActiveFormats, readFormatsFile } from "./forge-formats.js";
 import { loadHandlerPins } from "./forge-handlers.js";
 import { firstHandlerForPathAndFormats } from "./handlers/index.js";
 import { officialMergingExtensions, officialWasmMerge } from "./fhr/official-handlers.js";
@@ -169,6 +169,18 @@ const MERGE_IDENTITY = ["-c", "user.name=ForgeHub", "-c", "user.email=merge@forg
 // The repo's opt-in extension set at a commit, for scoping handler resolution.
 export async function activeFormatsAtCommit(storageKey: string, commitIsh: string): Promise<Set<string>> {
   return loadActiveFormats(bareRepoPathFromKey(storageKey), commitIsh);
+}
+
+/**
+ * The formats in effect at a commit, and the ones the repo deliberately
+ * ignored (`forge formats ignore`), which never get a nudge to turn them on.
+ */
+export async function formatsAtCommit(
+  storageKey: string,
+  commitIsh: string,
+): Promise<{ active: Set<string>; ignored: Set<string> }> {
+  const file = await readFormatsFile(bareRepoPathFromKey(storageKey), commitIsh);
+  return { active: await formatsInEffect(file), ignored: file?.ignored ?? new Set() };
 }
 
 // The repo's handler-build pins (.forge/handlers) at a commit, for surfacing
