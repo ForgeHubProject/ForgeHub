@@ -45,6 +45,8 @@ export type GithubRepo = {
   description: string | null;
   topics: string[];
   defaultBranch: string | null;
+  /** Archived on GitHub: it comes over archived, once its import is in. */
+  archived: boolean;
 };
 
 /**
@@ -111,6 +113,7 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
   const notPublic = new ImportError(404, `There is no public repository at ${where}. Only public repositories can be imported.`);
   const body = (await githubApi(`/repos/${owner}/${name}`, notPublic)) as {
     full_name?: unknown; private?: unknown; size?: unknown; description?: unknown; topics?: unknown; default_branch?: unknown;
+    archived?: unknown;
   } | null;
   // With a token, a private repository its owner can see answers 200: refused the same way.
   if (body?.private !== false) throw notPublic;
@@ -127,6 +130,7 @@ export async function fetchGithubRepo(owner: string, name: string): Promise<Gith
       .filter((t): t is string => topicSchema.safeParse(t).success)
       .slice(0, 20),
     defaultBranch: typeof body.default_branch === "string" ? body.default_branch : null,
+    archived: body.archived === true,
   };
 }
 
@@ -259,6 +263,12 @@ export async function runGithubImport(
     await prisma.repo.update({ where: { id: repo.id }, data: { importStatus: null, importError: null } });
     // The first refs count as a push: ingestion, formats, activity, webhooks, CI.
     await runPostReceiveEffects(app, repo, actorId, bareRepoPathFromKey(repo.storageKey), new Map());
+    // Archived on GitHub: read-only here too, now its history is in. Its issues
+    // still come over: that job writes directly, and its Retry is let through
+    // the archived guard.
+    if (source.archived) {
+      await prisma.repo.updateMany({ where: { id: repo.id, archivedAt: null }, data: { archivedAt: new Date() } });
+    }
   } catch (err) {
     app.log.error({ err }, `finishing the import of ${from} failed`);
   }

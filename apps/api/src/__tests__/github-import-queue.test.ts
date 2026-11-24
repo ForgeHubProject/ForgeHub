@@ -67,7 +67,7 @@ function queued(id: string, at: number, extra: Partial<Row> = {}): Row {
     importStatus: "queued", importError: null, topics: 0, createdAt: at, ...extra,
   };
 }
-const source = (name: string) => ({ owner: "pallets", name, description: `About ${name}`, topics: ["web"], defaultBranch: "main" });
+const source = (name: string) => ({ owner: "pallets", name, description: `About ${name}`, topics: ["web"], defaultBranch: "main", archived: false });
 const status = () => Object.fromEntries(rows.map((r) => [r.id, r.importStatus]));
 
 describe("the import queue (#308)", () => {

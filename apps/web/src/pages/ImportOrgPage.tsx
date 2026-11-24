@@ -262,7 +262,11 @@ export function OrgImportForm({ token, org, owned, onDone }: {
                         <span className="flex flex-wrap items-center gap-1.5">
                           <span className="font-mono text-fh-sm font-semibold text-fh-fg">{r.name}</span>
                           {r.fork && <Badge tone="neutral" variant="outline">Fork</Badge>}
-                          {r.archived && <Badge tone="warning" variant="outline">Archived</Badge>}
+                          {r.archived && (
+                            <span title="Archived on GitHub: it comes over archived, read-only until its owner unarchives it.">
+                              <Badge tone="warning" variant="outline">Archived</Badge>
+                            </span>
+                          )}
                           <span className="text-fh-xs text-fh-fg-muted">{tooBig ? "Over 1 GB, can't be imported" : formatBytes(r.sizeKb * 1024)}</span>
                         </span>
                         {r.description && <span className="block truncate text-fh-xs text-fh-fg-muted">{r.description}</span>}
