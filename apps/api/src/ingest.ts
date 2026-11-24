@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { extname } from "node:path";
 import { promisify } from "node:util";
-import { loadActiveFormats } from "./forge-formats.js";
+import { loadListedFormats } from "./forge-formats.js";
 import { officialHandlerId } from "./fhr/official-handlers.js";
 import { ingestSceneSnapshot } from "./fhr-entities.js";
 import { gitDirArgs } from "./git-storage.js";
@@ -22,9 +22,11 @@ export async function ingestCommitRange(
   oldSha: string,
   newSha: string,
 ): Promise<void> {
-  // Only ingest extensions the repo opted into at the tip commit.
-  // Absent file → nothing to ingest (explicit opt-in model).
-  const activeExts = await loadActiveFormats(repoPath, newSha);
+  // Only extensions the repo's formats file lists at the tip commit: this reads
+  // every version of every such file in the range, so a repo asks for it by
+  // listing them. No file, or an empty list → nothing to ingest, even though
+  // diffs treat that as every format on (loadListedFormats).
+  const activeExts = await loadListedFormats(repoPath, newSha);
   if (activeExts.size === 0) return;
 
   const NULL_SHA = "0".repeat(40);

@@ -436,3 +436,54 @@ describe("GET /repos/:handle/:name/rawblob", () => {
     expect(res.body).toBe(gltf(5));
   });
 });
+
+// A repo with no .forge/formats at all — every repo imported from GitHub, and
+// any that never ran `forge formats add`. The forge CLI reads that as every
+// handler on, and so does the server now (#289); `forge formats ignore` still
+// turns one off, and silences the nudge with it.
+describe("GET /repos/:handle/:name/filediff without a formats list", () => {
+  let plain: TestRepo;
+  let plainHeadSha: string;
+  let ignoreSha: string;
+
+  beforeAll(async () => {
+    plain = await createTestRepo("test/filediff-nolist.git");
+    await makeCommit(plain.workDir, { "models/ship.glb": "glb-0", "scene.gltf": gltf(0) }, "import");
+    plainHeadSha = await makeCommit(plain.workDir, { "models/ship.glb": "glb-1", "scene.gltf": gltf(1) }, "move it");
+    ignoreSha = await makeCommit(
+      plain.workDir,
+      { ".forge/formats": "!glb\n", "models/ship.glb": "glb-2", "scene.gltf": gltf(2) },
+      "ignore glb",
+    );
+  }, 30_000);
+
+  afterAll(async () => {
+    await plain.cleanup();
+  });
+
+  beforeEach(() => {
+    vi.mocked(prisma.repo.findFirst).mockResolvedValue({ ...MOCK_REPO, storageKey: plain.storageKey } as never);
+  });
+
+  it("diffs an official format with its handler when the repo lists no formats", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=models/ship.glb&sha=${plainHeadSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().handlerId).toBe("gltf-scene");
+    expect(vi.mocked(officialWasmDiff)).toHaveBeenCalledOnce();
+  });
+
+  it("gives an ignored format the plain fallback, with no nudge to turn it on", async () => {
+    vi.mocked(officialWasmDiff).mockClear();
+    const res = await get(`path=models/ship.glb&sha=${ignoreSha}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "No semantic handler for this file" });
+    expect(vi.mocked(officialWasmDiff)).not.toHaveBeenCalled();
+  });
+
+  it("keeps every other official format on beside an ignore-only list", async () => {
+    const res = await get(`path=scene.gltf&sha=${ignoreSha}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().handlerId).toBe("gltf-scene");
+  });
+});

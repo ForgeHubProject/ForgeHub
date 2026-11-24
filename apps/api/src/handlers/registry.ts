@@ -21,11 +21,10 @@ export function firstHandlerForPath(path: string): ArtifactHandler | undefined {
 }
 
 /**
- * Resolve a handler scoped to one repo's opt-in extension set (its
- * .forge/formats file). The global registry is the pool of available
- * handlers; this narrows the selection to what the repo enabled. An empty
- * set means the repo has not opted in to any semantic handling, so no
- * handler is returned.
+ * Resolve a handler scoped to the extensions in effect for one repo (its
+ * .forge/formats file, read by formatsInEffect). The global registry is the
+ * pool of available handlers; this narrows the selection to what the repo has
+ * on. An empty set means nothing is on, so no handler is returned.
  */
 export function firstHandlerForPathAndFormats(
   filePath: string,
