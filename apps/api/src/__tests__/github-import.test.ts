@@ -388,6 +388,23 @@ describe("fetchGithubOrg (#308)", () => {
     expect(org.repos.at(-1)).toEqual({ name: "werkzeug", description: "WSGI", sizeKb: 9000, fork: true, archived: true });
   });
 
+  it("keeps the organization's profile: a website (given a scheme when GitHub has none), location and avatar", async () => {
+    answer(200, {
+      login: "pallets", blog: "palletsprojects.com", location: " Earth ",
+      avatar_url: "https://avatars.githubusercontent.com/u/16748505?v=4",
+    });
+    answer(200, []);
+    expect(await fetchGithubOrg("pallets")).toMatchObject({
+      website: "https://palletsprojects.com", location: "Earth", avatarUrl: "https://avatars.githubusercontent.com/u/16748505?v=4",
+    });
+  });
+
+  it("drops a website that isn't a web address and an avatar from anywhere but GitHub's avatar host", async () => {
+    answer(200, { login: "acme", blog: "javascript:alert(1)", avatar_url: "https://example.com/a.png" });
+    answer(200, []);
+    expect(await fetchGithubOrg("acme")).toMatchObject({ website: null, location: null, avatarUrl: null });
+  });
+
   it("never lists a private repository, nor one whose name or size isn't GitHub's", async () => {
     answer(200, { login: "acme" });
     answer(200, [repo("open"), repo("secret", { private: true }), repo("odd", { private: undefined }), repo("../x"), repo("nosize", { size: "1" })]);

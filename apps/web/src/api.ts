@@ -618,6 +618,10 @@ export type GithubOrg = {
   login: string;
   displayName: string | null;
   description: string | null;
+  website: string | null;
+  location: string | null;
+  /** On GitHub's avatar host; a new organization made from this one gets the picture. */
+  avatarUrl: string | null;
   repos: GithubOrgRepo[];
   /** Over 1,000 repositories: the rest aren't listed. */
   truncated: boolean;
@@ -630,7 +634,7 @@ export async function lookupGithubOrg(token: string, login: string): Promise<Git
 }
 
 export type OrgImportTarget =
-  | { create: true; handle: string; displayName?: string; description?: string }
+  | { create: true; handle: string; displayName?: string; description?: string; website?: string; location?: string; avatarUrl?: string }
   | { create: false; handle: string };
 
 export async function importGithubOrg(
@@ -3193,9 +3197,31 @@ export async function getOrg(token: string | null, handle: string): Promise<OrgP
 export async function updateOrg(
   token: string,
   handle: string,
-  patch: { displayName?: string; description?: string | null },
+  patch: { displayName?: string; description?: string | null; website?: string | null; location?: string | null },
 ): Promise<Organization> {
   return req(`/orgs/${handle}`, { method: "PATCH", token, body: JSON.stringify(patch) });
+}
+
+/** An organization's avatar URL, or null for the letter avatar. */
+export function orgAvatarSrc(handle: string, avatarKey?: string | null): string | null {
+  if (!avatarKey) return null;
+  return `${BASE}/orgs/${handle}/avatar?v=${encodeURIComponent(avatarKey)}`;
+}
+
+/** Upload (or replace) an organization's avatar (owners). Returns the rotated token. */
+export async function uploadOrgAvatar(token: string, handle: string, file: File): Promise<{ avatarKey: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/orgs/${handle}/avatar`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ avatarKey: string }>;
+}
+
+export async function removeOrgAvatar(token: string, handle: string): Promise<void> {
+  await req(`/orgs/${handle}/avatar`, { method: "DELETE", token });
 }
 
 export async function addOrgMember(

@@ -4,14 +4,44 @@ import { fetchGithubOrg, ImportError, MAX_IMPORT_KB, parseGithubOrg } from "../g
 import { runImportQueue } from "../github-import-queue.js";
 import { isHandleTaken } from "../owner-resolve.js";
 import { prisma } from "../prisma.js";
-import { importGithubOrgBodySchema } from "../validation.js";
+import { importGithubOrgBodySchema, isGithubAvatarUrl } from "../validation.js";
 import { ensureImplicitWatch } from "../watch-service.js";
+import { setOrgAvatar } from "./orgs.js";
+import { avatarMaxBytes, detectImageType } from "./profile.js";
 
 // Import a GitHub organization (#308): the organization, then the public
 // repositories the person picks, each through #289's import, one after another.
 
 function errorCode(e: unknown): string | undefined {
   return typeof e === "object" && e !== null && "code" in e ? String((e as { code: unknown }).code) : undefined;
+}
+
+/**
+ * A new organization's picture, copied from its GitHub organization (#308). Only
+ * GitHub's avatar host, no redirects, at most the avatar size cap, and only a
+ * PNG, JPEG or WebP; anything else leaves the letter avatar. Never throws.
+ */
+export async function copyGithubAvatar(app: FastifyInstance, orgId: string, url: string): Promise<boolean> {
+  if (!isGithubAvatarUrl(url)) return false;
+  try {
+    const res = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(15_000) });
+    if (!res.ok || !res.body) return false;
+    const max = avatarMaxBytes();
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      size += chunk.length;
+      if (size > max) return false;
+      chunks.push(Buffer.from(chunk));
+    }
+    const buf = Buffer.concat(chunks);
+    if (!detectImageType(buf)) return false;
+    await setOrgAvatar(orgId, buf);
+    return true;
+  } catch (err) {
+    app.log.warn({ err }, "copying a GitHub organization's avatar failed");
+    return false;
+  }
 }
 
 export async function githubOrgImportRoutes(app: FastifyInstance) {
@@ -75,6 +105,8 @@ export async function githubOrgImportRoutes(app: FastifyInstance) {
             handle,
             displayName: into.displayName || into.handle,
             description: into.description?.trim() || null,
+            website: into.website || null,
+            location: into.location || null,
             memberships: { create: { userId, role: "OWNER" } },
           },
           select: { id: true },
@@ -129,6 +161,7 @@ export async function githubOrgImportRoutes(app: FastifyInstance) {
       queued.push(name);
     }
     void runImportQueue(app, userId);
+    if (into.create && into.avatarUrl) void copyGithubAvatar(app, orgId!, into.avatarUrl);
     return reply.status(201).send({ org: handle, queued, skipped });
   });
 

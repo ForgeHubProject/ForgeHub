@@ -59,6 +59,7 @@ describe("how an import reads", () => {
 describe("OrgImportForm", () => {
   const org: GithubOrg = {
     login: "pallets", displayName: "Pallets", description: "Python projects", truncated: false, maxSizeKb: 1_048_576,
+    website: "https://palletsprojects.com", location: null, avatarUrl: "https://avatars.githubusercontent.com/u/16748505?v=4",
     repos: [repo("Flask", { description: "Web framework" }), repo("click-fork", { fork: true }), repo("huge", { sizeKb: 2_000_000 }), repo("old", { archived: true })],
   };
   const render = (o: GithubOrg = org) =>

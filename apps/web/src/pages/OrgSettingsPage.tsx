@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   addOrgMember,
@@ -8,11 +8,15 @@ import {
   getOrg,
   getOrgTeams,
   grantTeamRepo,
+  orgAvatarSrc,
+  removeOrgAvatar,
   removeOrgMember,
   removeTeamMember,
   revokeTeamRepo,
   updateOrg,
   updateOrgMember,
+  uploadOrgAvatar,
+  ApiError,
 } from "../api";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
@@ -111,7 +115,7 @@ export function OrgSettingsPage({ token, user, onLogout }: Props) {
         {!loading && !error && org && isOwner && (
           <>
             <div className="mb-6 flex items-center gap-3">
-              <Avatar name={org.displayName || org.handle} square size={40} />
+              <Avatar name={org.displayName || org.handle} src={orgAvatarSrc(org.handle, org.avatarKey)} square size={40} />
               <div>
                 <h1 className="text-fh-xl font-semibold text-fh-fg">
                   <Link to={`/${org.handle}`} className="hover:text-fh-accent-fg no-underline">
@@ -554,37 +558,112 @@ function ProfileTab({
 }) {
   const [displayName, setDisplayName] = useState(org.displayName);
   const [description, setDescription] = useState(org.description ?? "");
+  const [website, setWebsite] = useState(org.website ?? "");
+  const [location, setLocation] = useState(org.location ?? "");
+  const [websiteError, setWebsiteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setWebsiteError(null);
     try {
-      await updateOrg(token, handle, { displayName: displayName.trim(), description: description.trim() || null });
+      await updateOrg(token, handle, {
+        displayName: displayName.trim(),
+        description: description.trim() || null,
+        website: website.trim() || null,
+        location: location.trim() || null,
+      });
       await onSaved();
       toast("Organization updated", { tone: "success" });
     } catch (e) {
-      fail(e);
+      if (e instanceof ApiError && e.status === 400 && e.fieldErrors?.["website"]) {
+        setWebsiteError("Enter a web address starting with http:// or https://");
+      } else {
+        fail(e);
+      }
     } finally {
       setBusy(false);
     }
   }
 
+  async function pickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAvatarBusy(true);
+    try {
+      await uploadOrgAvatar(token, handle, file);
+      await onSaved();
+      toast("Profile picture updated", { tone: "success" });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Upload failed", { tone: "danger" });
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function dropAvatar() {
+    setAvatarBusy(true);
+    try {
+      await removeOrgAvatar(token, handle);
+      await onSaved();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Remove failed", { tone: "danger" });
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   return (
-    <form onSubmit={save} className="flex max-w-[560px] flex-col gap-4 rounded-md border border-fh-border bg-fh-surface p-5">
-      <Field label="Display name" htmlFor="org-display-name">
-        {(id) => <TextInput id={id} value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={120} />}
-      </Field>
-      <Field label="Description" htmlFor="org-description">
-        {(id) => (
-          <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
-        )}
-      </Field>
-      <div className="flex justify-end">
-        <Button type="submit" variant="primary" loading={busy}>
-          Save changes
-        </Button>
+    <div className="flex flex-col-reverse gap-8 lg:flex-row">
+      <form onSubmit={save} className="flex min-w-0 max-w-[560px] flex-1 flex-col gap-4 rounded-md border border-fh-border bg-fh-surface p-5">
+        <Field label="Display name" htmlFor="org-display-name">
+          {(id) => <TextInput id={id} value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={120} />}
+        </Field>
+        <Field label="Description" htmlFor="org-description">
+          {(id) => (
+            <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
+          )}
+        </Field>
+        <Field label="URL" htmlFor="org-website" error={websiteError ?? undefined}>
+          {(id) => (
+            <TextInput
+              id={id}
+              type="url"
+              placeholder="https://example.com"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              maxLength={255}
+            />
+          )}
+        </Field>
+        <Field label="Location" htmlFor="org-location">
+          {(id) => <TextInput id={id} value={location} onChange={(e) => setLocation(e.target.value)} maxLength={120} />}
+        </Field>
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary" loading={busy}>
+            Save changes
+          </Button>
+        </div>
+      </form>
+      <div className="lg:w-56">
+        <p className="mb-2 text-fh-sm font-semibold text-fh-fg">Profile picture</p>
+        <Avatar name={org.displayName || org.handle} src={orgAvatarSrc(org.handle, org.avatarKey)} square size={200} className="max-w-full" />
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={pickAvatar} aria-label="Profile picture" />
+        <div className="mt-3 flex gap-2">
+          <Button size="sm" variant="default" loading={avatarBusy} onClick={() => fileRef.current?.click()}>
+            {org.avatarKey ? "Change" : "Upload"}
+          </Button>
+          {org.avatarKey && (
+            <Button size="sm" variant="invisible" disabled={avatarBusy} onClick={() => void dropAvatar()}>
+              Remove
+            </Button>
+          )}
+        </div>
       </div>
-    </form>
+    </div>
   );
 }

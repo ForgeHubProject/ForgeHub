@@ -1,5 +1,8 @@
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../prisma.js";
+import { readAvatarBuffer, removeAvatar, writeAvatarBuffer } from "../git-storage.js";
+import { avatarMaxBytes, detectImageType } from "./profile.js";
 import { isHandleTaken } from "../owner-resolve.js";
 import { canRead, repoAccessInclude } from "../repo-access.js";
 import { repoResponse } from "./repos.js";
@@ -42,7 +45,10 @@ function slugify(input: string): string {
 }
 
 function orgResponse(
-  org: { id: string; handle: string; displayName: string; description: string | null; createdAt: Date },
+  org: {
+    id: string; handle: string; displayName: string; description: string | null;
+    website: string | null; location: string | null; avatarKey: string | null; createdAt: Date;
+  },
   extra: { viewerRole: ViewerRole; memberCount: number; teamCount: number },
 ) {
   return {
@@ -50,6 +56,9 @@ function orgResponse(
     handle: org.handle,
     displayName: org.displayName,
     description: org.description,
+    website: org.website,
+    location: org.location,
+    avatarKey: org.avatarKey,
     createdAt: org.createdAt.toISOString(),
     viewerRole: extra.viewerRole,
     memberCount: extra.memberCount,
@@ -223,11 +232,13 @@ export async function orgRoutes(app: FastifyInstance) {
     const loaded = await loadOrgForManage(request, reply, handle, "OWNER");
     if (!loaded) return;
 
-    const data: { displayName?: string; description?: string | null } = {};
+    const data: { displayName?: string; description?: string | null; website?: string | null; location?: string | null } = {};
     if (parsed.data.displayName !== undefined) data.displayName = parsed.data.displayName.trim();
     if (parsed.data.description !== undefined) {
       data.description = parsed.data.description === null ? null : parsed.data.description.trim() || null;
     }
+    if (parsed.data.website !== undefined) data.website = parsed.data.website || null;
+    if (parsed.data.location !== undefined) data.location = parsed.data.location || null;
     const org = Object.keys(data).length
       ? await prisma.organization.update({ where: { id: loaded.org.id }, data })
       : loaded.org;
@@ -236,6 +247,58 @@ export async function orgRoutes(app: FastifyInstance) {
       memberCount: loaded.org.memberships.length,
       teamCount: loaded.org._count.teams,
     });
+  });
+
+  // ── Org avatar (OWNER), as a person's (profile.ts) ──────────────────────────
+  // The bytes sit beside the people's avatars, keyed by the organization's id
+  // (ids are unique across both); avatarKey is the URL's cache-buster.
+  app.post("/orgs/:handle/avatar", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const loaded = await loadOrgForManage(request, reply, handle, "OWNER");
+    if (!loaded) return;
+    let data;
+    try {
+      data = await request.file({ limits: { fileSize: avatarMaxBytes() }, throwFileSizeLimit: false });
+    } catch {
+      return reply.status(400).send({ error: "Invalid multipart upload" });
+    }
+    if (!data) return reply.status(400).send({ error: "An image file is required" });
+    const buf = await data.toBuffer();
+    if (data.file.truncated) return reply.status(413).send({ error: "Avatar exceeds the maximum allowed size" });
+    const kind = detectImageType(buf);
+    if (!kind) return reply.status(400).send({ error: "Avatar must be a PNG, JPEG, or WebP image" });
+    const avatarKey = await setOrgAvatar(loaded.org.id, buf);
+    return reply.status(201).send({ avatarKey, contentType: kind, size: buf.length });
+  });
+
+  app.delete("/orgs/:handle/avatar", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const loaded = await loadOrgForManage(request, reply, handle, "OWNER");
+    if (!loaded) return;
+    await removeAvatar(loaded.org.id).catch(() => {});
+    await prisma.organization.update({ where: { id: loaded.org.id }, data: { avatarKey: null } });
+    return reply.status(204).send();
+  });
+
+  app.get("/orgs/:handle/avatar", async (request, reply) => {
+    const { handle } = request.params as { handle: string };
+    const org = await prisma.organization.findUnique({
+      where: { handle: handle.toLowerCase() },
+      select: { id: true, avatarKey: true },
+    });
+    if (!org?.avatarKey) return reply.status(404).send({ error: "No avatar" });
+    let buf: Buffer;
+    try {
+      buf = await readAvatarBuffer(org.id);
+    } catch {
+      return reply.status(404).send({ error: "No avatar" });
+    }
+    return reply
+      .header("Content-Type", detectImageType(buf) ?? "application/octet-stream")
+      .header("Content-Length", String(buf.length))
+      .header("Cache-Control", "public, max-age=31536000, immutable")
+      .header("ETag", `"${org.avatarKey}"`)
+      .send(buf);
   });
 
   // ── Membership management (OWNER) ────────────────────────────────────────────
@@ -527,4 +590,15 @@ function teamResponse(team: TeamRow) {
       role: a.role === "WRITER" ? ("WRITER" as const) : ("READER" as const),
     })),
   };
+}
+
+/**
+ * Store an image as an organization's avatar (already checked to be PNG, JPEG
+ * or WebP) and rotate its cache-buster. Returns the new avatarKey.
+ */
+export async function setOrgAvatar(orgId: string, buf: Buffer): Promise<string> {
+  await writeAvatarBuffer(orgId, buf);
+  const avatarKey = randomBytes(8).toString("hex");
+  await prisma.organization.update({ where: { id: orgId }, data: { avatarKey } });
+  return avatarKey;
 }
