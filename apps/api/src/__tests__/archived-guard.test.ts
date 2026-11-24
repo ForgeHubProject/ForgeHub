@@ -46,6 +46,14 @@ describe("archived repositories", () => {
     }
   });
 
+  it("still carry on bringing the issues over from GitHub, but take no other import retry", async () => {
+    // A repository archived on GitHub comes over archived as soon as its code is
+    // in; its issues follow, and a stopped issue import can be carried on (#289).
+    const res = await send("POST", "/repos/acme/old/import/issues/retry");
+    expect(res.statusCode).not.toBe(403);
+    expect((await send("POST", "/repos/acme/old/import/retry")).statusCode).toBe(403);
+  });
+
   it("let writes through when the repository isn't archived", async () => {
     vi.mocked(prisma.repo.count).mockResolvedValue(0 as never);
     expect((await send("POST", "/repos/acme/old/issues")).statusCode).not.toBe(403);

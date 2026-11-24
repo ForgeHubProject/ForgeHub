@@ -107,10 +107,16 @@ describe("fetchGithubRepo", () => {
     answer(200, publicRepo);
     expect(await fetchGithubRepo("octocat", "hello-world")).toEqual({
       owner: "octocat", name: "Hello-World", description: "My first repository", topics: ["demo", "3d"], defaultBranch: "master",
+      archived: false,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("https://api.github.com/repos/octocat/hello-world");
     expect(JSON.stringify(init.headers)).not.toMatch(/authorization/i);
+  });
+
+  it("says when GitHub has the repository archived", async () => {
+    answer(200, { ...publicRepo, archived: true });
+    expect((await fetchGithubRepo("octocat", "hello-world")).archived).toBe(true);
   });
 
   it("refuses a repository GitHub doesn't show (missing, or private)", async () => {
@@ -207,7 +213,7 @@ describe("fetchGithubRepo", () => {
 describe("runGithubImport", () => {
   const app = { log: { error: vi.fn() } } as unknown as FastifyInstance;
   const repo = { id: "repo-1", storageKey: "ada/hello.git" };
-  const source: GithubRepo = { owner: "octocat", name: "Hello-World", description: null, topics: [], defaultBranch: "master" };
+  const source: GithubRepo = { owner: "octocat", name: "Hello-World", description: null, topics: [], defaultBranch: "master", archived: false };
 
   /** Answer the next git call the way promisify(execFile) expects. */
   function git(err: (Error & { killed?: boolean }) | null) {
@@ -245,6 +251,26 @@ describe("runGithubImport", () => {
     expect(setDefaultBranch).toHaveBeenCalledWith("ada/hello.git", "master");
     expect(prisma.repo.update).toHaveBeenCalledWith({ where: { id: "repo-1" }, data: { importStatus: null, importError: null } });
     expect(runPostReceiveEffects).toHaveBeenCalledWith(app, repo, "user-ada", "/srv/git/ada/hello.git", new Map());
+    // Not archived on GitHub: left as it is.
+    expect(prisma.repo.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("archives a repository GitHub has archived, once its history is in and its push effects ran", async () => {
+    git(null);
+    await runGithubImport(app, repo, "user-ada", { ...source, archived: true });
+    expect(prisma.repo.updateMany).toHaveBeenCalledWith({
+      where: { id: "repo-1", archivedAt: null },
+      data: { archivedAt: expect.any(Date) },
+    });
+    expect(vi.mocked(runPostReceiveEffects).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(prisma.repo.updateMany).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("leaves a failed import of an archived repository unarchived, so it can be retried", async () => {
+    git(Object.assign(new Error("fatal: repository not found"), { killed: false }));
+    await runGithubImport(app, repo, "user-ada", { ...source, archived: true });
+    expect(prisma.repo.updateMany).not.toHaveBeenCalled();
   });
 
   it("never hands git the server's GitHub token", async () => {

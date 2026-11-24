@@ -6,9 +6,16 @@ const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * What an archived repository still takes: unarchiving it (its settings),
- * deleting it, and starring or watching it, as on GitHub.
+ * deleting it, and starring or watching it, as on GitHub. And, for one that
+ * came over from GitHub archived, carrying on bringing its issues over when
+ * that stopped: it finishes copying what GitHub has, it adds nothing new.
  */
-const ALLOWED = [/^\/repos\/:handle\/:name$/, /^\/repos\/:handle\/:name\/settings$/, /^\/repos\/:handle\/:name\/(star|watch)$/];
+const ALLOWED = [
+  /^\/repos\/:handle\/:name$/,
+  /^\/repos\/:handle\/:name\/settings$/,
+  /^\/repos\/:handle\/:name\/(star|watch)$/,
+  /^\/repos\/:handle\/:name\/import\/issues\/retry$/,
+];
 
 /**
  * Archived repositories are read-only (#256). canWrite already refuses pushes
