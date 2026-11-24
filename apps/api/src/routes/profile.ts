@@ -11,7 +11,7 @@ import { writeAvatarBuffer, readAvatarBuffer, removeAvatar } from "../git-storag
 // the user-payload builders.
 
 /** Default avatar upload cap (2 MiB); overridable via AVATAR_MAX_BYTES. */
-function avatarMaxBytes(): number {
+export function avatarMaxBytes(): number {
   const raw = Number(process.env["AVATAR_MAX_BYTES"]);
   return Number.isFinite(raw) && raw > 0 ? raw : 2 * 1024 * 1024;
 }

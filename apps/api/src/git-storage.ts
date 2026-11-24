@@ -114,8 +114,9 @@ export async function removeDesign(key: string): Promise<void> {
 //
 // Profile avatars live under a sibling of the git storage root (`<root>-avatars`),
 // never inside the bare repos — the same separation the release assets, designs,
-// and CI logs use. One file per user, keyed by the user id and overwritten on
-// re-upload (the User.avatarKey token is a cache-buster, not the path).
+// and CI logs use. One file per user or organization, keyed by its id (ids are
+// unique across both) and overwritten on re-upload (avatarKey is a
+// cache-buster, not the path).
 
 function avatarsRoot(): string {
   return `${path.resolve(storageRoot())}-avatars`;

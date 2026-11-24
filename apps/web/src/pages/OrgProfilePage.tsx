@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiError, getMyOrgs, getOrg, getOrgImports, type OrgImportRepo } from "../api";
+import { ApiError, getMyOrgs, getOrg, getOrgImports, orgAvatarSrc, type OrgImportRepo } from "../api";
 import { importPhase, stillGoing } from "../lib/orgImport";
 import { CreateRepoDialog } from "../components/CreateRepoDialog";
 import { Header } from "../components/Header";
@@ -8,7 +8,7 @@ import { Footer } from "../components/Footer";
 import { NotFoundPage } from "./NotFoundPage";
 import type { Organization, OrgProfile, Repo, User } from "../types";
 import { Avatar, Button, EmptyState, Icons, Skeleton, TextInput } from "../ui";
-import { CalendarIcon, PersonIcon, RepoIcon, RepoRow, RowList } from "./listShared";
+import { CalendarIcon, LinkIcon, LocationIcon, PersonIcon, RepoIcon, RepoRow, RowList } from "./listShared";
 
 type Props = {
   token: string;
@@ -124,7 +124,7 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
           <div className="flex flex-col gap-8 sm:flex-row">
             {/* Left sidebar — org identity */}
             <aside className="w-full flex-shrink-0 sm:w-[296px]">
-              <Avatar name={org.displayName || org.handle} square size={88} />
+              <Avatar name={org.displayName || org.handle} src={orgAvatarSrc(org.handle, org.avatarKey)} square size={88} />
               <div className="mt-4">
                 <h1 className="text-fh-2xl font-semibold leading-tight text-fh-fg">{org.displayName || org.handle}</h1>
                 <p className="text-fh-lg text-fh-fg-muted">@{org.handle}</p>
@@ -145,6 +145,20 @@ export function OrgProfilePage({ token, user, onLogout }: Props) {
 
               <div className="mt-4 space-y-2 text-fh-base">
                 {org.description && <p className="text-fh-fg">{org.description}</p>}
+                {org.location && (
+                  <div className="flex items-center gap-2 text-fh-fg-muted">
+                    <LocationIcon size={14} className="shrink-0" />
+                    <span>{org.location}</span>
+                  </div>
+                )}
+                {org.website && (
+                  <div className="flex items-center gap-2 text-fh-fg-muted">
+                    <LinkIcon size={14} className="shrink-0" />
+                    <a href={org.website} target="_blank" rel="noopener noreferrer" className="truncate text-fh-accent-fg hover:underline">
+                      {org.website.replace(/^https?:\/\//, "")}
+                    </a>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 text-fh-fg-muted">
                   <PersonIcon size={14} className="shrink-0" />
                   <span>

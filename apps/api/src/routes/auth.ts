@@ -258,7 +258,7 @@ export async function authRoutes(app: FastifyInstance) {
       // Organizations they chose to show (#257).
       prisma.orgMembership.findMany({
         where: { userId: user.id, public: true },
-        select: { org: { select: { handle: true, displayName: true } } },
+        select: { org: { select: { handle: true, displayName: true, avatarKey: true } } },
         orderBy: { org: { handle: "asc" } },
       }),
     ]);

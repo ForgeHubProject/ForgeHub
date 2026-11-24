@@ -122,7 +122,7 @@ export type PublicProfile = {
   /** Whether the viewer blocked them (#258). */
   viewerBlocks?: boolean;
   /** Profile (#257): organizations they show, their email if they show it, their time zone. */
-  organizations?: Array<{ handle: string; displayName: string }>;
+  organizations?: Array<{ handle: string; displayName: string; avatarKey?: string | null }>;
   email?: string | null;
   timezone?: string | null;
   showEmail?: boolean;
@@ -1156,6 +1156,10 @@ export type Organization = {
   handle: string;
   displayName: string;
   description: string | null;
+  /** Profile, as on GitHub: an http(s) address, a place, and the avatar's cache-buster (null = letter). */
+  website: string | null;
+  location: string | null;
+  avatarKey: string | null;
   createdAt: string;
   /** The requesting user's role, or null for non-members. */
   viewerRole: OrgRole | null;

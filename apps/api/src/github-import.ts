@@ -5,7 +5,7 @@ import { bareRepoPathFromKey } from "./git-storage.js";
 import { branchExists, setDefaultBranch } from "./git-utils.js";
 import { runPostReceiveEffects } from "./git-push-shared.js";
 import { prisma } from "./prisma.js";
-import { handleSchema, topicSchema } from "./validation.js";
+import { handleSchema, isGithubAvatarUrl, isWebAddress, topicSchema } from "./validation.js";
 
 const execFile = promisify(execFileCb);
 
@@ -147,6 +147,10 @@ export type GithubOrg = {
   login: string;
   displayName: string | null;
   description: string | null;
+  /** Its profile, for a new organization made from it: website (http/https), location, avatar. */
+  website: string | null;
+  location: string | null;
+  avatarUrl: string | null;
   repos: GithubOrgRepo[];
   /** More than {@link MAX_ORG_REPO_PAGES} pages: the rest aren't listed. */
   truncated: boolean;
@@ -161,7 +165,9 @@ const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slic
  */
 export async function fetchGithubOrg(login: string): Promise<GithubOrg> {
   const notFound = new ImportError(404, `There is no GitHub organization named ${login}.`);
-  const org = (await githubApi(`/orgs/${login}`, notFound)) as { login?: unknown; name?: unknown; description?: unknown } | null;
+  const org = (await githubApi(`/orgs/${login}`, notFound)) as {
+    login?: unknown; name?: unknown; description?: unknown; blog?: unknown; location?: unknown; avatar_url?: unknown;
+  } | null;
   if (typeof org?.login !== "string" || !handleSchema.safeParse(org.login).success) throw unexpected();
   const repos: GithubOrgRepo[] = [];
   let truncated = false;
@@ -185,8 +191,26 @@ export async function fetchGithubOrg(login: string): Promise<GithubOrg> {
       break;
     }
   }
-  return { login: org.login, displayName: text(org.name, 120), description: text(org.description, 2000), repos, truncated };
+  return {
+    login: org.login,
+    displayName: text(org.name, 120),
+    description: text(org.description, 2000),
+    website: githubWebsite(org.blog),
+    location: text(org.location, 120),
+    avatarUrl: typeof org.avatar_url === "string" && isGithubAvatarUrl(org.avatar_url) ? org.avatar_url : null,
+    repos,
+    truncated,
+  };
 }
+
+/** GitHub's "blog" field, often written without a scheme: a web address, or null. */
+function githubWebsite(blog: unknown): string | null {
+  const raw = text(blog, 255);
+  if (!raw) return null;
+  const url = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  return isWebAddress(url) && url.length <= 255 ? url : null;
+}
+
 
 /** git doesn't read it, but nothing git starts gets the server's token either. */
 function withoutGithubToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

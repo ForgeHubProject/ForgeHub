@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getMyOrgs, setOrgMembershipVisibility } from "../api";
+import { getMyOrgs, orgAvatarSrc, setOrgMembershipVisibility } from "../api";
 import { SettingsLayout } from "../components/SettingsLayout";
 import type { Organization, User } from "../types";
 import { Avatar, Badge, Button, EmptyState, PageHeading, Skeleton, useToast } from "../ui";
@@ -41,7 +41,7 @@ export function SettingsOrganizationsPage({ token, user, onLogout }: { token: st
         <ul className="divide-y divide-fh-border-muted rounded-md border border-fh-border bg-fh-surface">
           {orgs.map((o) => (
             <li key={o.id} className="flex items-center gap-3 px-4 py-3">
-              <Avatar name={o.displayName || o.handle} size={32} square />
+              <Avatar name={o.displayName || o.handle} src={orgAvatarSrc(o.handle, o.avatarKey)} size={32} square />
               <div className="min-w-0 flex-1">
                 <Link to={`/${o.handle}`} className="font-semibold text-fh-fg hover:text-fh-accent-fg">{o.handle}</Link>
                 <p className="text-fh-xs text-fh-fg-muted">{o.viewerRole === "OWNER" ? "Owner" : "Member"}</p>

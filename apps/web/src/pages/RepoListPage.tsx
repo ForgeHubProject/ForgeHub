@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { getCollaboratingRepos, getMyOrgs, getMyRepos, listMyIssues, listMyPulls, type MyWorkItem } from "../api";
+import { getCollaboratingRepos, getMyOrgs, getMyRepos, listMyIssues, listMyPulls, orgAvatarSrc, type MyWorkItem } from "../api";
 import { CreateRepoDialog } from "../components/CreateRepoDialog";
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
@@ -167,7 +167,7 @@ export function RepoListPage({ token, user, onLogout }: Props) {
                           to={`/${o.handle}`}
                           className="group flex items-center gap-2 rounded-md px-1 py-1 no-underline hover:bg-fh-surface-muted"
                         >
-                          <Avatar name={o.displayName || o.handle} square size={20} />
+                          <Avatar name={o.displayName || o.handle} src={orgAvatarSrc(o.handle, o.avatarKey)} square size={20} />
                           <span className="truncate text-fh-sm text-fh-fg group-hover:text-fh-accent-fg">
                             {o.handle}
                           </span>

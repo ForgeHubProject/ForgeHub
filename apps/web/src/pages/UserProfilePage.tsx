@@ -8,6 +8,7 @@ import {
   getPublicProfile,
   getReadme,
   getUserRepos,
+  orgAvatarSrc,
   setBlocked,
   setFollowing,
   uploadAvatar,
@@ -493,7 +494,7 @@ export function UserProfilePage({ token, user, onLogout, onUserChange }: Props) 
                     {profile.organizations!.map((o) => (
                       <li key={o.handle}>
                         <Link to={`/${o.handle}`} title={o.displayName || o.handle} aria-label={o.displayName || o.handle}>
-                          <Avatar name={o.displayName || o.handle} size={32} square />
+                          <Avatar name={o.displayName || o.handle} src={orgAvatarSrc(o.handle, o.avatarKey)} size={32} square />
                         </Link>
                       </li>
                     ))}

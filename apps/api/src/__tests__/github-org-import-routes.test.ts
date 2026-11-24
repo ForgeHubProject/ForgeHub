@@ -8,7 +8,7 @@ import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } 
 vi.mock("../prisma.js", () => ({
   prisma: {
     user: { findUnique: vi.fn() },
-    organization: { findUnique: vi.fn(), create: vi.fn() },
+    organization: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     orgMembership: { findUnique: vi.fn() },
     repo: { findMany: vi.fn(), create: vi.fn() },
     repoRedirect: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -91,6 +91,7 @@ describe("GitHub organization import routes (#308)", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
         login: "pallets", displayName: "Pallets", description: null, truncated: false, maxSizeKb: 1024 * 1024,
+        website: null, location: null, avatarUrl: null,
         repos: [{ name: "flask", description: null, sizeKb: 12, fork: false, archived: false }],
       });
     });
@@ -140,13 +141,40 @@ describe("GitHub organization import routes (#308)", () => {
       expect(createBareRepo).not.toHaveBeenCalled();
     });
 
+    it("gives a new organization the GitHub one's website, location and avatar", async () => {
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+      fetchMock.mockResolvedValueOnce(new Response(png, { status: 200 }));
+      vi.mocked(prisma.organization.update).mockResolvedValue({} as never);
+      const avatarUrl = "https://avatars.githubusercontent.com/u/16748505?v=4";
+      const res = await start({
+        into: { ...intoNew, website: "https://palletsprojects.com", location: "Earth", avatarUrl },
+        repos: two,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(vi.mocked(prisma.organization.create).mock.calls[0]![0]).toMatchObject({
+        data: { website: "https://palletsprojects.com", location: "Earth" },
+      });
+      await vi.waitFor(() =>
+        expect(prisma.organization.update).toHaveBeenCalledWith({ where: { id: "org-new" }, data: { avatarKey: expect.any(String) } }),
+      );
+      expect(String(fetchMock.mock.calls[0]![0])).toBe(avatarUrl);
+    });
+
+    it("400 for an avatar anywhere but GitHub's avatar host, or a website that isn't a web address", async () => {
+      for (const extra of [{ avatarUrl: "https://example.com/a.png" }, { website: "javascript:alert(1)" }]) {
+        expect((await start({ into: { ...intoNew, ...extra }, repos: two })).statusCode).toBe(400);
+      }
+      expect(prisma.organization.create).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("creates the organization with the caller as its owner, then queues each repository in order", async () => {
       const res = await start({ into: intoNew, repos: two, importIssues: true });
       expect(res.statusCode).toBe(201);
       expect(res.json()).toEqual({ org: "pallets", queued: ["flask", "click"], skipped: [] });
       expect(prisma.organization.create).toHaveBeenCalledWith({
         data: {
-          handle: "pallets", displayName: "Pallets", description: "Python projects",
+          handle: "pallets", displayName: "Pallets", description: "Python projects", website: null, location: null,
           memberships: { create: { userId: ADA, role: "OWNER" } },
         },
         select: { id: true },

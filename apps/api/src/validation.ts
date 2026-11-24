@@ -214,6 +214,10 @@ export const importGithubOrgBodySchema = z.object({
       handle: newHandleSchema,
       displayName: z.string().trim().min(1).max(120).optional(),
       description: z.string().max(2000).optional(),
+      // The GitHub organization's profile, as the lookup gave it.
+      website: z.string().max(255).refine(isWebAddress).optional(),
+      location: z.string().trim().max(120).optional(),
+      avatarUrl: z.string().max(500).refine(isGithubAvatarUrl).optional(),
     }),
     z.object({ create: z.literal(false), handle: handleSchema }),
   ]),
@@ -225,9 +229,38 @@ export const importGithubOrgBodySchema = z.object({
 });
 
 /** PATCH /orgs/:handle — org profile settings (OWNER only). */
+/** Only GitHub's avatar host is ever fetched for an organization's picture (#308). */
+export function isGithubAvatarUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "avatars.githubusercontent.com" && !url.username && !url.password && !url.port;
+  } catch {
+    return false;
+  }
+}
+
+/** A web address shown on a profile: http or https only, so a link can't run script. */
+export function isWebAddress(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 export const updateOrgBodySchema = z.object({
   displayName: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).nullable().optional(),
+  // Empty clears it, as null does.
+  website: z
+    .string()
+    .trim()
+    .max(255)
+    .refine((v) => v === "" || isWebAddress(v), "Enter a web address starting with http:// or https://")
+    .nullable()
+    .optional(),
+  location: z.string().trim().max(120).nullable().optional(),
 });
 
 /** POST /orgs/:handle/members — add a member by handle at a role. */

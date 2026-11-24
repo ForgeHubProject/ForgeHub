@@ -1518,6 +1518,12 @@ model Organization {
   handle      String   @unique
   displayName String
   description String?
+  // Profile, as on GitHub: a website (http/https), a location, and an avatar
+  // whose bytes sit beside the people's (git-storage.ts, keyed by this id);
+  // avatarKey is the cache-buster for GET /orgs/:handle/avatar, null = letter.
+  website     String?
+  location    String?
+  avatarKey   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

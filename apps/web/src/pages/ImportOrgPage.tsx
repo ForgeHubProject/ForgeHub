@@ -158,7 +158,16 @@ export function OrgImportForm({ token, org, owned, onDone }: {
     setHandleError(null);
     setTaken(new Set());
     const into: OrgImportTarget = target === "new"
-      ? { create: true, handle: handle.trim(), displayName: displayName.trim() || undefined, description: org.description ?? undefined }
+      ? {
+          create: true,
+          handle: handle.trim(),
+          displayName: displayName.trim() || undefined,
+          // GitHub's profile comes along: description, website, location and picture.
+          description: org.description ?? undefined,
+          website: org.website ?? undefined,
+          location: org.location ?? undefined,
+          avatarUrl: org.avatarUrl ?? undefined,
+        }
       : { create: false, handle: existing };
     try {
       const res = await importGithubOrg(token, org.login, {
